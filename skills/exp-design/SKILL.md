@@ -47,3 +47,60 @@ do not hand-parse around it.
 Also read the report.md prose yourself (with the Read tool) for the narrative
 context the tags don't carry (what was compared, the baseline, the user's
 question). The tags give you the structured claims; the prose gives you intent.
+
+## Step 2 — 3-lane differential diagnosis (the core IP, design §1 / OMC trace pattern)
+
+You have the structured findings + the report prose. Now diagnose WHY the result
+is what it is, by competing hypotheses across three lanes. This mirrors OMC's
+trace skill (3 lanes; evidence for/against; critical unknown; discriminating
+probe). Apply the repo's own discipline: differential diagnosis first (a cause
+that hits one channel but not another is the strongest clue), never a generic
+"schedule/curriculum/adaptive" guess without evidence.
+
+For EACH of the three lanes, write a short block:
+
+1. **Code-path / implementation lane.** Hypothesis: the result is caused by the
+   model/algorithm/reward/constraint code itself (a function does not do what its
+   name says; a path is only exercised by some axes). Evidence FOR / AGAINST drawn
+   from the findings + prose. Critical unknown. Candidate probe.
+2. **Config / DR / hyperparameter lane.** Hypothesis: the result is caused by a
+   config value — DR range/curriculum, a hyperparameter, an env setting, ocean
+   current, a seed. Evidence FOR / AGAINST. Critical unknown. Candidate probe.
+3. **Measurement / artifact lane.** Hypothesis: the result is not a real
+   regression at all — it is an eval/measurement artifact (sample-env divergence
+   vs heavy-tail confusion; wrong eval mode; output-naming/path mix-up; aggregation
+   that hides per-env variance). Evidence FOR / AGAINST. Critical unknown.
+   Candidate probe.
+
+Rules while diagnosing:
+- Rank evidence by strength (strongest → weakest): controlled reproduction / a
+  uniquely discriminating artifact > a primary artifact with tight provenance
+  (an exact metric from summary.json, a code file:line) > multiple independent
+  sources agreeing > single-source inference > weak circumstantial (naming,
+  timing) > speculation. A `[CONFIDENCE: HIGH]` finding with a code-exec number
+  outranks a `[CONFIDENCE: MED]` inference.
+- A finding's `confidence` tag is an input, not the verdict: a HIGH-confidence
+  measurement can still SUPPORT the measurement-artifact lane (it proves a number,
+  not its cause).
+- Do NOT pre-commit to a lane. The point is to let evidence separate them. If two
+  lanes fit equally, that IS the finding — and the probe must be the test that
+  splits them.
+
+## Step 3 — pick the single discriminating probe (= the next experiment)
+
+From the three lanes, identify the leading hypothesis and the strongest remaining
+alternative. The **discriminating probe** is the cheapest next experiment whose
+outcome those two predict DIFFERENTLY (OMC trace: "the highest-value next step to
+collapse uncertainty", "the cheapest probe that would discriminate it from the
+next-best alternative"). State, explicitly:
+
+- **What each top hypothesis predicts** the probe's outcome would be (they must
+  differ — if they predict the same thing, the probe does not discriminate; pick
+  another).
+- **The exact change** the probe makes: which single config value / code path /
+  measurement method changes, and to what. Honor the repo "minimum-change" rule:
+  change ONE variable so the next run is not confounded.
+- **What result confirms which hypothesis.**
+
+The discriminating probe, expressed as a concrete change to the training/eval
+setup, IS the proposed next experiment. It is a PROPOSAL — never run it.
