@@ -1,0 +1,101 @@
+"""omx_core.cli — the `omx` command (Claude-free verbs: ingest, reduce, session-id).
+
+These verbs are pure Python so they are unit-testable from Bash with no Claude
+or Isaac dependency. Skills (builds #3-#6) shell out to these.
+"""
+import argparse
+import json
+import os
+import sys
+
+from omx_core.ingest.eval_summary import EvalSummaryAdapter
+from omx_core.ingest.csv_longform import LongFormCsvAdapter
+from omx_core.omx_paths import resolve_session_id
+from omx_core.reduce.summarize import to_dataframe, add_cv
+
+_ADAPTERS = {
+    "eval_summary": EvalSummaryAdapter,
+    "csv_longform": LongFormCsvAdapter,
+}
+
+
+def _ingest(path, fmt):
+    if fmt not in _ADAPTERS:
+        raise SystemExit(f"unknown --format {fmt!r}; choose from {sorted(_ADAPTERS)}")
+    return _ADAPTERS[fmt]().ingest(path)
+
+
+def _cmd_ingest(args) -> int:
+    res = _ingest(args.path, args.format)
+    print(json.dumps({
+        "format": res.meta.get("format"),
+        "source": res.meta.get("source"),
+        "n_summary": len(res.summary),
+        "n_series": len(res.series),
+    }))
+    return 0
+
+
+def _cmd_reduce_summarize(args) -> int:
+    res = _ingest(args.path, args.format)
+    df = to_dataframe(res.summary)
+    cv = add_cv(df, base_field=args.cv_field)
+    rows = [
+        {"dr_level": r.dr_level, "axis": r.axis,
+         "mean": r["mean"], "std": r["std"], "cv": r["cv"]}
+        for _, r in cv.iterrows()
+    ]
+    print(json.dumps({"cv_field": args.cv_field, "cv": rows}))
+    return 0
+
+
+def _cmd_session_id(args) -> int:
+    sid = resolve_session_id(
+        explicit=args.session_id,
+        env=os.environ.get("OMX_SESSION_ID"),
+        autogen=f"{_now_stamp()}-{os.getpid()}",
+    )
+    print(sid)
+    return 0
+
+
+def _now_stamp() -> str:
+    # local wall-clock; deterministic format YYYYMMDD-HHMMSS
+    import time
+    return time.strftime("%Y%m%d-%H%M%S", time.localtime())
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="omx", description="OMX experiment-analysis core")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    pi = sub.add_parser("ingest", help="normalize a source to IngestResult (prints counts)")
+    pi.add_argument("--path", required=True)
+    pi.add_argument("--format", required=True)
+    pi.set_defaults(func=_cmd_ingest)
+
+    pr = sub.add_parser("reduce", help="reduction verbs")
+    rsub = pr.add_subparsers(dest="reduce_cmd", required=True)
+    prs = rsub.add_parser("summarize", help="long-form -> CV table")
+    prs.add_argument("--path", required=True)
+    prs.add_argument("--format", required=True)
+    prs.add_argument("--cv-field", default="ss_error", dest="cv_field")
+    prs.set_defaults(func=_cmd_reduce_summarize)
+
+    ps = sub.add_parser("session-id", help="resolve session id (flag>env>autogen)")
+    ps.add_argument("--session-id", default=None, dest="session_id")
+    ps.set_defaults(func=_cmd_session_id)
+
+    return p
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        return args.func(args)
+    except SystemExit as e:
+        return e.code if isinstance(e.code, int) else 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
