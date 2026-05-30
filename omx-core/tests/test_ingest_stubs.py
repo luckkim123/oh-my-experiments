@@ -1,3 +1,4 @@
+"""Formerly tested ingest/stubs.py; now a real-adapter contract smoke test."""
 from omx_core.ingest import IngestAdapter
 from omx_core.ingest.tensorboard import TensorboardAdapter
 from omx_core.ingest.wandb_offline import WandbAdapter
