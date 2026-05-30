@@ -17,7 +17,7 @@ def to_dataframe(records) -> pd.DataFrame:
     )
 
 
-def add_cv(df: pd.DataFrame, base_field: str, std_field: str = None) -> pd.DataFrame:
+def add_cv(df: pd.DataFrame, base_field: str, std_field: str | None = None) -> pd.DataFrame:
     """Per (dr_level, axis), CV = std/mean for base_field.
 
     Returns one row per (dr_level, axis) that has BOTH base_field and its std,
