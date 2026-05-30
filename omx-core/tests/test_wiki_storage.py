@@ -86,3 +86,47 @@ def test_array_element_with_escaped_quote_round_trips(tmp_path):
     page = WikiPage(**{**page.__dict__, "tags": ['say "hi"']})
     parsed = storage.parse_page("alpha.md", storage.serialize_page(page))
     assert parsed.tags == ['say "hi"']
+
+
+def test_update_index_groups_by_category(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    storage.write_page(p, _page(slug="alpha.md", title="Alpha", content="alpha summary line"),
+                       now="2026-05-31T10:00:00")
+    storage.write_page(p, _page(slug="beta.md", title="Beta", content="beta summary line"),
+                       now="2026-05-31T10:00:00")
+    storage.update_index(p, now="2026-05-31T10:00:00")
+    index = p.wiki_index().read_text(encoding="utf-8")
+    assert "# Wiki Index" in index
+    assert "## pattern" in index
+    assert "[Alpha](alpha.md) - alpha summary line" in index
+    assert "[Beta](beta.md) - beta summary line" in index
+
+
+def test_update_index_truncates_long_summary(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    long_line = "x" * 200
+    storage.write_page(p, _page(slug="big.md", title="Big", content=long_line),
+                       now="2026-05-31T10:00:00")
+    storage.update_index(p, now="2026-05-31T10:00:00")
+    index = p.wiki_index().read_text(encoding="utf-8")
+    # summary truncated to 77 chars + "..." = 80 visible chars, never the full 200
+    assert "x" * 200 not in index
+    assert "..." in index
+
+
+def test_append_log_is_append_only(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    storage.append_log(p, now="2026-05-31T10:00:00", operation="add",
+                       pages=["alpha.md"], summary="created Alpha")
+    storage.append_log(p, now="2026-05-31T10:05:00", operation="query",
+                       pages=[], summary="query foo -> 0")
+    log = p.wiki_log().read_text(encoding="utf-8")
+    assert log.count("## [") == 2
+    assert "created Alpha" in log
+    assert "query foo -> 0" in log
+
+
+def test_with_wiki_lock_runs_the_body(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    out = storage.with_wiki_lock(p, lambda: 42)
+    assert out == 42

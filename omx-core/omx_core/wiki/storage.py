@@ -1,12 +1,15 @@
 """omx_core.wiki.storage — file IO for the wiki (pure, deterministic).
 
 Frontmatter parse/serialize, safe slug paths (traversal blocked via the
-omx_paths token validator), and read/write/list pages. Wall-clock `now` is
+omx_paths token validator), and read/write/list pages, auto index
+regeneration, an append-only log, and a file mutex. Wall-clock `now` is
 injected by callers (CLI), keeping this module unit-testable without a clock.
 """
 from __future__ import annotations
 
+import fcntl
 import re
+import time
 from pathlib import Path
 
 from omx_core.omx_paths import OmxPaths, atomic_path
@@ -170,3 +173,73 @@ def write_page(paths: OmxPaths, page: WikiPage, *, now: str) -> None:
     fp = paths.wiki_page(slug_token)  # validates token -> blocks traversal
     with atomic_path(fp) as tmp:
         Path(tmp).write_text(serialize_page(page), encoding="utf-8")
+
+
+def update_index(paths: OmxPaths, *, now: str) -> None:
+    """Regenerate registry/index.md from all pages, grouped by category.
+    Catalog line = '- [<title>](<slug>) - <first non-empty content line>'.
+    Callers MUST hold with_wiki_lock(); this function is not concurrency-safe on its own."""
+    pages = []
+    for slug in list_pages(paths):
+        try:
+            page = read_page(paths, slug)
+            if page is not None:          # file deleted between scan and read
+                pages.append(page)
+        except WikiError:
+            # corrupt page: skip in the catalog (lint reports it; never crash index)
+            continue
+    by_cat: dict = {}
+    for page in pages:
+        by_cat.setdefault(page.category, []).append(page)
+
+    lines = ["# Wiki Index", "", f"> {len(pages)} pages | Last updated: {now}", ""]
+    for cat in sorted(by_cat):
+        lines.append(f"## {cat}")
+        lines.append("")
+        for page in by_cat[cat]:
+            summary = next((l.strip() for l in page.content.split("\n") if l.strip()), "")
+            if len(summary) > 80:
+                summary = summary[:77] + "..."
+            lines.append(f"- [{page.title}]({page.slug}) - {summary}")
+        lines.append("")
+
+    idx = paths.wiki_index()
+    with atomic_path(idx) as tmp:
+        Path(tmp).write_text("\n".join(lines), encoding="utf-8")
+
+
+def append_log(paths: OmxPaths, *, now: str, operation: str, pages: list, summary: str) -> None:
+    """Append one operation block to registry/log.md (append-only chronicle).
+    Callers MUST hold with_wiki_lock(); this function is not concurrency-safe on its own."""
+    block = (
+        f"## [{now}] {operation}\n"
+        f"- **Pages:** {', '.join(pages) or 'none'}\n"
+        f"- **Summary:** {summary}\n\n"
+    )
+    log = paths.wiki_log()
+    existing = log.read_text(encoding="utf-8") if log.exists() else "# Wiki Log\n\n"
+    with atomic_path(log) as tmp:
+        Path(tmp).write_text(existing + block, encoding="utf-8")
+
+
+def with_wiki_lock(paths: OmxPaths, fn, *, timeout_s: float = 5.0, retry_s: float = 0.05):
+    """Run `fn` while holding an exclusive fcntl lock on registry/.wiki-lock.
+    All wiki WRITES go through this so concurrent sessions never corrupt the wiki.
+    Loud-fail (WikiError) if the lock cannot be acquired within timeout_s."""
+    lock_path = paths.wiki_lock()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout_s
+    with open(lock_path, "a", encoding="utf-8") as fh:
+        while True:
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise WikiError(
+                        f"wiki lock busy after {timeout_s}s ({lock_path}); another session holds it")
+                time.sleep(retry_s)
+        try:
+            return fn()
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
