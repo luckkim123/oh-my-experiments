@@ -5,6 +5,14 @@
 
 ## 현재 상태 (요약)
 
+레포 `<repo>`. **OMX v0.1 = 전 build-order(#0~#8) DONE + #7 finalize/deploy + 배포 검증 완료 (2026-05-31).** working tree clean, origin/main synced (0 unpushed).
+
+### v0.1 SHIPPED (2026-05-31)
+- **#7 deploy DONE + 검증 PASS.** 등록 인프라(전부 push됨): omx repo PUBLIC · omha `cards/omx.json` + 라우팅(`8790bf9`) · claudebase settings.json(`oh-my-experiments@omx` + extraKnownMarketplaces `omx`) + install.sh OMX 블록(`d16e270`) + OMC v4.14.4 핀(`e7f6121`). OMX repo 39 커밋(#5/#6/#8+docs) push 완료(`fe3ee80..d37eb1e`, 유저 승인).
+- **배포 검증(end-to-end) PASS:** (a) anonymous clone from public origin OK; (b) fresh `pip install -e` cloned omx-core → `omx` console entry at `/usr/local/bin/omx`, 전 verb(core 10 + wiki) 노출; (c) **wiki 4-verb e2e smoke**(add→list→query→lint, 격리 root): latin+CJK(한국어 '롤') query 둘 다 hit, append-merge `{"action":"updated"}`(덮어쓰기 0·손실 0, disk에 원본+append 공존 `## Update` 섹션), lint broken-ref 정확 감지; (d) 4 skill SKILL.md frontmatter(name+description) 전부 valid=discover 가능; (e) leak-scan 0건(private 경로/repo명/domain 용어 없음 — `isaaclab`은 의도된 default profile-name/reference stub뿐). dev editable install source-of-truth로 복구, 366 passed/1 skipped 회귀 없음.
+- **OMX v0.1 COMPLETE.** 다음 작업 = post-v0.1(새 요청 대기). 후속 후보: §9 open items(score-formula 실프로필 elicit, 1-GPU vs tournament, MCP 승격 트리거), legacy results 마이그레이션.
+
+### (히스토리) 원래 이번 세션 범위
 레포 `<repo>`. **#2 작업 브랜치 `feat/omx-evaluator`** (main 미병합, 8 commit `bc07337..c681b52`). working tree clean.
 **이번 세션 범위 = #2 구현 + (이후) public 전환 + claudebase/marketplace 등록 + push.** push는 유저가 이번 세션에 명시 요청함(원래 "push 안 함" 철회됨) — 단 #2 검토 완료 후 배포 단계에서 묶어서.
 
