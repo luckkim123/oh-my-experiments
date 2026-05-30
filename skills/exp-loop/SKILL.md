@@ -43,18 +43,14 @@ Resolve a session id once: `omx session-id` (it applies `--session-id` flag →
 
 ## The deadline ceiling (the "leaving-work" toggle)
 
-If the user gives `--max-runtime <seconds>` (or says "퇴근할 거니까"), set a
-ceiling. Compute it ONCE at the start:
+If the user gives `--max-runtime <seconds>` (or says "퇴근할 거니까"), the loop
+runs autonomously until that ceiling. You do NOT compute the deadline yourself —
+the core does it. BEFORE each iteration, ask the CLI for the loop status, passing
+the run's `--max-runtime` (the CLI computes `deadline = now + max-runtime` and
+reports whether it has passed):
 
 ```bash
-NOW=$(date -u +%Y-%m-%dT%H:%M:%S+00:00)
-# the core computes the deadline; you store it for the loop
-```
-
-Then BEFORE each iteration, check the ceiling with the core (never eyeball the clock):
-
-```bash
-omx loop-status --root <root> --run-id <run_id> --deadline <deadline_iso>
+omx loop-status --root <root> --run-id <run_id> --max-runtime <seconds>
 ```
 
 If its JSON shows `"deadline_passed": true`, STOP the autonomous loop (do NOT

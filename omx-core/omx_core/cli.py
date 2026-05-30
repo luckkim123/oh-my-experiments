@@ -24,7 +24,7 @@ from omx_core.decision import decide_outcome, parse_keep_policy
 from omx_core.omx_paths import OmxError, OmxPaths, validate_token, resolve_session_id
 from datetime import datetime, timezone
 
-from omx_core.loop import queue_pending_launch, read_pending_launch, deadline_passed
+from omx_core.loop import queue_pending_launch, read_pending_launch, deadline_passed, compute_deadline
 from omx_core.profile import bootstrap_profile, default_metrics
 from omx_core.report import parse_findings
 
@@ -251,15 +251,22 @@ def _cmd_loop_status(args) -> int:
     """Report loop status as one JSON: whether the deadline ceiling passed and
     what (if anything) is queued for launch. Claude-free; the skill reads this
     to decide stop-or-continue. --now defaults to the real clock; pass it
-    explicitly for deterministic tests."""
+    explicitly for deterministic tests.
+
+    Deadline resolution order:
+      1. --deadline (explicit ISO-8601) takes precedence.
+      2. --max-runtime <seconds>: deadline = now + max_runtime via compute_deadline.
+      3. Neither: deadline_passed is None (no ceiling check).
+    """
     paths = OmxPaths(root=args.root)
     now = args.now or datetime.now(timezone.utc).isoformat()
-    passed = None
-    if args.deadline:
-        try:
-            passed = deadline_passed(args.deadline, now)
-        except OmxError as e:
-            raise SystemExit(str(e))
+    deadline = args.deadline
+    try:
+        if deadline is None and args.max_runtime is not None:
+            deadline = compute_deadline(now, args.max_runtime)
+        passed = deadline_passed(deadline, now) if deadline else None
+    except OmxError as e:
+        raise SystemExit(str(e))
     try:
         pending = read_pending_launch(paths, args.run_id)
     except OmxError as e:
@@ -267,7 +274,7 @@ def _cmd_loop_status(args) -> int:
     print(json.dumps({
         "run_id": args.run_id,
         "now": now,
-        "deadline": args.deadline,
+        "deadline": deadline,
         "deadline_passed": passed,
         "pending_launch": pending,
     }))
@@ -362,6 +369,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="ISO-8601 deadline; omit to skip the ceiling check")
     pl.add_argument("--now", default=None,
                     help="ISO-8601 now (defaults to the real clock; pass for tests)")
+    pl.add_argument("--max-runtime", type=int, default=None, dest="max_runtime",
+                    help="seconds; when --deadline is omitted, the deadline is "
+                         "computed as now + max-runtime (the leaving-work ceiling)")
     pl.set_defaults(func=_cmd_loop_status)
 
     return p

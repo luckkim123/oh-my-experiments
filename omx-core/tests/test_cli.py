@@ -301,3 +301,42 @@ def test_loop_status_no_deadline_is_none(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["deadline_passed"] is None
     assert out["pending_launch"] is None
+
+
+def test_loop_status_computes_deadline_from_max_runtime(tmp_path, capsys):
+    # with --max-runtime and NO --deadline, the CLI computes the deadline from
+    # now + max_runtime via compute_deadline, then checks it. now is BEFORE the
+    # computed deadline (100s window) -> not passed.
+    rc = main([
+        "loop-status", "--root", str(tmp_path), "--run-id", "run-9",
+        "--max-runtime", "100",
+        "--now", "2026-05-30T12:00:00+00:00",
+    ])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["deadline"] == "2026-05-30T12:01:40+00:00"  # now + 100s
+    assert out["deadline_passed"] is False
+
+
+def test_loop_status_explicit_deadline_overrides_max_runtime(tmp_path, capsys):
+    # an explicit --deadline takes precedence; --max-runtime is ignored when
+    # --deadline is given.
+    rc = main([
+        "loop-status", "--root", str(tmp_path), "--run-id", "run-9",
+        "--deadline", "2026-05-30T12:00:00+00:00",
+        "--max-runtime", "100",
+        "--now", "2026-05-30T12:00:01+00:00",
+    ])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["deadline"] == "2026-05-30T12:00:00+00:00"  # explicit wins
+    assert out["deadline_passed"] is True
+
+
+def test_loop_status_rejects_bad_max_runtime(tmp_path, capsys):
+    rc = main([
+        "loop-status", "--root", str(tmp_path), "--run-id", "run-9",
+        "--max-runtime", "0",
+        "--now", "2026-05-30T12:00:00+00:00",
+    ])
+    assert rc != 0  # compute_deadline loud-fails on non-positive -> SystemExit
