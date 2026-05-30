@@ -189,11 +189,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
-    args = build_parser().parse_args(argv)
     try:
+        args = build_parser().parse_args(argv)
         return args.func(args)
     except SystemExit as e:
-        return e.code if isinstance(e.code, int) else 2
+        if isinstance(e.code, int):
+            return e.code
+        # Non-int code = a loud-fail message a handler raised via SystemExit(str).
+        # main() intercepts SystemExit, so the interpreter never gets to print it;
+        # surface it on stderr ourselves (loud-fail discipline) and map to rc 2.
+        if e.code is not None:
+            print(str(e.code), file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

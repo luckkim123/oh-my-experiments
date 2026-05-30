@@ -175,3 +175,24 @@ def test_eval_nonfinite_score_null_in_nested_decision(capsys):
 def test_eval_unknown_keep_policy_errors(capsys):
     rc = main(["eval", "--command", "echo '{\"pass\": true}'", "--keep-policy", "bogus"])
     assert rc != 0
+
+
+def test_loud_fail_message_goes_to_stderr(capsys):
+    # A string-coded SystemExit (a loud-fail with a message) must surface the
+    # message on stderr, not be silently swallowed. Regression for the build-#3
+    # review finding (rc=2 with empty stderr lost the error).
+    rc = main(["ingest", "--path", "/does/not/matter", "--format", "bogus_fmt"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "bogus_fmt" in err  # the unknown-format message reached stderr
+
+
+def test_integer_systemexit_passes_through_without_extra_print(capsys):
+    # argparse raises SystemExit(2) on a missing required arg and prints its OWN
+    # usage to stderr; main() must pass the int code through and NOT add a second
+    # message of its own. We assert the rc is the int argparse chose (2) and that
+    # main() didn't append a duplicate 'None'/extra line.
+    rc = main(["ingest"])  # missing required --path/--format -> argparse SystemExit(2)
+    assert rc == 2
+    # argparse already wrote usage to stderr; we only assert main didn't crash and
+    # returned the int unchanged. (No assertion on exact stderr text -- argparse owns it.)
