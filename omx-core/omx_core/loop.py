@@ -40,10 +40,17 @@ def deadline_passed(deadline_iso: str, now_iso: str) -> bool:
     """True iff `now_iso` is at or past `deadline_iso` (the ceiling is inclusive).
 
     Both args are loud-fail-parsed. exp-loop calls this between iterations to
-    decide whether to stop the autonomous analyze/design/eval phase.
+    decide whether to stop the autonomous analyze/design/eval phase. The two
+    timestamps must agree on timezone-awareness (both aware or both naive); a
+    naive-vs-aware mix loud-fails (OmxError) rather than raising a raw TypeError
+    or silently assuming a timezone.
     """
     deadline = _parse_iso(deadline_iso, "deadline_iso")
     now = _parse_iso(now_iso, "now_iso")
+    if (deadline.tzinfo is None) != (now.tzinfo is None):
+        raise OmxError(
+            "deadline_iso and now_iso must both be timezone-aware or both naive; "
+            f"got deadline={deadline_iso!r}, now={now_iso!r}.")
     return now >= deadline
 
 

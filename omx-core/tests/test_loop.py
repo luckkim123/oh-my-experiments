@@ -103,3 +103,17 @@ def test_read_pending_launch_loud_fails_on_corrupt_json(tmp_path):
     target.write_text("not json {")
     with pytest.raises(OmxError):
         read_pending_launch(p, "run-7")
+
+
+def test_deadline_passed_loud_fails_on_naive_vs_aware():
+    # one aware, one naive -> a clean OmxError, NOT a raw TypeError traceback
+    with pytest.raises(OmxError):
+        deadline_passed("2026-05-30T12:00:00", "2026-05-30T12:00:01+00:00")
+    with pytest.raises(OmxError):
+        deadline_passed("2026-05-30T12:00:00+00:00", "2026-05-30T12:00:01")
+
+
+def test_deadline_passed_both_naive_still_works():
+    # both naive is internally consistent -> a normal bool, no error
+    assert deadline_passed("2026-05-30T12:00:00", "2026-05-30T12:00:01") is True
+    assert deadline_passed("2026-05-30T12:00:00", "2026-05-30T11:59:59") is False
