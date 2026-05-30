@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 
@@ -110,3 +111,98 @@ class Profile:
                 re.compile(self.run_id_regex)
             except re.error as e:
                 raise OmxPathError(f"Profile.run_id_regex invalid: {e}")
+
+
+# --- OmxPaths: single source of truth for every .omx/ path -------------------
+_PROFILE_FILES = frozenset({"evaluator.sh", "metrics.yaml", "rules.md", "launch.sh"})
+
+
+class OmxPaths:
+    """Single source of truth for every OMX path.
+
+    `root` is the fixed anchor under which `.omx/` lives (design H4). It is
+    REQUIRED and resolved before any output_root value. The permanent output
+    tree (output_root) is passed per-getter (Task 4), never derived here.
+
+    Two-tier validation (B1): structural id checks always run; vocabulary checks
+    (metric/view/agg/source in profile vocab, run_id matches profile regex) run
+    only when a Profile is attached.
+    """
+
+    def __init__(self, root, profile: Optional[Profile] = None):
+        if root is None or str(root) == "":
+            raise OmxPathError("OmxPaths root is required (the .omx anchor)")
+        self.root = Path(root)
+        self.omx_dir = self.root / ".omx"
+        self.profile = profile
+
+    # --- profile/ (permanent user tuning) ---
+    @property
+    def profile_dir(self) -> Path:
+        return self.omx_dir / "profile"
+
+    def profile_file(self, name: str) -> Path:
+        if name not in _PROFILE_FILES:
+            raise OmxPathError(
+                f"profile file {name!r} not in {sorted(_PROFILE_FILES)}")
+        return self.profile_dir / name
+
+    # --- runs/<run_id>/ (run-bound) ---
+    def run_dir(self, run_id) -> Path:
+        return self.omx_dir / "runs" / self._check_run_id(run_id)
+
+    def results_tsv(self, run_id) -> Path:
+        return self.run_dir(run_id) / "results.tsv"
+
+    def ledger_json(self, run_id) -> Path:
+        return self.run_dir(run_id) / "ledger.json"
+
+    def decision_log(self, run_id) -> Path:
+        return self.run_dir(run_id) / "decision-log.md"
+
+    def cache_path(self, run_id, *, source, metric) -> Path:
+        src = self._check_token(source, "source", vocab_attr="sources")
+        met = self._check_token(metric, "metric", vocab_attr="metrics")
+        return self.run_dir(run_id) / "cache" / f"{src}__{met}.parquet"
+
+    # --- scratch/<session_id>/ (session-bound; session_id MANDATORY, B2) ---
+    def scratch_dir(self, *, session_id) -> Path:
+        return self.omx_dir / "scratch" / validate_session_id(session_id)
+
+    def scratch_plots(self, *, session_id) -> Path:
+        return self.scratch_dir(session_id=session_id) / "plots"
+
+    def scratch_py(self, *, session_id) -> Path:
+        return self.scratch_dir(session_id=session_id) / "py"
+
+    def scratch_notes(self, *, session_id) -> Path:
+        return self.scratch_dir(session_id=session_id) / "notes.md"
+
+    # --- registry/ (permanent discovery index) ---
+    def registry_index(self) -> Path:
+        return self.omx_dir / "registry" / "INDEX.md"
+
+    def finding(self, slug) -> Path:
+        return self.omx_dir / "registry" / "findings" / f"{self._check_token(slug, 'slug')}.md"
+
+    # --- state.json (single global file) ---
+    def state_json(self) -> Path:
+        return self.omx_dir / "state.json"
+
+    # --- internal 2-tier validation helpers ---
+    def _check_run_id(self, run_id) -> str:
+        rid = validate_run_id(run_id)
+        if self.profile is not None and self.profile.run_id_regex is not None:
+            if not re.fullmatch(self.profile.run_id_regex, rid):
+                raise OmxPathError(
+                    f"run_id {rid!r} fails profile regex {self.profile.run_id_regex!r}")
+        return rid
+
+    def _check_token(self, value, label, vocab_attr: Optional[str] = None) -> str:
+        v = validate_token(value, label)
+        if self.profile is not None and vocab_attr is not None:
+            vocab = getattr(self.profile, vocab_attr)
+            if vocab and v not in vocab:
+                raise OmxPathError(
+                    f"{label} {v!r} not in profile {vocab_attr} {sorted(vocab)}")
+        return v
