@@ -9,9 +9,10 @@ real clock. This mirrors OMC runtime.ts:971-972 (deadlineAt = now + maxRuntimeMs
 and persistent-mode/index.ts:1463-1474 (deadline check), re-implemented, never
 imported.
 """
+import json
 from datetime import datetime, timedelta
 
-from omx_core.omx_paths import OmxError
+from omx_core.omx_paths import OmxError, OmxPaths, atomic_path
 
 
 def _parse_iso(value, label: str) -> datetime:
@@ -44,3 +45,52 @@ def deadline_passed(deadline_iso: str, now_iso: str) -> bool:
     deadline = _parse_iso(deadline_iso, "deadline_iso")
     now = _parse_iso(now_iso, "now_iso")
     return now >= deadline
+
+
+def _require_nonempty(value, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise OmxError(f"{label} must be a non-empty string, got {value!r}.")
+    return value.strip()
+
+
+def queue_pending_launch(paths: OmxPaths, run_id, *, proposal_id, launch_delta,
+                         gpu_gate, queued_at) -> None:
+    """Write runs/<run_id>/pending-launch.json marked 'pending approval' (B8).
+
+    This is the ONLY thing exp-loop does with a launch — it queues it, never
+    fires it. `proposal_id` ties back to the exp-design proposal; `launch_delta`
+    is the one-line change vs the profile's launch.sh; `gpu_gate` is the
+    nvidia-smi precondition the human must confirm; `queued_at` is an ISO-8601
+    instant supplied by the caller (the CLI injects the real clock). All four
+    are required and loud-fail when empty. Atomic write via atomic_path.
+    """
+    pid = _require_nonempty(proposal_id, "proposal_id")
+    delta = _require_nonempty(launch_delta, "launch_delta")
+    gate = _require_nonempty(gpu_gate, "gpu_gate")
+    when = _require_nonempty(queued_at, "queued_at")
+    target = paths.pending_launch_json(run_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "status": "pending approval",
+        "proposal_id": pid,
+        "launch_delta": delta,
+        "gpu_gate": gate,
+        "queued_at": when,
+    }
+    with atomic_path(target) as tmp:
+        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def read_pending_launch(paths: OmxPaths, run_id):
+    """Return the queued pending-launch dict, or None if nothing is queued.
+
+    Loud-fail (OmxError) if the file exists but is not valid JSON — a corrupt
+    queue must surface, never be silently treated as 'empty'."""
+    target = paths.pending_launch_json(run_id)
+    if not target.exists():
+        return None
+    try:
+        return json.loads(target.read_text())
+    except ValueError as e:
+        raise OmxError(f"pending-launch.json for {run_id!r} is corrupt: {e}") from e

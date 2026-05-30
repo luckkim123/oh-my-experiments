@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from omx_core.loop import compute_deadline, deadline_passed
-from omx_core.omx_paths import OmxError
+from omx_core.loop import compute_deadline, deadline_passed, queue_pending_launch, read_pending_launch
+from omx_core.omx_paths import OmxError, OmxPaths
 
 
 def test_compute_deadline_adds_seconds():
@@ -44,3 +44,62 @@ def test_deadline_passed_true_at_exact_boundary():
 def test_deadline_passed_rejects_bad_iso():
     with pytest.raises(OmxError):
         deadline_passed("2026-05-30T12:00:00+00:00", "garbage")
+
+
+def test_queue_pending_launch_writes_artifact(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    queue_pending_launch(
+        p, "run-7",
+        proposal_id="20260530-120000-next",
+        launch_delta="set payload_cog_offset_xy_radius=0.05",
+        gpu_gate="nvidia-smi shows GPU0 free",
+        queued_at="2026-05-30T12:00:00+00:00",
+    )
+    target = p.pending_launch_json("run-7")
+    assert target.exists()
+    data = json.loads(target.read_text())
+    assert data["status"] == "pending approval"
+    assert data["proposal_id"] == "20260530-120000-next"
+    assert data["launch_delta"] == "set payload_cog_offset_xy_radius=0.05"
+    assert data["gpu_gate"] == "nvidia-smi shows GPU0 free"
+    assert data["queued_at"] == "2026-05-30T12:00:00+00:00"
+
+
+def test_queue_pending_launch_loud_fails_on_empty_proposal(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    with pytest.raises(OmxError):
+        queue_pending_launch(
+            p, "run-7", proposal_id="  ", launch_delta="x",
+            gpu_gate="g", queued_at="2026-05-30T12:00:00+00:00")
+
+
+def test_queue_pending_launch_loud_fails_on_empty_delta(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    with pytest.raises(OmxError):
+        queue_pending_launch(
+            p, "run-7", proposal_id="20260530-120000-next", launch_delta="",
+            gpu_gate="g", queued_at="2026-05-30T12:00:00+00:00")
+
+
+def test_read_pending_launch_roundtrips(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    queue_pending_launch(
+        p, "run-7", proposal_id="20260530-120000-next",
+        launch_delta="x", gpu_gate="g", queued_at="2026-05-30T12:00:00+00:00")
+    out = read_pending_launch(p, "run-7")
+    assert out["proposal_id"] == "20260530-120000-next"
+    assert out["status"] == "pending approval"
+
+
+def test_read_pending_launch_returns_none_when_absent(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    assert read_pending_launch(p, "run-7") is None
+
+
+def test_read_pending_launch_loud_fails_on_corrupt_json(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    target = p.pending_launch_json("run-7")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("not json {")
+    with pytest.raises(OmxError):
+        read_pending_launch(p, "run-7")
