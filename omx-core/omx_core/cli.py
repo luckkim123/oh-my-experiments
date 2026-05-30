@@ -24,6 +24,22 @@ def _finite_or_none(x):
     return x
 
 
+def _finite_clean(obj):
+    """Recursively map every non-finite float in a JSON-shaped structure to None.
+
+    An evaluator may emit a non-finite score (e.g. {"pass": true, "score": NaN});
+    that value rides through run_evaluator into the record AND, under
+    --keep-policy, into out["decision"]["evaluator"]. json.dumps would emit a bare
+    NaN token (valid in Python's lenient reader but rejected by any strict
+    consumer: JS JSON.parse, jq). Walking the whole structure cleans both the
+    top-level and nested copies without hardcoding key paths."""
+    if isinstance(obj, dict):
+        return {k: _finite_clean(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_finite_clean(v) for v in obj]
+    return _finite_or_none(obj)
+
+
 _ADAPTERS = {
     "eval_summary": EvalSummaryAdapter,
     "csv_longform": LongFormCsvAdapter,
@@ -88,7 +104,7 @@ def _cmd_eval(args) -> int:
         except OmxError as e:
             raise SystemExit(str(e))
         out["decision"] = decide_outcome(policy, args.last_kept_score, rec)
-    print(json.dumps(out))
+    print(json.dumps(_finite_clean(out), allow_nan=False))
     return 0 if rec["status"] in ("pass", "fail") else 1
 
 

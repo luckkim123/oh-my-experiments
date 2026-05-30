@@ -2,6 +2,20 @@ import json
 from omx_core.cli import main
 
 
+def _strict_json_loads(raw):
+    """Parse like a strict consumer (JS JSON.parse / jq): reject bare
+    NaN/Infinity value tokens. Python's default json.loads accepts them, which
+    would hide the very defect under test.
+
+    parse_constant is the long-standing (and still-supported through 3.12) hook
+    that fires on those exact tokens; chosen over a substring search because the
+    echoed command legitimately lands in out["stdout"] as a JSON string that may
+    contain the text "NaN" — only a bare *value* token is invalid."""
+    def _reject(token):
+        raise AssertionError(f"non-strict JSON token in output: {token}")
+    return json.loads(raw, parse_constant=_reject)
+
+
 def test_ingest_eval_summary_prints_counts(fixtures_dir, capsys):
     rc = main(["ingest", "--path", str(fixtures_dir / "summary.json"),
                "--format", "eval_summary"])
@@ -129,6 +143,33 @@ def test_eval_score_improvement_with_score_keeps(capsys):
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out["decision"]["decision"] == "keep"
+
+
+def test_eval_nonfinite_score_serializes_as_null(capsys):
+    # an evaluator emitting a non-finite score (NaN) must not leak a bare NaN
+    # *value* token into stdout — sibling _cmd_reduce_summarize already guards
+    # this; _cmd_eval must match (top-level out["score"]).
+    # Note: the echoed command lands in out["stdout"] as a JSON *string*
+    # containing "NaN" — that is valid JSON, so the real invariant is that a
+    # strict (allow_nan=False) parse succeeds, not substring-absence.
+    rc = main(["eval", "--command", "echo '{\"pass\": true, \"score\": NaN}'"])
+    assert rc == 0
+    raw = capsys.readouterr().out
+    out = _strict_json_loads(raw)                # strict parse must succeed
+    assert out["score"] is None                  # non-finite -> null
+
+
+def test_eval_nonfinite_score_null_in_nested_decision(capsys):
+    # the same non-finite score is copied into out["decision"]["evaluator"]
+    # when --keep-policy is set; a top-level-only fix would still leak a bare
+    # NaN value token there.
+    rc = main(["eval", "--command", "echo '{\"pass\": true, \"score\": NaN}'",
+               "--keep-policy", "score_improvement"])
+    assert rc == 0
+    raw = capsys.readouterr().out
+    out = _strict_json_loads(raw)                 # strict parse must succeed
+    assert out["score"] is None
+    assert out["decision"]["evaluator"]["score"] is None
 
 
 def test_eval_unknown_keep_policy_errors(capsys):
