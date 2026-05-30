@@ -5,6 +5,7 @@ or Isaac dependency. Skills (builds #3-#6) shell out to these.
 """
 import argparse
 import json
+import math
 import os
 import sys
 
@@ -12,6 +13,13 @@ from omx_core.ingest.eval_summary import EvalSummaryAdapter
 from omx_core.ingest.csv_longform import LongFormCsvAdapter
 from omx_core.omx_paths import resolve_session_id
 from omx_core.reduce.summarize import to_dataframe, add_cv
+
+def _finite_or_none(x):
+    """Map non-finite floats (nan/inf) to None so json.dumps emits valid JSON null."""
+    if isinstance(x, float) and not math.isfinite(x):
+        return None
+    return x
+
 
 _ADAPTERS = {
     "eval_summary": EvalSummaryAdapter,
@@ -42,10 +50,12 @@ def _cmd_reduce_summarize(args) -> int:
     cv = add_cv(df, base_field=args.cv_field)
     rows = [
         {"dr_level": r.dr_level, "axis": r.axis,
-         "mean": r["mean"], "std": r["std"], "cv": r["cv"]}
+         "mean": _finite_or_none(r["mean"]),
+         "std": _finite_or_none(r["std"]),
+         "cv": _finite_or_none(r["cv"])}
         for _, r in cv.iterrows()
     ]
-    print(json.dumps({"cv_field": args.cv_field, "cv": rows}))
+    print(json.dumps({"cv_field": args.cv_field, "cv": rows}, allow_nan=False))
     return 0
 
 

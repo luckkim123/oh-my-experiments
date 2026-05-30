@@ -48,3 +48,20 @@ def test_session_id_env_fallback(monkeypatch, capsys):
     rc = main(["session-id"])
     assert rc == 0
     assert capsys.readouterr().out.strip() == "from-env"
+
+
+def test_reduce_summarize_nan_becomes_null(tmp_path, capsys):
+    # a zero-mean axis -> CV = 0/0 = nan -> must serialize as JSON null, not NaN
+    csv = tmp_path / "zero.csv"
+    csv.write_text(
+        "dr_level,axis,field,value\n"
+        "none,vx,ss_error,0.0\n"
+        "none,vx,ss_error_std,0.0\n"
+    )
+    rc = main(["reduce", "summarize", "--path", str(csv),
+               "--format", "csv_longform", "--cv-field", "ss_error"])
+    assert rc == 0
+    raw = capsys.readouterr().out
+    assert "NaN" not in raw                      # no invalid JSON token
+    out = json.loads(raw)                        # strict parse must succeed
+    assert out["cv"][0]["cv"] is None            # nan -> null
