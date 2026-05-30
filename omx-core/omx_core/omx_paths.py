@@ -224,6 +224,13 @@ class OmxPaths:
         reads the weights pointer without parsing the full ledger."""
         return self.run_dir(run_id) / "checkpoint-pointer.json"
 
+    def pending_launch_json(self, run_id) -> Path:
+        """runs/<run_id>/pending-launch.json — the next training launch QUEUED by
+        exp-loop for human approval (B8). exp-loop NEVER fires a launch; it writes
+        this artifact and stops. The human reads it, approves, and launches by
+        hand. Run-bound, sits beside the ledger trio."""
+        return self.run_dir(run_id) / "pending-launch.json"
+
     # --- permanent output tree (output_root passed per-getter; design 10.1) ---
     # These live OUTSIDE .omx/. output_root originates from metrics.yaml and is
     # supplied by the caller every call; it is never derived from self.root.

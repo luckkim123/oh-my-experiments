@@ -390,6 +390,22 @@ def test_resolve_session_id_raises_when_nothing_resolves():
         resolve_session_id(explicit=None, env=None, autogen=None)
 
 
+# =============================================================================
+# Task 1: pending_launch_json run-tree getter (B8 launch queue)
+# =============================================================================
+def test_pending_launch_json_under_run_dir(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    target = p.pending_launch_json("run-42")
+    assert target.name == "pending-launch.json"
+    assert target.parent == p.run_dir("run-42")
+
+
+def test_pending_launch_json_validates_run_id(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    with pytest.raises(OmxPathError):
+        p.pending_launch_json("../escape")
+
+
 def test_atomic_path_writes_via_tmp_then_replaces(tmp_path):
     target = tmp_path / "out" / "report.md"
     with atomic_path(target) as tmp:
@@ -491,6 +507,7 @@ def test_every_public_path_getter_is_exercised(tmp_path):
         # absent-file loud-fail (Task 1 state), returning a Path either way.
         "reference_evaluator": lambda: _ref_eval_path(p),
         "checkpoint_pointer_json": lambda: p.checkpoint_pointer_json(rid),
+        "pending_launch_json": lambda: p.pending_launch_json(rid),
         "analysis_dir": lambda: p.analysis_dir(out, rid, aid),
         "report_md": lambda: p.report_md(out, rid, aid),
         "manifest_json": lambda: p.manifest_json(out, rid, aid),
