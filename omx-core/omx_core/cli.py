@@ -9,15 +9,20 @@ import math
 import os
 import sys
 
+import numpy as np
+
 from omx_core.ingest.eval_summary import EvalSummaryAdapter
 from omx_core.ingest.csv_longform import LongFormCsvAdapter
 from omx_core.ingest.tensorboard import TensorboardAdapter
 from omx_core.ingest.wandb_offline import WandbAdapter
 from omx_core.omx_paths import resolve_session_id
 from omx_core.reduce.summarize import to_dataframe, add_cv
+from omx_core.reduce.series import downsample
+from omx_core.reduce.plot import line_plot
 from omx_core.evaluator import run_evaluator
 from omx_core.decision import decide_outcome, parse_keep_policy
 from omx_core.omx_paths import OmxError
+from omx_core.omx_paths import validate_token
 from omx_core.profile import bootstrap_profile, default_metrics
 from omx_core.omx_paths import OmxPaths
 
@@ -53,8 +58,15 @@ _ADAPTERS = {
 
 
 def _ingest(path, fmt):
+    if fmt == "npz":
+        from omx_core.reduce.series import load_npz
+        from omx_core.ingest.base import IngestResult
+        arrs = load_npz(path)
+        # only 1-D numeric arrays are plottable series; keep those
+        series = {k: v for k, v in arrs.items() if getattr(v, "ndim", 0) == 1}
+        return IngestResult(summary=[], series=series, meta={"source": str(path), "format": "npz"})
     if fmt not in _ADAPTERS:
-        raise SystemExit(f"unknown --format {fmt!r}; choose from {sorted(_ADAPTERS)}")
+        raise SystemExit(f"unknown --format {fmt!r}; choose from {sorted(_ADAPTERS) + ['npz']}")
     return _ADAPTERS[fmt]().ingest(path)
 
 
@@ -112,6 +124,31 @@ def _cmd_eval(args) -> int:
         out["decision"] = decide_outcome(policy, args.last_kept_score, rec)
     print(json.dumps(_finite_clean(out), allow_nan=False))
     return 0 if rec["status"] in ("pass", "fail") else 1
+
+
+def _cmd_plot(args) -> int:
+    """Render ONE candidate curve from a series source into scratch/<sid>/plots/.
+
+    Claude-free: the skill picks WHICH series/metric/view; this verb does the
+    matplotlib + scratch-path IO (design D8). Output filename = <metric>__<view>.png.
+    """
+    res = _ingest(args.path, args.format)
+    if args.series not in res.series:
+        raise SystemExit(
+            f"series {args.series!r} not in source; available: {sorted(res.series)[:20]}")
+    try:
+        metric = validate_token(args.metric, "metric")
+        view = validate_token(args.view, "view")
+    except OmxError as e:
+        raise SystemExit(str(e))
+    y = downsample(res.series[args.series])
+    step_key = f"_step/{args.series}"
+    x = downsample(res.series[step_key]) if step_key in res.series else np.arange(len(y))
+    out = OmxPaths(root=args.root).scratch_plots(session_id=args.session_id) / f"{metric}__{view}.png"
+    line_plot(x, {args.series: y}, out, title=f"{metric} ({view})")
+    print(json.dumps({"plot": str(out), "metric": metric, "view": view,
+                      "n_points": int(len(y))}))
+    return 0
 
 
 def _cmd_init(args) -> int:
@@ -179,6 +216,16 @@ def build_parser() -> argparse.ArgumentParser:
     pe.add_argument("--last-kept-score", type=float, default=None, dest="last_kept_score",
                     help="prior baseline score for score_improvement comparison")
     pe.set_defaults(func=_cmd_eval)
+
+    pp = sub.add_parser("plot", help="render a candidate curve PNG into scratch (Claude-free IO)")
+    pp.add_argument("--root", required=True, help="anchor dir under which .omx/ lives")
+    pp.add_argument("--session-id", required=True, dest="session_id")
+    pp.add_argument("--path", required=True, help="series source (npz/TB/wandb)")
+    pp.add_argument("--format", required=True)
+    pp.add_argument("--series", required=True, help="series key within the source")
+    pp.add_argument("--metric", required=True, help="metric token (output filename field)")
+    pp.add_argument("--view", required=True, help="view token (output filename field)")
+    pp.set_defaults(func=_cmd_plot)
 
     pn = sub.add_parser("init", help="bootstrap .omx/profile/ from interview metrics (Claude-free)")
     pn.add_argument("--root", required=True, help="anchor dir under which .omx/ lives (design H4)")
