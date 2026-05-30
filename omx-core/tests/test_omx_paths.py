@@ -448,6 +448,70 @@ def test_atomic_dir_cleans_up_on_baseexception(tmp_path):
     assert list((tmp_path / "out").glob("*.tmp")) == []
 
 
+# =============================================================================
+# Task 6: completeness gate — every public path getter must be exercised
+# =============================================================================
+def test_every_public_path_getter_is_exercised(tmp_path):
+    """Guard: enumerate OmxPaths path-returning methods; ensure each is callable
+    with a minimal valid arg set and returns a Path. Fails if a getter is added
+    later without being added here (and given its own dedicated test above)."""
+    p = _paths(tmp_path)
+    out = tmp_path / "experiments"
+    rid, aid, pid, sid = "r1", "20260530-143022-x", "20260530-143022-next", "s-1"
+    calls = {
+        "profile_file": lambda: p.profile_file("metrics.yaml"),
+        "run_dir": lambda: p.run_dir(rid),
+        "results_tsv": lambda: p.results_tsv(rid),
+        "ledger_json": lambda: p.ledger_json(rid),
+        "decision_log": lambda: p.decision_log(rid),
+        "cache_path": lambda: p.cache_path(rid, source="wandb", metric="ss_error"),
+        "scratch_dir": lambda: p.scratch_dir(session_id=sid),
+        "scratch_plots": lambda: p.scratch_plots(session_id=sid),
+        "scratch_py": lambda: p.scratch_py(session_id=sid),
+        "scratch_notes": lambda: p.scratch_notes(session_id=sid),
+        "registry_index": lambda: p.registry_index(),
+        "finding": lambda: p.finding("slug1"),
+        "state_json": lambda: p.state_json(),
+        "analysis_dir": lambda: p.analysis_dir(out, rid, aid),
+        "report_md": lambda: p.report_md(out, rid, aid),
+        "manifest_json": lambda: p.manifest_json(out, rid, aid),
+        "analysis_plot": lambda: p.analysis_plot(out, rid, aid, metric="m", view="v"),
+        "analysis_table": lambda: p.analysis_table(out, rid, aid, metric="m", agg="a"),
+        "proposal_md": lambda: p.proposal_md(out, rid, pid),
+    }
+    for name, fn in calls.items():
+        result = fn()
+        assert isinstance(result, Path), f"{name} did not return a Path"
+
+    # Discover public callables on the instance; every path getter must be in `calls`.
+    # Excludes: properties handled separately (profile_dir), non-path attrs (root,
+    # profile, omx_dir), and any dunder.
+    EXCLUDE = {"profile_dir", "root", "profile", "omx_dir"}
+    public_callables = {
+        n for n in dir(p)
+        if not n.startswith("_")
+        and callable(getattr(p, n))
+        and n not in EXCLUDE
+    }
+    untested = public_callables - set(calls)
+    assert not untested, f"new getter(s) without coverage in the guard: {untested}"
+
+    # profile_dir is a property (not callable) — assert it's a Path explicitly.
+    assert isinstance(p.profile_dir, Path)
+
+
+def test_public_import_surface_from_package_root():
+    """Run-from-anywhere sanity: the documented public API imports from omx_core."""
+    import omx_core
+    for name in [
+        "OmxPaths", "Profile", "OmxPathError",
+        "validate_analysis_id", "validate_proposal_id", "validate_session_id",
+        "validate_run_id", "validate_token", "validate_ext",
+        "resolve_session_id", "atomic_path", "atomic_dir",
+    ]:
+        assert hasattr(omx_core, name), f"omx_core is missing public export: {name}"
+
+
 def test_atomic_dir_failed_promotion_leaves_no_tmp(tmp_path):
     # os.replace onto a non-empty existing target raises Errno 39; the .tmp dir
     # must NOT leak (the os.replace in the else-branch is exception-guarded).
