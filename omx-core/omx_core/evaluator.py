@@ -48,3 +48,78 @@ def parse_evaluator_result(raw: str) -> dict:
     if "score" in parsed:
         return {"pass": parsed["pass"], "score": parsed["score"]}
     return {"pass": parsed["pass"]}
+
+
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _last_nonempty_line(text: str):
+    for line in reversed(text.splitlines()):
+        if line.strip():
+            return line.strip()
+    return None
+
+
+def run_evaluator(command: str, cwd, *, timeout: int = 600) -> dict:
+    """Run `command` (shell) in `cwd`; parse its LAST non-empty stdout line.
+
+    Returns an EvaluationRecord dict (mirrors runtime.ts AutoresearchEvaluationRecord):
+      {command, ran_at, status: pass|fail|error, [pass], [score], exit_code,
+       stdout, stderr, [parse_error]}.
+    Fault-tolerant by RECORDING: a non-zero exit, timeout, empty stdout, or an
+    unparseable last line all yield status='error' (never raises) so the decision
+    tree turns it into 'discard' (evaluator-error). The pure parser still loud-fails;
+    this runner catches that and records it. Mirrors runtime.ts:586-636.
+    """
+    ran_at = _now_iso()
+    cwd = str(Path(cwd))
+    try:
+        proc = subprocess.run(
+            command, shell=True, cwd=cwd, capture_output=True, text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as e:
+        return {
+            "command": command, "ran_at": ran_at, "status": "error",
+            "exit_code": None,
+            "stdout": (e.stdout or "") if isinstance(e.stdout, str) else "",
+            "stderr": (e.stderr or "") if isinstance(e.stderr, str) else "",
+            "parse_error": f"timeout after {timeout}s",
+        }
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    if proc.returncode != 0:
+        return {
+            "command": command, "ran_at": ran_at, "status": "error",
+            "exit_code": proc.returncode, "stdout": stdout, "stderr": stderr,
+        }
+    last = _last_nonempty_line(stdout)
+    if last is None:
+        return {
+            "command": command, "ran_at": ran_at, "status": "error",
+            "exit_code": proc.returncode, "stdout": stdout, "stderr": stderr,
+            "parse_error": "evaluator produced no parseable stdout line",
+        }
+    try:
+        parsed = parse_evaluator_result(last)
+    except EvaluatorError as e:
+        return {
+            "command": command, "ran_at": ran_at, "status": "error",
+            "exit_code": proc.returncode, "stdout": stdout, "stderr": stderr,
+            "parse_error": str(e),
+        }
+    record = {
+        "command": command, "ran_at": ran_at,
+        "status": "pass" if parsed["pass"] else "fail",
+        "pass": parsed["pass"], "exit_code": proc.returncode,
+        "stdout": stdout, "stderr": stderr,
+    }
+    if "score" in parsed:
+        record["score"] = parsed["score"]
+    return record
