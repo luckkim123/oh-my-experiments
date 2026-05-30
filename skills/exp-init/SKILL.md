@@ -98,3 +98,71 @@ to ground the score-formula question — using ONLY the Claude-free core verbs (
 
 This is read-only grounding; it writes nothing. If no data exists yet, proceed with the
 interview on the user's stated intent alone.
+
+## When the gate clears (`ambiguity ≤ 0.2` or early exit): build the profile
+
+Do NOT write profile files yourself. Assemble the interview result into a `metrics.yaml`
+dict and shell the Claude-free core verb, which validates and atomic-writes it:
+
+1. **Assemble the metrics dict** from the interview (these keys match the locked schema):
+   ```json
+   {
+     "pending_approval": true,
+     "output_root": "<the permanent-tree root the user chose; default 'experiments'>",
+     "metrics": ["<closed metric vocab from the Constraints dimension>"],
+     "views": ["trajectory", "per_axis_bar", "overlay"],
+     "aggs": ["by_axis", "mean_std"],
+     "sources": ["eval_summary"],
+     "run_id_regex": null,
+     "keep_policy": "<pass_only | score_improvement — from the Criteria dimension>",
+     "score_formula": "<null under pass_only; the elicited formula string under score_improvement>"
+   }
+   ```
+   Every list entry must be a lowercase token (`[a-z0-9_]`, no `__`); the core will loud-fail
+   otherwise (and you should re-ask rather than mangle the user's word).
+
+2. **Resolve the anchor root (H4).** Default to the cwd. If the user gave `--root`, use it.
+   `.omx/` lives at this anchor, independent of `output_root` (which is stored *inside*
+   metrics.yaml and may point elsewhere).
+
+3. **Shell `omx init`** with the assembled dict as JSON:
+   ```bash
+   omx init --root "<anchor>" --profile-name "<profile-name, default isaaclab>" \
+       --metrics-json '<the JSON dict from step 1>'
+   ```
+   - rc 0 → it prints `{"written": [...], "pending_approval": true, ...}`.
+   - rc 2 → it loud-failed (schema violation, existing profile, unknown reference). Read the
+     message: on "already exists", ask the user whether to re-run with `--force` (never pass
+     `--force` without asking — the existing profile is their tuning). On a schema error, fix
+     the offending field WITH the user and retry.
+
+## Present the profile + the pending-approval gate (this is the stopping point)
+
+After a successful `omx init`, present the four files for review and STOP. Do not proceed to
+any analysis, design, eval, or training:
+
+```
+Profile bootstrapped (pending approval) at <anchor>/.omx/profile/:
+  - metrics.yaml   — <one-line summary: output_root, N metrics, keep_policy>
+  - evaluator.sh   — seeded from the <profile-name> reference (edit the STUB block for your eval)
+  - rules.md       — your analysis discipline (fill in Always/Never)
+  - launch.sh      — your training command template (exp-init never runs it)
+
+Next steps (yours, not mine):
+  1. Edit evaluator.sh — replace the STUB with your real eval command.
+  2. Fill rules.md + launch.sh.
+  3. Set pending_approval: false in metrics.yaml (or delete the key) to approve.
+Once approved, run exp-analyze on your runs.
+```
+
+**Hard gate (mirrors deep-interview's approval gate):** until the user explicitly approves
+(edits `pending_approval` to false, or says so), `exp-init` MUST NOT invoke exp-analyze,
+exp-design, exp-loop, or any mutation/execution skill, and MUST NOT run training or eval. The
+profile is a *proposal*. This honors the repo rule "훈련 종료/시작은 유저가 직접" with no
+override path in v0.1.
+
+## Re-running exp-init
+
+If a profile already exists, `omx init` refuses (rc 2). exp-init then asks whether to
+overwrite (`--force`) — overwriting replaces the user's tuning, so it is always an explicit,
+confirmed choice, never automatic.
