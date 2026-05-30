@@ -21,3 +21,9 @@ def test_loop_symbols_exported():
     for name in ("compute_deadline", "deadline_passed",
                  "queue_pending_launch", "read_pending_launch"):
         assert hasattr(omx_core, name), f"omx_core.{name} not exported"
+
+
+def test_wiki_public_surface_exported():
+    import omx_core
+    for name in ("WikiPage", "WikiError", "ingest_knowledge", "query_wiki", "lint_wiki"):
+        assert hasattr(omx_core, name), f"omx_core.{name} missing"

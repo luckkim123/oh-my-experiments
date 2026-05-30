@@ -12,6 +12,13 @@ from omx_core.loop import (
     queue_pending_launch,
     read_pending_launch,
 )
+from omx_core.wiki import (
+    WikiError,
+    WikiPage,
+    ingest_knowledge,
+    query_wiki,
+    lint_wiki,
+)
 
 __all__ = [
     "OmxPaths", "Profile", "OmxPathError",
@@ -23,4 +30,5 @@ __all__ = [
     "deadline_passed",
     "queue_pending_launch",
     "read_pending_launch",
+    "WikiError", "WikiPage", "ingest_knowledge", "query_wiki", "lint_wiki",
 ]
