@@ -25,6 +25,17 @@ plots it references) in the permanent analysis tree.
    (eval_dr summary.json, TB event files, wandb run dirs, data_*.npz). Resolve them;
    if a path is missing, say so and STOP — never fabricate data.
 
+## Ground in prior workspace knowledge (query the wiki first)
+
+Before analyzing, pull any accumulated knowledge about this run's topic so you do
+not re-derive what the workspace already learned:
+
+`omx wiki query --root <root> "<the run's main metric or symptom>"`
+
+Read the returned `matches` (snippets + confidence) as CONTEXT, not as findings to
+copy. If `corrupt_pages` is non-empty, mention it (lint will flag them). An empty
+result is normal for a fresh workspace.
+
 ## Session id (for scratch isolation, B2)
 
 Resolve once at start: `omx session-id --session-id "<claude session id if known>"`.
@@ -102,6 +113,22 @@ A finding with a numeric claim and `[CONFIDENCE: HIGH]` MUST cite a code-exec so
 - NEVER claim a number you did not get from code-exec. PNG vision is for SHAPE, not digits.
 - Candidate plots that the report doesn't reference are LEFT in scratch (omx clean sweeps them) — do not delete them yourself.
 - Respond to the user in Korean (repo rule); keep report.md/code/markdown in English.
+
+## Record reusable findings into the wiki (after the report is written)
+
+The report.md is this analysis's full deliverable. The wiki holds the SUBSET worth
+reusing across future runs. To not miss candidates, let the core extract them:
+
+`omx wiki add --root <root> --from-report "<output_root>/<run_id>/analysis/<analysis_id>/report.md"`
+
+This prints `{"candidates": [...]}` and writes NOTHING. Choose the durable, reusable
+ones (not run-specific noise), then write each chosen page (you decide
+title/category/tags - the core does not):
+
+`omx wiki add --root <root> --title "<short reusable title>" --category <pattern|debugging|decision|reference> --confidence <high|medium|low> --tags "<axis>,<symptom>" --sources "<analysis_id>" --content "<the finding, with its evidence>"`
+
+Record findings sparingly - a wiki full of every run's noise stops being useful.
+Skip this entirely if nothing in the report is reusable beyond this run.
 
 ## When done
 

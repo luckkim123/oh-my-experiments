@@ -112,7 +112,17 @@ This writes `runs/<run_id>/pending-launch.json` marked `pending approval`. STOP
 here for the launch. You have NOT trained anything. Tell the user the proposal +
 the queued launch, and that THEY must approve and run the training command.
 
-### 6. Loop or stop
+### 6. Audit the wiki at iteration end (report-only, never auto-fix)
+
+At the end of each iteration, audit the accumulated wiki so stale/orphaned/broken
+knowledge surfaces (it is review-gated - you report, the human decides):
+
+`omx wiki lint --root <root>`
+
+Report any `stale` / `broken-ref` / `broken-frontmatter` issues to the user in your
+summary. Do NOT auto-edit or delete any page (minimum-change / review-gated rule).
+
+### 7. Loop or stop
 If a deadline is set and `omx loop-status` says it has NOT passed AND there is a
 fresh candidate to analyze next, repeat from step 1. Otherwise STOP.
 
@@ -128,6 +138,8 @@ fresh candidate to analyze next, repeat from step 1. Otherwise STOP.
   JSON (the evaluator contract), and the keep/discard from its `decision` block.
 - The deadline ceiling gates ONLY analyze/design/eval — it is NEVER a launch
   trigger.
+- NEVER auto-fix, edit, or delete a wiki page from a lint result. lint is
+  report-only; the human decides any change (review-gated).
 - Respond to the user in Korean (repo rule); keep skill/code/markdown in English.
 
 ## When done

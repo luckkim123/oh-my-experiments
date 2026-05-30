@@ -169,6 +169,19 @@ exp-design, exp-loop, or any mutation/execution skill, and MUST NOT run training
 profile is a *proposal*. This honors the repo rule "훈련 종료/시작은 유저가 직접" with no
 override path in v0.1.
 
+## Seed the workspace wiki (one page from the interview)
+
+After `omx init` succeeds, seed ONE wiki page capturing the conventions you just
+elicited - this starts the workspace specialization (the more OMX runs, the more
+this wiki knows about THIS workspace). Use ONLY what the interview already gave
+you; do NOT ask new questions or scan directories.
+
+`omx wiki add --root "<anchor>" --title "<profile-name> experiment conventions" --category convention --confidence high --tags "<profile-name>,conventions,setup" --content "Objective: <the Goal quantity + direction>. Metric vocabulary: <the closed metric list>. keep_policy: <pass_only|score_improvement>. output_root: <the chosen root>. Launch: <one line on the training command + GPU gate>."`
+
+This is the only wiki write exp-init makes. It records workspace conventions, not
+findings (those come from exp-analyze). If `omx wiki add` loud-fails, surface the
+message and continue - the profile is already written; the seed is best-effort.
+
 ## Re-running exp-init
 
 If a profile already exists, `omx init` refuses (rc 2). exp-init then asks whether to

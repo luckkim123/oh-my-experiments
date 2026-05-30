@@ -48,6 +48,18 @@ Also read the report.md prose yourself (with the Read tool) for the narrative
 context the tags don't carry (what was compared, the baseline, the user's
 question). The tags give you the structured claims; the prose gives you intent.
 
+## Query the wiki for prior diagnoses of this symptom
+
+Before the diagnosis, check whether the workspace already diagnosed this symptom
+(avoids re-deriving a known cause / re-proposing a tried probe):
+
+`omx wiki query --root <root> "<the symptom you are diagnosing>" --category decision`
+`omx wiki query --root <root> "<the symptom you are diagnosing>" --category pattern`
+
+Treat hits as PRIOR EVIDENCE feeding the diagnosis (a past confirmed cause is strong
+evidence for that lane). If a prior probe was already tried, design a DIFFERENT
+discriminating probe. An empty result just means this is new ground.
+
 ## Step 2 — 3-lane differential diagnosis (the core IP, design §1 / OMC trace pattern)
 
 You have the structured findings + the report prose. Now diagnose WHY the result
