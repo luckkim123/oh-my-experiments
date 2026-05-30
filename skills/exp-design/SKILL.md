@@ -104,3 +104,62 @@ next-best alternative"). State, explicitly:
 
 The discriminating probe, expressed as a concrete change to the training/eval
 setup, IS the proposed next experiment. It is a PROPOSAL — never run it.
+
+## Step 4 — write the proposal (permanent tree, via the core — never hand-write paths)
+
+1. Choose a `proposal_id` = `<YYYYMMDD-HHMMSS>-next` (the verb is literally `next`,
+   matching design §10.1). Get the timestamp from `date +%Y%m%d-%H%M%S` via Bash.
+2. Resolve `output_root` from the profile's `metrics.yaml` (the same value
+   exp-analyze used) and the `run_id` (the run the analysis was about).
+3. Draft the proposal markdown. It MUST contain, in order:
+   - **`# Next-experiment proposal — pending approval`** heading, with the
+     `run_id`, source `analysis_id`, and the `proposal_id`.
+   - **`## Diagnosis`** — the three lane blocks (code-path / config-DR-hyperparam /
+     measurement-artifact), each with evidence FOR/AGAINST and its critical unknown,
+     ending with the ranked leading hypothesis vs strongest alternative.
+   - **`## Discriminating probe (the proposed change)`** — what each top hypothesis
+     predicts, the single-variable change (with exact value), and what result
+     confirms which hypothesis.
+   - **`## How to run (for the human — NOT auto-executed)`** — the concrete command
+     delta from the profile's `launch.sh` (e.g. "set `payload_cog_offset_xy_radius`
+     0.08 → 0.05, all else identical to <baseline run>"). State plainly that
+     exp-design did NOT launch it.
+   - **`## Status: pending approval`** — the hard gate. The human must approve
+     before any run.
+   - Keep every numeric claim traceable to a finding's evidence (carry the
+     `[EVIDENCE: ...]` source through). No new numbers you did not get from the
+     report / code-exec.
+4. Write it into the permanent tree THROUGH the core's atomic writer so the path
+   comes from the getter AND the proposals dir is created:
+
+   ```bash
+   python3 - <<'PY'
+   from omx_core.omx_paths import OmxPaths, atomic_path
+   p = OmxPaths(root="<root>").proposal_md("<output_root>", "<run_id>", "<proposal_id>")
+   with atomic_path(p) as tmp:
+       tmp.write_text(r"""<the full proposal markdown you assembled>""")
+   print(p)
+   PY
+   ```
+
+## Hard constraints (never violate)
+
+- NEVER launch training or eval. exp-design only WRITES a proposal. No `launch.sh`,
+  no live eval_dr, no `omx eval` against a live run. (design D4/B8 — the repo rule
+  "훈련 종료/시작은 유저가 직접" has no override path here.)
+- NEVER write a path by hand; the proposal path comes from `proposal_md(...)` and
+  the write goes through `atomic_path`. `proposal_id` = `<YYYYMMDD-HHMMSS>-next`.
+- NEVER invent a finding or a number. Every claim traces to a `report.md` finding
+  (read via `omx report-parse`) or its `[EVIDENCE: ...]` source. If the report has
+  no finding supporting a lane, say that lane is unsupported — do not manufacture one.
+- The probe changes ONE variable (repo minimum-change rule) so the next run is not
+  confounded.
+- Respond to the user in Korean (repo rule); keep the proposal markdown / code in English.
+
+## When done
+
+Tell the user where the proposal is
+(`<output_root>/<run_id>/proposals/<proposal_id>.md`), summarize the leading
+hypothesis and the one-variable probe in 2-3 lines, and remind them it is
+**pending approval — not launched**. Do not start a loop or run anything; the
+analyze→design→eval loop is exp-loop's job (#6).
