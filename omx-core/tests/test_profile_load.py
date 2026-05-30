@@ -35,3 +35,15 @@ def test_loaded_profile_enforces_vocab_in_paths(tmp_path):
 def test_load_profile_missing_raises(tmp_path):
     with pytest.raises(OmxError):
         load_profile(tmp_path)  # no .omx/profile/metrics.yaml
+
+
+def test_load_profile_succeeds_when_approved(tmp_path):
+    """load_profile must NOT enforce the bootstrap-only pending_approval invariant."""
+    paths = _bootstrap(tmp_path)
+    metrics_path = paths.profile_file("metrics.yaml")
+    text = metrics_path.read_text()
+    text = text.replace("pending_approval: true", "pending_approval: false")
+    metrics_path.write_text(text)
+    # must not raise -- validate_metrics_schema would reject this
+    prof = load_profile(tmp_path)
+    assert isinstance(prof, Profile)

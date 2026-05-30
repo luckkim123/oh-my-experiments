@@ -147,10 +147,10 @@ def load_profile(root) -> "Profile":
         if not isinstance(seq, list) or not seq:
             raise OmxError(f"metrics.yaml: {field} must be a non-empty list")
     return Profile(
-        metrics=set(data["metrics"]),
-        views=set(data["views"]),
-        aggs=set(data["aggs"]),
-        sources=set(data["sources"]),
+        metrics=data["metrics"],
+        views=data["views"],
+        aggs=data["aggs"],
+        sources=data["sources"],
         run_id_regex=data.get("run_id_regex"),
     )
 
