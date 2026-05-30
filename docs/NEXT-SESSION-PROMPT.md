@@ -1,61 +1,54 @@
-# OMX 다음 세션 시작 prompt — build #8 `workspace-wiki` **구현** (brainstorm+plan 완료, 구현만 남음)
+# OMX 다음 세션 시작 prompt — build #7 finalize/deploy + 배포 검증 (v0.1 마지막)
 
-> 이 파일을 다음 세션에 "이 파일 읽고 시작해"로 지시하면 됨.
-> 작성: 2026-05-31 (build #8 brainstorm+plan 완료 직후, 구현 전 compact 직전).
-> HEAD = main `4dfb848`. origin/main 대비 **25 commits ahead, NOT pushed** (#5+#6+#8-docs — push 미승인).
+> 이 파일을 다음 세션에 "이 파일 읽고 시작해" 또는 "다음 작업 진행해"로 지시하면 됨.
+> 작성: 2026-05-31 (build #8 구현 완료 + FINAL MERGE_READY 직후, #7 직전 compact 전).
+> HEAD = main `9129173`. origin/main 대비 **38 commits ahead, NOT pushed** (#5+#6+#8 — push 미승인).
 
 ---
 
 ## 지금 어디까지 왔나 (한눈에)
 
-OMX v0.1 스킬셋 4개 완성 (exp-init/analyze/design/loop). 코어 316 passed/1 skipped.
-**build #8 workspace-wiki = brainstorm + plan 끝. 남은 건 구현뿐.**
-
-- **Spec (승인됨)**: `docs/superpowers/specs/2026-05-31-omx-workspace-wiki-design.md` (결정 W1-W8 + §0.1 INV-1/INV-2)
-- **Plan (작성+self-review 완료)**: `docs/superpowers/plans/2026-05-31-omx-workspace-wiki.md` (T1-T11 + FINAL, bite-sized TDD, 완전한 코드)
-
-남은 build: **#8 구현** (이번) → 그 후 **#7 finalize/deploy** (#8 후).
+OMX v0.1 = 4-skill 셋(exp-init/analyze/design/loop) + Claude-free core + **build #8 workspace-wiki 완료**.
+- build #8 (workspace-wiki) **DONE + FINAL opus 7-렌즈 = MERGE_READY**. 12 commits `c6183cf`..`9129173`.
+- 코어 테스트 **366 passed / 1 skipped**, working tree clean.
+- **남은 건 #7 finalize/deploy 하나 — 이게 v0.1 마지막 작업.** 그 다음 배포 검증까지 한 흐름으로.
 
 ---
 
-## 이번 세션 = build #8 구현 (subagent-driven-development)
+## 이번 세션 = #7 finalize/deploy → 배포 검증 (이어서)
 
-### 바로 시작: plan을 task별로 실행
-**brainstorm/plan 단계는 끝났다. 다시 brainstorm 하지 말 것.** `superpowers:subagent-driven-development`로
-`docs/superpowers/plans/2026-05-31-omx-workspace-wiki.md`를 T1부터 순서대로:
-- task별 fresh implementer(sonnet) → spec 리뷰 + quality 리뷰 → 통과 시 다음 → 전체 끝나면 opus FINAL(7 렌즈) → finishing-a-development-branch(local main, **push 안 함**).
-- 검증된 #0~#6 패턴. 각 task = 1 commit, git 트레일러 필수, 풀 스위트 매 task 후 실행(카운트는 오르기만).
+**brainstorm/plan 불필요** — #7은 배포 작업이지 새 기능 설계가 아님. design §8 #7 + §6 카드 draft를 따름.
 
-### 무엇을 만드나 (plan 요약 — 상세는 plan 파일)
-`omx_core/wiki/` 4분할(Claude-free, time-injected): types/storage/ingest/query/lint = OMC wiki를 Python으로 재구현(import 아님).
-+ `omx wiki add/query/lint/list` CLI verbs + `omx_paths` wiki getters(finding/registry_index 제거) + 4 스킬 통합(init seed / analyze query+add via `--from-report` / design query / loop lint).
-**임베딩 절대 금지. 새 skill 없음(plugin.json 4개 유지).**
+### A. #7 finalize/deploy (design §8 #7)
+1. `cards/omx.json` — omha lane 카드 작성 (draft = design §6).
+2. omha 등록.
+3. **claudebase 등록** (settings.json + install.sh 편집) — ⚠️ **편집 직전 반드시 `git pull` claudebase 먼저**
+   (메모리 [[claudebase-pull-before-register]]: claudebase에 최근 변경 많음, 로컬 clone 뒤처져 있을 것. stale base 편집 = conflict/clobber 위험). claudebase는 marketplace를 버전 핀 없이 추적 → 새 skill 자동 배포(#4와 동일)지만 등록 편집은 fresh base 필요.
+4. OMC 버전 핀.
+5. omx repo **public-flip + 3 repo push** — **outward-facing/비가역 → 실행 직전 1줄 confirm** (push도 유저 명시 승인 게이트).
 
-### 잠긴 결정 (재논의 금지 — spec §0)
-- W1 Full parity 코어(storage/ingest/query/lint) · W2 경계: 코어=순수 결정론 IO/검색/감사(now 주입), Claude=무엇·어떤 category 판단 · W3 registry/ 재설계(findings=pages+index.md+log.md+.wiki-lock) · W4 add 주흐름 + `--from-report` 추출전용 모드 · W5 lint verb+exp-loop 호출(보고만) · W6 seed=인터뷰 산출물 1 page · W7 approach A 4모듈 · W8 corrupt-page=skip+corrupt_pages[] 보고.
-- **INV-1 범용성**: 코어에 도메인 지식 0(isaaclab/uuv/metric명/절대경로/private repo명 금지). **INV-2 특화**: 특화는 데이터(.omx/registry/ pages)에 누적, append-only merge, CJK bigram 한국어 검색.
+### B. 배포 검증 (A 직후 이어서) — "deploy가 실제로 동작하는가" end-to-end
+유닛테스트 366개는 이미 green — 검증 단계는 그게 아니라 **배포된 플러그인이 실제로 설치·로드·실행되는지** 확인:
+- 플러그인이 claudebase/omha 경유로 **실제 설치·로드**되는가.
+- fresh install 환경에서 `omx` CLI core verbs (ingest/reduce/eval/plot/init/report-parse/queue-launch/loop-status) + **wiki 4 verb (add/query/lint/list)** 가 실제로 실행되는가 (smoke-test: 임시 root에 wiki add→query→list→lint).
+- 4개 skill 이 discover/invoke 되는가 (plugin.json 4 skill 인식).
+- public-flip 후 repo 가 의도대로 접근 가능한가.
+- 검증에서 문제 발견 시 → 그 자리에서 fix (test-first가 맞으면 superpowers 레인 재판정).
 
-### 먼저 읽어라 (순서대로)
-1. `docs/superpowers/plans/2026-05-31-omx-workspace-wiki.md` — **이게 실행 대본**. T1-T11 완전한 코드.
-2. `docs/superpowers/specs/2026-05-31-omx-workspace-wiki-design.md` — 결정 근거(왜 그렇게).
-3. `docs/HANDOFF.md` — 현재 상태.
-4. (필요 시) OMC wiki 소스 `/root/.claude/plugins/marketplaces/omc/src/hooks/wiki/{types,storage,query,ingest}.ts` — 재구현 원본(이미 plan에 코드로 반영됨).
-5. 메모리 `omx-build8-workspace-wiki-2026-05-31`(있으면) / `omx-build6-exp-loop-2026-05-30`.
+---
 
-### 제약 (반드시 지킴)
-- **brainstorm/plan 재실행 금지** — 이미 끝남. 바로 subagent-driven 구현.
-- 임베딩 금지. 코어 Claude-free(now 주입). path-SSOT(omx_paths getter만). 절대경로/private repo명 금지.
-- `python3`(NOT `python`=Isaac). dist `omx-core/`(하이픈) vs pkg `omx_core/`(언더스코어). `pip install -e .`→`--break-system-packages`.
-- 테스트: `cd /workspace/oh-my-experiments/omx-core && python3 -m pytest tests/ -q` (baseline 316 passed/1 skipped).
-- 커밋 자동(task별), 트레일러 `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`. push는 유저 명시 요청 시만(현재 25 미push). 응답 한국어, 코드/마크다운 영어, 이모지 금지, AI-attribution 금지(트레일러 예외).
+## 제약 (반드시 지킴)
+- **claudebase 편집 직전 `git pull` claudebase 먼저** ([[claudebase-pull-before-register]]).
+- **비가역/outward 단계(push, public-flip, claudebase 등록)는 실행 직전 1줄 confirm.** push는 현재 38 미승인 — 명시 승인받고 실행.
+- 응답 한국어, 코드/마크다운 영어, 이모지 금지, AI-attribution 금지(git 트레일러 `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`만 예외·필수).
 - stage는 명시 경로만(`git add <paths>`), `git add -A` 금지(동시세션).
+- `python3`(NOT `python`=Isaac). dist `omx-core/`(하이픈) vs pkg `omx_core/`(언더스코어). `pip install -e .`→`--break-system-packages`.
+- 코어 테스트: `cd /workspace/oh-my-experiments/omx-core && python3 -m pytest tests/ -q` (baseline 366 passed/1 skipped).
 
-### 환경/검증 함정
-- plan은 cli.py/`__init__.py`/test 구조 대비 검증됨: cli.py에 `json/sys/datetime,timezone/parse_findings` 이미 import(T9에서 중복 말 것), `Path`는 implementer가 확인. `__init__.py` line 16-26 `__all__`에 append. `test_core_import_safe.py`의 `test_loop_symbols_exported` 패턴을 wiki로 복제(T8).
-- 백그라운드 subagent SendMessage review-fix → 알림 1턴 늦을 수 있음 → 깨어나면 git log로 실제 상태 먼저 확인.
-- **ScheduleWakeup/옛 prompt 주의**: 이 파일이 옛 단계를 가리키면 글자대로 실행 말 것 — git log + HANDOFF로 실제 완료 상태 확인 후 진짜 미완만 진행.
+## 먼저 읽어라
+1. `docs/design/2026-05-30-omx-experiment-harness-design.md` §8 #7 + §6 (카드 draft) — 배포 범위.
+2. `docs/HANDOFF.md` — 현재 상태 (#8 DONE 기록됨).
+3. 메모리 `omx-build8-workspace-wiki-2026-05-31` (#8 완료 + NEXT #7), `omx-build6-exp-loop-2026-05-30` (#7 범위), `claudebase-pull-before-register` (pull-first 가드).
 
----
-
-## #7 (나중에 — #8 구현 후) 메모: 배포 시 claudebase pull-first
-#7 배포에서 claudebase 등록(settings.json + install.sh) **직전 반드시 `git pull` claudebase** (유저 지시 2026-05-30, memory `claudebase-pull-before-register`). omx repo public-flip + push 3곳은 outward-facing/비가역 → 실행 직전 1줄 confirm.
+## stale-wakeup / 옛 prompt 주의
+- 이 파일이나 옛 ScheduleWakeup이 옛 단계(예: "T8 구현", "build #8 구현")를 가리키면 **글자대로 실행 금지** — `git log` + HANDOFF로 실제 완료 상태 먼저 확인 후 진짜 미완만 진행. build #8은 `9129173`에서 이미 완료됨.
