@@ -1,0 +1,5 @@
+dr_level,axis,field,value
+none,roll,ss_error,0.76
+none,roll,ss_error_std,0.48
+none,,survival_pct,100.0
+hard,pitch,ss_error,0.14

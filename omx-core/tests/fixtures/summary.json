@@ -1,0 +1,42 @@
+{
+  "none": {
+    "roll": {
+      "os_env_mean": 11.18, "os_env_std": 0.85, "os_env_median": 11.14, "os_env_q90": 12.06,
+      "us_env_mean": 8.38, "us_env_std": 9.75,
+      "n_gt20": 1.33, "n_gt40": 0.0, "n_us_lt_minus20": 0.66,
+      "rise_time": 0.80, "rise_time_std": 0.28,
+      "ss_error": 0.76, "ss_error_std": 0.48, "ss_jitter": 0.43, "ss_jitter_std": 0.26
+    },
+    "pitch": {
+      "os_env_mean": 8.72, "os_env_std": 0.70, "os_env_median": 8.44, "os_env_q90": 9.49,
+      "us_env_mean": 0.0, "us_env_std": 0.0,
+      "n_gt20": 0.0, "n_gt40": 0.0, "n_us_lt_minus20": 0.0,
+      "rise_time": 0.30, "rise_time_std": 0.002,
+      "ss_error": 0.21, "ss_error_std": 0.13, "ss_jitter": 0.17, "ss_jitter_std": 0.17
+    },
+    "att_norm": {
+      "ss_error": 0.83, "ss_error_std": 0.52, "ss_jitter": 0.41, "ss_jitter_std": 0.25
+    },
+    "survival_pct": 100.0
+  },
+  "hard": {
+    "roll": {
+      "os_env_mean": 15.93, "os_env_std": 11.68, "os_env_median": 12.13, "os_env_q90": 29.18,
+      "us_env_mean": 0.0, "us_env_std": 0.0,
+      "n_gt20": 1.0, "n_gt40": 0.33, "n_us_lt_minus20": 0.0,
+      "rise_time": 0.65, "rise_time_std": 0.23,
+      "ss_error": 0.23, "ss_error_std": 0.13, "ss_jitter": 0.11, "ss_jitter_std": 0.07
+    },
+    "pitch": {
+      "os_env_mean": 8.21, "os_env_std": 2.43, "os_env_median": 7.93, "os_env_q90": 10.73,
+      "us_env_mean": 0.07, "us_env_std": 0.11,
+      "n_gt20": 0.0, "n_gt40": 0.0, "n_us_lt_minus20": 0.0,
+      "rise_time": 0.32, "rise_time_std": 0.03,
+      "ss_error": 0.14, "ss_error_std": 0.09, "ss_jitter": 0.02, "ss_jitter_std": 0.01
+    },
+    "att_norm": {
+      "ss_error": 0.30, "ss_error_std": 0.13, "ss_jitter": 0.10, "ss_jitter_std": 0.07
+    },
+    "survival_pct": 100.0
+  }
+}
