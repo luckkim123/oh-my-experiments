@@ -16,6 +16,8 @@ from omx_core.reduce.summarize import to_dataframe, add_cv
 from omx_core.evaluator import run_evaluator
 from omx_core.decision import decide_outcome, parse_keep_policy
 from omx_core.omx_paths import OmxError
+from omx_core.profile import bootstrap_profile, default_metrics
+from omx_core.omx_paths import OmxPaths
 
 def _finite_or_none(x):
     """Map non-finite floats (nan/inf) to None so json.dumps emits valid JSON null."""
@@ -108,6 +110,35 @@ def _cmd_eval(args) -> int:
     return 0 if rec["status"] in ("pass", "fail") else 1
 
 
+def _cmd_init(args) -> int:
+    """Bootstrap .omx/profile/ from the interview-derived metrics (Claude-free).
+
+    The exp-init skill (#3) shells this after the interview; --metrics-json carries
+    the interview result, --root anchors .omx/ (design H4). Profile schema validation
+    + atomic writes live in profile.bootstrap_profile (D8: enforced by code).
+    """
+    if args.metrics_json is not None:
+        try:
+            metrics = json.loads(args.metrics_json)
+        except (ValueError, TypeError) as e:
+            raise SystemExit(f"--metrics-json is not valid JSON: {e}")
+    else:
+        metrics = default_metrics()
+    paths = OmxPaths(root=args.root)
+    try:
+        written = bootstrap_profile(
+            paths, profile_name=args.profile_name, metrics=metrics, force=args.force)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps({
+        "profile_name": args.profile_name,
+        "root": str(paths.omx_dir),
+        "written": [p.name for p in written],
+        "pending_approval": True,
+    }))
+    return 0
+
+
 def _now_stamp() -> str:
     # local wall-clock; deterministic format YYYYMMDD-HHMMSS
     import time
@@ -145,15 +176,31 @@ def build_parser() -> argparse.ArgumentParser:
                     help="prior baseline score for score_improvement comparison")
     pe.set_defaults(func=_cmd_eval)
 
+    pn = sub.add_parser("init", help="bootstrap .omx/profile/ from interview metrics (Claude-free)")
+    pn.add_argument("--root", required=True, help="anchor dir under which .omx/ lives (design H4)")
+    pn.add_argument("--profile-name", default="isaaclab", dest="profile_name",
+                    help="committed reference profile to seed evaluator.sh from")
+    pn.add_argument("--metrics-json", default=None, dest="metrics_json",
+                    help="metrics.yaml content as a JSON object; omitted = built-in defaults")
+    pn.add_argument("--force", action="store_true", help="overwrite an existing profile")
+    pn.set_defaults(func=_cmd_init)
+
     return p
 
 
 def main(argv=None) -> int:
-    args = build_parser().parse_args(argv)
     try:
+        args = build_parser().parse_args(argv)
         return args.func(args)
     except SystemExit as e:
-        return e.code if isinstance(e.code, int) else 2
+        if isinstance(e.code, int):
+            return e.code
+        # Non-int code = a loud-fail message a handler raised via SystemExit(str).
+        # main() intercepts SystemExit, so the interpreter never gets to print it;
+        # surface it on stderr ourselves (loud-fail discipline) and map to rc 2.
+        if e.code is not None:
+            print(str(e.code), file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
