@@ -451,6 +451,20 @@ def test_atomic_dir_cleans_up_on_baseexception(tmp_path):
 # =============================================================================
 # Task 6: completeness gate — every public path getter must be exercised
 # =============================================================================
+def _ref_eval_path(p):
+    """Exercise reference_evaluator and always return a Path.
+
+    The committed reference .sh ships in build-order #2 Task 6; until then the
+    getter loud-fails (OmxPathError, file absent). This wrapper calls the getter
+    in both states and returns a Path so the completeness guard can verify the
+    getter is registered without depending on the file's presence."""
+    from omx_core.omx_paths import OmxPathError
+    try:
+        return p.reference_evaluator("isaaclab")
+    except OmxPathError:
+        return p.reference_dir / "isaaclab" / "evaluator.sh"
+
+
 def test_every_public_path_getter_is_exercised(tmp_path):
     """Guard: enumerate OmxPaths path-returning methods; ensure each is callable
     with a minimal valid arg set and returns a Path. Fails if a getter is added
@@ -472,6 +486,11 @@ def test_every_public_path_getter_is_exercised(tmp_path):
         "registry_index": lambda: p.registry_index(),
         "finding": lambda: p.finding("slug1"),
         "state_json": lambda: p.state_json(),
+        # reference_evaluator loud-fails until Task 6 ships the .sh; exercise the
+        # getter and accept either the resolved Path (Task 6 state) or the
+        # absent-file loud-fail (Task 1 state), returning a Path either way.
+        "reference_evaluator": lambda: _ref_eval_path(p),
+        "checkpoint_pointer_json": lambda: p.checkpoint_pointer_json(rid),
         "analysis_dir": lambda: p.analysis_dir(out, rid, aid),
         "report_md": lambda: p.report_md(out, rid, aid),
         "manifest_json": lambda: p.manifest_json(out, rid, aid),
@@ -532,3 +551,49 @@ def test_cache_path_uses_npz_extension(tmp_path):
     out = p.cache_path("run01", source="eval_summary", metric="ss_error")
     assert out.name == "eval_summary__ss_error.npz"
     assert out.suffix == ".npz"
+
+
+def test_omx_error_is_base_of_path_error():
+    from omx_core.omx_paths import OmxError, OmxPathError
+    assert issubclass(OmxPathError, OmxError)
+    assert issubclass(OmxPathError, ValueError)  # legacy except-sites still catch it
+
+
+def test_reference_dir_is_packaged(tmp_path):
+    from omx_core.omx_paths import OmxPaths
+    p = OmxPaths(tmp_path)
+    rd = p.reference_dir
+    assert rd.name == "reference"
+    assert rd.parent.name == "omx_core"
+    assert tmp_path not in rd.parents  # anchored to the install, never under the per-run root
+
+
+def test_reference_evaluator_rejects_bad_profile(tmp_path):
+    from omx_core.omx_paths import OmxPaths, OmxPathError
+    import pytest
+    p = OmxPaths(tmp_path)
+    with pytest.raises(OmxPathError):
+        p.reference_evaluator("Isaac Lab")  # space -> not a token
+
+
+def test_reference_evaluator_loud_fails_when_absent(tmp_path):
+    # The committed .sh ships in Task 6. Until then the getter must LOUD-FAIL
+    # (not silently return a non-existent path). This is a strict assertion now,
+    # and Task 6 re-asserts the resolves-success case once the file exists.
+    from omx_core.omx_paths import OmxPaths, OmxPathError
+    import pytest
+    p = OmxPaths(tmp_path)
+    ref = p.reference_dir / "isaaclab" / "evaluator.sh"
+    if ref.exists():
+        import pytest as _pt
+        _pt.skip("reference shipped (Task 6 done); resolves-success covered there")
+    with pytest.raises(OmxPathError) as ei:
+        p.reference_evaluator("isaaclab")
+    assert "not shipped" in str(ei.value)
+
+
+def test_checkpoint_pointer_json_under_run(tmp_path):
+    from omx_core.omx_paths import OmxPaths
+    p = OmxPaths(tmp_path)
+    cp = p.checkpoint_pointer_json("run01")
+    assert cp == p.run_dir("run01") / "checkpoint-pointer.json"

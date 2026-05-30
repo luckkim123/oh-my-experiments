@@ -21,5 +21,8 @@ omx = "omx_core.cli:main"
 where = ["."]
 include = ["omx_core*"]
 
+[tool.setuptools.package-data]
+omx_core = ["reference/**/*.sh"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
