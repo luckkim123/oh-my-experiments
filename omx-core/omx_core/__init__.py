@@ -5,10 +5,12 @@ from omx_core.omx_paths import (
     validate_run_id, validate_token, validate_ext,
     resolve_session_id, atomic_path, atomic_dir,
 )
+from omx_core.report import Finding, parse_findings, ReportParseError
 
 __all__ = [
     "OmxPaths", "Profile", "OmxPathError",
     "validate_analysis_id", "validate_proposal_id", "validate_session_id",
     "validate_run_id", "validate_token", "validate_ext",
     "resolve_session_id", "atomic_path", "atomic_dir",
+    "Finding", "parse_findings", "ReportParseError",
 ]

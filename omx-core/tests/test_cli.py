@@ -214,3 +214,48 @@ def test_cli_ingest_wandb_offline(fixtures_dir, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["format"] == "wandb_offline"
     assert out["n_series"] >= 2
+
+
+def test_cli_report_parse_emits_json_findings(tmp_path, capsys):
+    from omx_core.cli import main
+    rpt = tmp_path / "report.md"
+    rpt.write_text(
+        "## Findings\n\n"
+        "[FINDING] roll regressed at hard DR.\n"
+        "[EVIDENCE: summary.json hard/roll/ss_error=0.76]\n"
+        "[CONFIDENCE: HIGH]\n"
+    )
+    rc = main(["report-parse", "--path", str(rpt)])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["n_findings"] == 1
+    assert out["findings"][0]["claim"] == "roll regressed at hard DR."
+    assert out["findings"][0]["evidence"] == "summary.json hard/roll/ss_error=0.76"
+    assert out["findings"][0]["confidence"] == "HIGH"
+
+
+def test_cli_report_parse_missing_file_rc2(tmp_path, capsys):
+    from omx_core.cli import main
+    rc = main(["report-parse", "--path", str(tmp_path / "nope.md")])
+    assert rc == 2
+    assert "not found" in capsys.readouterr().err.lower()
+
+
+def test_cli_report_parse_malformed_rc2(tmp_path, capsys):
+    from omx_core.cli import main
+    rpt = tmp_path / "bad.md"
+    rpt.write_text("[FINDING] dangling with no evidence.\n")
+    rc = main(["report-parse", "--path", str(rpt)])
+    assert rc == 2
+    assert "evidence" in capsys.readouterr().err.lower()
+
+
+def test_cli_report_parse_empty_report_rc0(tmp_path, capsys):
+    from omx_core.cli import main
+    rpt = tmp_path / "empty.md"
+    rpt.write_text("## Summary\nNo issues found.\n")
+    rc = main(["report-parse", "--path", str(rpt)])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["n_findings"] == 0
+    assert out["findings"] == []
