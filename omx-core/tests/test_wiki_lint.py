@@ -67,3 +67,29 @@ def test_lint_orphan_only_when_no_links_either_direction(tmp_path):
     assert "c.md" in orphans          # isolated -> orphan
     assert "a.md" not in orphans      # has outbound link -> not orphan
     assert "b.md" not in orphans      # is linked-to (inbound) -> not orphan
+
+
+def test_lint_survives_aware_timestamp_in_updated(tmp_path):
+    # A page hand-edited (or written by a future tool) with a tz-AWARE `updated:`
+    # field must NOT crash lint's naive `now` stale-delta; lint stays the robust
+    # auditor and still flags the page as stale (FINAL-review robustness fix).
+    p = OmxPaths(root=tmp_path)
+    p.wiki_dir().mkdir(parents=True, exist_ok=True)
+    page = (
+        "---\n"
+        'title: "Aware"\n'
+        "tags: []\n"
+        "created: 2026-01-01T10:00:00+00:00\n"
+        "updated: 2026-01-01T10:00:00+00:00\n"
+        "sources: []\n"
+        "links: []\n"
+        "category: pattern\n"
+        "confidence: high\n"
+        "schemaVersion: 1\n"
+        "---\n"
+        "body\n"
+    )
+    (p.wiki_dir() / "aware.md").write_text(page, encoding="utf-8")
+    # now is naive, ~150 days later -> must compute without TypeError and flag stale
+    res = lint.lint_wiki(p, now="2026-05-31T10:00:00", stale_days=30, max_page_size=10240)
+    assert any(i["type"] == "stale" and i["slug"] == "aware.md" for i in res["issues"])

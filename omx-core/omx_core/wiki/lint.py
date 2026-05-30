@@ -17,10 +17,18 @@ from omx_core.wiki import storage
 
 
 def _parse_iso(value: str) -> datetime | None:
+    """Parse an ISO timestamp to a NAIVE datetime (tzinfo stripped).
+
+    Normalizing to naive keeps the stale-delta total: the wiki writes naive UTC
+    (ingest rejects aware `now`), but an externally hand-edited page could carry a
+    tz-aware `updated:` field. Stripping tzinfo here means lint audits such a page
+    instead of crashing on a naive-vs-aware subtraction (lint stays the robust
+    auditor; a wall-clock UTC value compares correctly against the naive `now`)."""
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value)
     except (TypeError, ValueError):
         return None
+    return parsed.replace(tzinfo=None) if parsed.tzinfo is not None else parsed
 
 
 def lint_wiki(paths: OmxPaths, *, now: str, stale_days: int = 30,

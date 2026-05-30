@@ -33,7 +33,7 @@ class WikiError(OmxError):
 @dataclass(frozen=True)
 class WikiPage:
     """One wiki page: frontmatter fields + markdown content + its filename slug."""
-    slug: str                      # filename incl. '.md' (e.g. "roll-heavy-tail.md")
+    slug: str                      # filename incl. '.md' (e.g. "my-page.md")
     title: str
     tags: list[str] = field(default_factory=list)
     created: str = ""
