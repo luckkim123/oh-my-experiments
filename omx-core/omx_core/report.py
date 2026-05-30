@@ -53,13 +53,30 @@ def parse_findings(text: str) -> list[Finding]:
     n = len(lines)
     while i < n:
         line = lines[i].strip()
+        if not line:
+            i += 1
+            continue
+        if _ANY_TAG.match(line) and not _FINDING.match(line):
+            raise ReportParseError(
+                f"orphan or malformed evidence/confidence tag with no open [FINDING] "
+                f"at line {i + 1}: {line!r}")
         m = _FINDING.match(line)
         if not m:
+            # plain prose / heading / image ref between findings — skip
             i += 1
             continue
         claim = m.group(1)
-        ev = _EVIDENCE.match(lines[i + 1].strip()) if i + 1 < n else None
-        cf = _CONFIDENCE.match(lines[i + 2].strip()) if i + 2 < n else None
+        ev_line = lines[i + 1].strip() if i + 1 < n else ""
+        cf_line = lines[i + 2].strip() if i + 2 < n else ""
+        ev = _EVIDENCE.match(ev_line)
+        if not ev:
+            raise ReportParseError(
+                f"[FINDING] at line {i + 1} not followed by [EVIDENCE: ...] (got {ev_line!r})")
+        cf = _CONFIDENCE.match(cf_line)
+        if not cf:
+            raise ReportParseError(
+                f"[FINDING] at line {i + 1} not followed by a valid "
+                f"[CONFIDENCE: HIGH|MED|LOW] (got {cf_line!r})")
         findings.append(Finding(claim=claim, evidence=ev.group(1), confidence=cf.group(1)))
         i += 3
     return findings
