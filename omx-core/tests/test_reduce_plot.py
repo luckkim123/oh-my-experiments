@@ -17,18 +17,19 @@ def test_line_plot_writes_valid_png(tmp_path):
 
 
 def test_line_plot_caps_width_px(tmp_path):
+    # default matplotlib figure is 6.4in*100dpi = 640px; max_px=400 forces the
+    # cap branch in _save to scale it down (640 > 400). A cap that did nothing
+    # would leave the PNG at ~640px and fail this assertion.
     out = tmp_path / "wide.png"
     x = np.arange(50)
-    line_plot(x, {"a": x}, out, max_px=1200)
-    from PIL import Image  # matplotlib ships PIL; if absent, read IHDR manually
+    line_plot(x, {"a": x}, out, max_px=400)
     try:
+        from PIL import Image
         w, _ = Image.open(out).size
-        assert w <= 1200
     except ImportError:
-        # fallback: PNG IHDR width is bytes 16-20 big-endian
         b = out.read_bytes()
-        w = int.from_bytes(b[16:20], "big")
-        assert w <= 1200
+        w = int.from_bytes(b[16:20], "big")  # PNG IHDR width, bytes 16-20 big-endian
+    assert w <= 400
 
 
 def test_bar_plot_writes_valid_png(tmp_path):
