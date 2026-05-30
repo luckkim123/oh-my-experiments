@@ -11,7 +11,11 @@ from pathlib import Path
 from omx_core.omx_paths import OmxError
 
 
-def promote_plots(scratch_plots_dir, dest_plots_dir, referenced) -> list:
+def promote_plots(
+    scratch_plots_dir: os.PathLike | str,
+    dest_plots_dir: os.PathLike | str,
+    referenced: list[str],
+) -> list[Path]:
     """Move each referenced PNG from scratch_plots_dir to dest_plots_dir.
 
     referenced = list of bare filenames (e.g. 'ss_error__trajectory.png') that the
@@ -33,6 +37,8 @@ def promote_plots(scratch_plots_dir, dest_plots_dir, referenced) -> list:
     moved = []
     for name in referenced:
         target = dest / name
+        # os.replace overwrites an existing dest/<name> (a re-run into the same
+        # analysis_id); collisions are near-impossible since analysis_ids are timestamped.
         os.replace(scratch / name, target)  # atomic within a filesystem
         moved.append(target)
     return moved
