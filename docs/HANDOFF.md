@@ -19,7 +19,7 @@
 ### #1이 만든 것 (omx-core/omx_core/)
 - `omx_paths.py` (#0) — cache 확장자만 `.parquet`→`.npz`로 수정 (pyarrow 부재).
 - `state.py` — `.omx/state.json` 스키마 + atomic load/save (loop #6이 필드 채움).
-- `ingest/` — `IngestResult`/`SummaryRecord`(long-form) + `IngestAdapter` ABC; `EvalSummaryAdapter`(eval_dr summary.json), `LongFormCsvAdapter`(flat CSV), `WandbAdapter`/`TensorboardAdapter` stubs(→ #4 deferred, NotImplementedError).
+- `ingest/` — `IngestResult`/`SummaryRecord`(long-form) + `IngestAdapter` ABC; `EvalSummaryAdapter`(eval_dr summary.json), `LongFormCsvAdapter`(flat CSV), `WandbAdapter`(offline `.wandb` datastore parse) / `TensorboardAdapter`(EventAccumulator) — real adapters as of build #4, heavy imports deferred.
 - `reduce/` — `summarize`(to_dataframe + add_cv=std/mean, 03-analysis-quality 룰), `series`(load_npz + downsample axis-0 stride), `plot`(headless Agg PNG, width cap), `cache`(atomic npz, np.savez file-object form).
 - `cli.py` — `omx` CLI: `ingest` / `reduce summarize` / `session-id`(flag>env>autogen B2). console script 등록됨.
 
@@ -40,7 +40,9 @@
 - claudebase(`<claudebase>`, remote=`luckkim123/claudebase`): `config/settings.json`(enabledPlugins `"oh-my-experiments@omx": true` + extraKnownMarketplaces `omx`) + `installer/install.sh`(OMX marketplace block + OMC 버전핀 `pin_omc_version()`; 현재 OMC 4.14.1 설치/4.14.4 캐시 — **핀 버전 유저확인 필요**, sync_plugins는 version 미추적이라 installed_plugins.json 직접 읽는 별도 함수).
 - push 3곳: oh-my-experiments(full clone) + oh-my-heroacademia(shallow) + claudebase.
 
-**이후 (다음 세션들 — design §8 DAG):** #3 exp-init(토폴로지 §4.1, H4 root-discovery 소유) → #4 exp-analyze(PNG-vision, WandB/TB 어댑터 실구현) → #5 exp-design → #6 exp-loop(여기서 #2 Minor NaN 가드도 처리) → #7 plugin.json skills 채우기 + 완성.
+**이후 (다음 세션들 — design §8 DAG):** #3 exp-init(토폴로지 §4.1, H4 root-discovery 소유) → #4 exp-analyze(PNG-vision, WandB/TB 어댑터 실구현) → **#5 exp-design** → #6 exp-loop(여기서 #2 Minor NaN 가드도 처리) → #7 plugin.json skills 채우기 + 완성.
+
+- **#4 exp-analyze — DONE** (branch `feat/omx-exp-analyze`, 미병합·미push). 만든 것: `TensorboardAdapter`(EventAccumulator 실구현) + `WandbAdapter`(offline `.wandb` datastore parse) — stub→real, heavy imports deferred; `load_profile`(metrics.yaml→Profile, B1 vocabulary tier 활성화); B3 plot promotion 코어(`reduce/promote.py`) + `omx plot` / `omx promote-plots` CLI verbs; `analyze` optional-deps extra + import-safety guard 테스트; `skills/exp-analyze/SKILL.md`(§5 hybrid router: code-exec 정확수치/PNG-vision shape/overlay/eval JSON, evidence tags [FINDING]/[EVIDENCE]/[CONFIDENCE], atomic_path 경유 report.md/manifest.json 영구트리 기록). **277 passed / 1 skipped.** plugin.json 에 2개 skills 등록(exp-init + exp-analyze). NEXT = **#5 exp-design**.
 
 - **#3 exp-init — DONE** (branch `feat/omx-exp-init`, 미병합·미push). 만든 것: `omx_core/profile.py`(`validate_metrics_schema` loud-fail 검증 + `bootstrap_profile` atomic 4-file write + `default_metrics`) + `omx init` CLI verb(profile.bootstrap의 thin entry, rc 0/2) + `skills/exp-init/SKILL.md`(deep-interview 3-dim 게이트 재구현: Goal 0.40/Criteria 0.30/Constraints 0.30, threshold 0.2; 5 토픽→3 dim 매핑 §4.1; AskUserQuestion 대신 prose 번호옵션; `omx init` 핸드오프 + pending-approval hard gate) + plugin.json 등록. **부수 수정**: `main()`이 string-coded SystemExit 메시지를 stderr로 surface(이전엔 rc=2에 메시지 손실 — loud-fail 위반이었음, build #3 리뷰에서 발견). **252 passed / 1 skipped.** 각 task spec+quality 2단 리뷰 통과. NEXT = #4 exp-analyze(PNG-vision, WandB/TB 어댑터 실구현; profile의 vocabulary tier 활성화).
   - 참고: line 17의 "#3에서 `_cmd_eval` allow_nan=False 처리" Minor는 이미 해결됨(`2191736`에서 `_cmd_eval`에 `allow_nan=False` 들어감). 그 항목은 stale.

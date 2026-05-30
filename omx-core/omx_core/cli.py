@@ -9,15 +9,20 @@ import math
 import os
 import sys
 
+import numpy as np
+
 from omx_core.ingest.eval_summary import EvalSummaryAdapter
 from omx_core.ingest.csv_longform import LongFormCsvAdapter
-from omx_core.omx_paths import resolve_session_id
+from omx_core.ingest.tensorboard import TensorboardAdapter
+from omx_core.ingest.wandb_offline import WandbAdapter
 from omx_core.reduce.summarize import to_dataframe, add_cv
+from omx_core.reduce.series import downsample
+from omx_core.reduce.plot import line_plot
+from omx_core.reduce.promote import promote_plots
 from omx_core.evaluator import run_evaluator
 from omx_core.decision import decide_outcome, parse_keep_policy
-from omx_core.omx_paths import OmxError
+from omx_core.omx_paths import OmxError, OmxPaths, validate_token, resolve_session_id
 from omx_core.profile import bootstrap_profile, default_metrics
-from omx_core.omx_paths import OmxPaths
 
 def _finite_or_none(x):
     """Map non-finite floats (nan/inf) to None so json.dumps emits valid JSON null."""
@@ -45,12 +50,24 @@ def _finite_clean(obj):
 _ADAPTERS = {
     "eval_summary": EvalSummaryAdapter,
     "csv_longform": LongFormCsvAdapter,
+    "tensorboard": TensorboardAdapter,
+    "wandb": WandbAdapter,
 }
 
 
 def _ingest(path, fmt):
+    if fmt == "npz":
+        from omx_core.reduce.series import load_npz
+        from omx_core.ingest.base import IngestResult
+        arrs = load_npz(path)
+        all_keys = set(arrs)
+        # only 1-D numeric arrays are plottable series; keep those
+        series = {k: v for k, v in arrs.items() if getattr(v, "ndim", 0) == 1}
+        return IngestResult(summary=[], series=series,
+                            meta={"source": str(path), "format": "npz",
+                                  "skipped_nd": sorted(all_keys - set(series))})
     if fmt not in _ADAPTERS:
-        raise SystemExit(f"unknown --format {fmt!r}; choose from {sorted(_ADAPTERS)}")
+        raise SystemExit(f"unknown --format {fmt!r}; choose from {sorted(_ADAPTERS) + ['npz']}")
     return _ADAPTERS[fmt]().ingest(path)
 
 
@@ -108,6 +125,50 @@ def _cmd_eval(args) -> int:
         out["decision"] = decide_outcome(policy, args.last_kept_score, rec)
     print(json.dumps(_finite_clean(out), allow_nan=False))
     return 0 if rec["status"] in ("pass", "fail") else 1
+
+
+def _cmd_plot(args) -> int:
+    """Render ONE candidate curve from a series source into scratch/<sid>/plots/.
+
+    Claude-free: the skill picks WHICH series/metric/view; this verb does the
+    matplotlib + scratch-path IO (design D8). Output filename = <metric>__<view>.png.
+    """
+    res = _ingest(args.path, args.format)
+    if args.series not in res.series:
+        skipped = res.meta.get("skipped_nd", [])
+        hint = (f" (NOTE: {args.series!r} is in the file but is N-D; only 1-D arrays are plottable)"
+                if args.series in skipped else "")
+        raise SystemExit(
+            f"series {args.series!r} not in source{hint}; available: {sorted(res.series)[:20]}")
+    try:
+        metric = validate_token(args.metric, "metric")
+        view = validate_token(args.view, "view")
+    except OmxError as e:
+        raise SystemExit(str(e))
+    y = downsample(res.series[args.series])
+    step_key = f"_step/{args.series}"
+    x = downsample(res.series[step_key]) if step_key in res.series else np.arange(len(y))
+    out = OmxPaths(root=args.root).scratch_plots(session_id=args.session_id) / f"{metric}__{view}.png"
+    line_plot(x, {args.series: y}, out, title=f"{metric} ({view})")
+    print(json.dumps({"plot": str(out), "metric": metric, "view": view,
+                      "n_points": int(len(y))}))
+    return 0
+
+
+def _cmd_promote(args) -> int:
+    """Promote report-referenced PNGs from scratch into the permanent analysis tree (B3).
+
+    --referenced may be repeated. Loud-fails (rc 2) if any referenced PNG is absent
+    in scratch (promote_plots raises OmxError -> SystemExit)."""
+    paths = OmxPaths(root=args.root)
+    scratch = paths.scratch_plots(session_id=args.session_id)
+    dest = paths.analysis_dir(args.output_root, args.run_id, args.analysis_id) / "plots"
+    try:
+        moved = promote_plots(scratch, dest, args.referenced)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps({"promoted": [str(p) for p in moved]}))
+    return 0
 
 
 def _cmd_init(args) -> int:
@@ -175,6 +236,27 @@ def build_parser() -> argparse.ArgumentParser:
     pe.add_argument("--last-kept-score", type=float, default=None, dest="last_kept_score",
                     help="prior baseline score for score_improvement comparison")
     pe.set_defaults(func=_cmd_eval)
+
+    pp = sub.add_parser("plot", help="render a candidate curve PNG into scratch (Claude-free IO)")
+    pp.add_argument("--root", required=True, help="anchor dir under which .omx/ lives")
+    pp.add_argument("--session-id", required=True, dest="session_id")
+    pp.add_argument("--path", required=True, help="series source (npz/TB/wandb)")
+    pp.add_argument("--format", required=True)
+    pp.add_argument("--series", required=True, help="series key within the source")
+    pp.add_argument("--metric", required=True, help="metric token (output filename field)")
+    pp.add_argument("--view", required=True, help="view token (output filename field)")
+    pp.set_defaults(func=_cmd_plot)
+
+    pm = sub.add_parser("promote-plots", help="B3: move report-referenced PNGs scratch->permanent")
+    pm.add_argument("--root", required=True, help="anchor dir under which .omx/ lives")
+    pm.add_argument("--session-id", required=True, dest="session_id",
+                    help="session id whose scratch/<sid>/plots/ holds the candidates")
+    pm.add_argument("--output-root", required=True, dest="output_root")
+    pm.add_argument("--run-id", required=True, dest="run_id")
+    pm.add_argument("--analysis-id", required=True, dest="analysis_id")
+    pm.add_argument("--referenced", action="append", default=[],
+                    help="a report-referenced PNG filename; repeat for multiple")
+    pm.set_defaults(func=_cmd_promote)
 
     pn = sub.add_parser("init", help="bootstrap .omx/profile/ from interview metrics (Claude-free)")
     pn.add_argument("--root", required=True, help="anchor dir under which .omx/ lives (design H4)")

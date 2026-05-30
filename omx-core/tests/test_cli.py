@@ -196,3 +196,21 @@ def test_integer_systemexit_passes_through_without_extra_print(capsys):
     assert rc == 2
     # argparse already wrote usage to stderr; we only assert main didn't crash and
     # returned the int unchanged. (No assertion on exact stderr text -- argparse owns it.)
+
+
+def test_cli_ingest_tensorboard(fixtures_dir, capsys):
+    ev = fixtures_dir / "tb" / "events.out.tfevents.synthetic"
+    rc = main(["ingest", "--path", str(ev), "--format", "tensorboard"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["format"] == "tensorboard"
+    assert out["n_series"] >= 2
+
+
+def test_cli_ingest_wandb_offline(fixtures_dir, capsys):
+    wf = fixtures_dir / "wandb" / "run-synthetic.wandb"
+    rc = main(["ingest", "--path", str(wf), "--format", "wandb"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["format"] == "wandb_offline"
+    assert out["n_series"] >= 2
