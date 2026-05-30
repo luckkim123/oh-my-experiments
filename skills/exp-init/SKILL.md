@@ -55,6 +55,7 @@ This is the interactive part (H2) — NOT autonomous. Loop until `ambiguity ≤ 
 
 1. **Score the three dimensions** from what's known so far (start all at ~0.0, or higher if the
    initial description already pins a dimension). Compute `ambiguity`.
+   (Calibration: if the user's opening description already names a metric axis, start Constraints ~0.3; if it already names a command + numeric threshold, start Criteria ~0.5.)
 2. **Target the weakest dimension.** Generate ONE question that most reduces its ambiguity.
    Use the sample gating questions:
    - Goal: "What single quantity should the next experiment move, and in which direction?"
@@ -95,6 +96,8 @@ to ground the score-formula question — using ONLY the Claude-free core verbs (
 - `omx ingest --path <eval summary.json> --format eval_summary` — see what metrics/axes exist.
 - `omx reduce summarize --path <...> --format eval_summary --cv-field <metric>` — get mean/std/CV
   to inform the mean-vs-CV-vs-worst-case score-formula choice (D5).
+  Supply `--cv-field` with the primary metric the user named in the Criteria dimension;
+  if omitted the CLI default is `ss_error`.
 
 This is read-only grounding; it writes nothing. If no data exists yet, proceed with the
 interview on the user's stated intent alone.
@@ -105,7 +108,7 @@ Do NOT write profile files yourself. Assemble the interview result into a `metri
 dict and shell the Claude-free core verb, which validates and atomic-writes it:
 
 1. **Assemble the metrics dict** from the interview (these keys match the locked schema):
-   ```json
+   ```jsonc
    {
      "pending_approval": true,
      "output_root": "<the permanent-tree root the user chose; default 'experiments'>",
@@ -115,9 +118,14 @@ dict and shell the Claude-free core verb, which validates and atomic-writes it:
      "sources": ["eval_summary"],
      "run_id_regex": null,
      "keep_policy": "<pass_only | score_improvement — from the Criteria dimension>",
-     "score_formula": "<null under pass_only; the elicited formula string under score_improvement>"
+     "score_formula": null
    }
    ```
+   `score_formula` rule: under `pass_only` it MUST be JSON `null` (the literal null,
+   not the string `"null"`). Under `score_improvement` it MUST be a real non-empty
+   string — the formula you elicited in the interview (e.g. `mean(ss_error) + 0.5*cv(ss_error)`);
+   the core loud-fails if it is null/empty under score_improvement (B5).
+
    Every list entry must be a lowercase token (`[a-z0-9_]`, no `__`); the core will loud-fail
    otherwise (and you should re-ask rather than mangle the user's word).
 
@@ -143,8 +151,8 @@ any analysis, design, eval, or training:
 
 ```
 Profile bootstrapped (pending approval) at <anchor>/.omx/profile/:
-  - metrics.yaml   — <one-line summary: output_root, N metrics, keep_policy>
   - evaluator.sh   — seeded from the <profile-name> reference (edit the STUB block for your eval)
+  - metrics.yaml   — <one-line summary: output_root, N metrics, keep_policy>
   - rules.md       — your analysis discipline (fill in Always/Never)
   - launch.sh      — your training command template (exp-init never runs it)
 
