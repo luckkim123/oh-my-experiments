@@ -19,6 +19,7 @@
   "skills": [
     "./skills/exp-init/",
     "./skills/exp-analyze/",
-    "./skills/exp-design/"
+    "./skills/exp-design/",
+    "./skills/exp-loop/"
   ]
 }
