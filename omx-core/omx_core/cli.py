@@ -23,6 +23,7 @@ from omx_core.evaluator import run_evaluator
 from omx_core.decision import decide_outcome, parse_keep_policy
 from omx_core.omx_paths import OmxError, OmxPaths, validate_token, resolve_session_id
 from omx_core.profile import bootstrap_profile, default_metrics
+from omx_core.report import parse_findings
 
 def _finite_or_none(x):
     """Map non-finite floats (nan/inf) to None so json.dumps emits valid JSON null."""
@@ -200,6 +201,31 @@ def _cmd_init(args) -> int:
     return 0
 
 
+def _cmd_report_parse(args) -> int:
+    """Parse an exp-analyze report.md into structured findings (Claude-free).
+
+    The exp-design skill (#5) shells this to read findings without re-implementing
+    the tag grammar; exp-loop (#6) reuses it. rc 0 + JSON {n_findings, findings:[]}
+    on success; rc 2 (SystemExit) on a missing file or a malformed tag run."""
+    path = args.path
+    if not os.path.exists(path):
+        raise SystemExit(f"report not found: {path}")
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    try:
+        findings = parse_findings(text)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps({
+        "n_findings": len(findings),
+        "findings": [
+            {"claim": f.claim, "evidence": f.evidence, "confidence": f.confidence}
+            for f in findings
+        ],
+    }))
+    return 0
+
+
 def _now_stamp() -> str:
     # local wall-clock; deterministic format YYYYMMDD-HHMMSS
     import time
@@ -266,6 +292,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="metrics.yaml content as a JSON object; omitted = built-in defaults")
     pn.add_argument("--force", action="store_true", help="overwrite an existing profile")
     pn.set_defaults(func=_cmd_init)
+
+    prp = sub.add_parser("report-parse", help="parse exp-analyze report.md -> JSON findings (Claude-free)")
+    prp.add_argument("--path", required=True, help="path to an exp-analyze report.md")
+    prp.set_defaults(func=_cmd_report_parse)
 
     return p
 
