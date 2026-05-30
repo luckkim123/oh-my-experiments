@@ -20,8 +20,15 @@ from pathlib import Path
 from typing import Optional
 
 
-class OmxPathError(ValueError):
-    """Raised on any invalid id or path-construction request (never silent)."""
+class OmxError(Exception):
+    """Root of every OMX loud-fail (path, evaluator, decision). Siblings live in
+    other modules (e.g. evaluator.EvaluatorError) so callers can catch one base."""
+
+
+class OmxPathError(OmxError, ValueError):
+    """Raised on any invalid id or path-construction request (never silent).
+
+    Multiple-inherits ValueError so pre-#2 `except ValueError` sites still catch it."""
 
 
 # --- Structural regexes (B1 tier a): fixed, profile-free ----------------------
@@ -190,6 +197,32 @@ class OmxPaths:
     # --- state.json (single global file) ---
     def state_json(self) -> Path:
         return self.omx_dir / "state.json"
+
+    # --- packaged reference profiles (committed; outside .omx, ships with pkg) ---
+    @property
+    def reference_dir(self) -> Path:
+        """The package's committed reference/ dir (anchored to the install, not
+        self.root). Holds shipped reference evaluators (e.g. isaaclab/evaluator.sh)."""
+        return Path(__file__).resolve().parent / "reference"
+
+    def reference_evaluator(self, profile_name) -> Path:
+        """Path to the COMMITTED reference evaluator.sh for `profile_name` (B4).
+
+        NOT user-elicited; this is the shipped reference exp-init later copies into
+        .omx/profile/. Loud-fail if profile_name is not a token or the file is absent.
+        """
+        name = validate_token(profile_name, "profile_name")
+        path = self.reference_dir / name / "evaluator.sh"
+        if not path.exists():
+            raise OmxPathError(f"reference evaluator not shipped for {name!r}: {path}")
+        return path
+
+    # --- B6 checkpoint pointer (run-bound; weights revert target) ---
+    def checkpoint_pointer_json(self, run_id) -> Path:
+        """runs/<run_id>/checkpoint-pointer.json — the last_kept_checkpoint pointer
+        (B6). Standalone 1-key mirror of ledger.last_kept_checkpoint so exp-loop
+        reads the weights pointer without parsing the full ledger."""
+        return self.run_dir(run_id) / "checkpoint-pointer.json"
 
     # --- permanent output tree (output_root passed per-getter; design 10.1) ---
     # These live OUTSIDE .omx/. output_root originates from metrics.yaml and is
