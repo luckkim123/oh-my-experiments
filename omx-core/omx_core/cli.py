@@ -13,6 +13,9 @@ from omx_core.ingest.eval_summary import EvalSummaryAdapter
 from omx_core.ingest.csv_longform import LongFormCsvAdapter
 from omx_core.omx_paths import resolve_session_id
 from omx_core.reduce.summarize import to_dataframe, add_cv
+from omx_core.evaluator import run_evaluator
+from omx_core.decision import decide_outcome, parse_keep_policy
+from omx_core.omx_paths import OmxError
 
 def _finite_or_none(x):
     """Map non-finite floats (nan/inf) to None so json.dumps emits valid JSON null."""
@@ -69,6 +72,26 @@ def _cmd_session_id(args) -> int:
     return 0
 
 
+def _cmd_eval(args) -> int:
+    """Run an evaluator command, print its contract record (+ optional decision).
+
+    rc 0 when the evaluator produced a graded verdict (status pass|fail);
+    rc 1 when the evaluator itself errored (status error) — so Bash callers can
+    tell 'graded' from 'broke'. With --keep-policy, also runs decide_outcome and
+    embeds a 'decision' block (B5 coupling visible from the CLI).
+    """
+    rec = run_evaluator(args.command, cwd=args.cwd or os.getcwd(), timeout=args.timeout)
+    out = dict(rec)
+    if args.keep_policy is not None:
+        try:
+            policy = parse_keep_policy(args.keep_policy)
+        except OmxError as e:
+            raise SystemExit(str(e))
+        out["decision"] = decide_outcome(policy, args.last_kept_score, rec)
+    print(json.dumps(out))
+    return 0 if rec["status"] in ("pass", "fail") else 1
+
+
 def _now_stamp() -> str:
     # local wall-clock; deterministic format YYYYMMDD-HHMMSS
     import time
@@ -95,6 +118,16 @@ def build_parser() -> argparse.ArgumentParser:
     ps = sub.add_parser("session-id", help="resolve session id (flag>env>autogen)")
     ps.add_argument("--session-id", default=None, dest="session_id")
     ps.set_defaults(func=_cmd_session_id)
+
+    pe = sub.add_parser("eval", help="run an evaluator command, parse {pass,score?} (Claude-free)")
+    pe.add_argument("--command", required=True, help="shell command; LAST stdout line must be the JSON verdict")
+    pe.add_argument("--cwd", default=None, help="working dir for the command (default: cwd)")
+    pe.add_argument("--timeout", type=int, default=600, help="seconds before the evaluator is killed (status=error)")
+    pe.add_argument("--keep-policy", default=None, dest="keep_policy",
+                    help="pass_only | score_improvement; when set, embeds a decide_outcome block")
+    pe.add_argument("--last-kept-score", type=float, default=None, dest="last_kept_score",
+                    help="prior baseline score for score_improvement comparison")
+    pe.set_defaults(func=_cmd_eval)
 
     return p
 
