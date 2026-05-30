@@ -187,12 +187,27 @@ class OmxPaths:
     def scratch_notes(self, *, session_id) -> Path:
         return self.scratch_dir(session_id=session_id) / "notes.md"
 
-    # --- registry/ (permanent discovery index) ---
-    def registry_index(self) -> Path:
-        return self.omx_dir / "registry" / "INDEX.md"
+    # --- registry/ wiki (permanent, keyword-indexed knowledge layer; build #8) ---
+    def wiki_dir(self) -> Path:
+        """registry/findings/ — the dir holding all wiki page .md files."""
+        return self.omx_dir / "registry" / "findings"
 
-    def finding(self, slug) -> Path:
-        return self.omx_dir / "registry" / "findings" / f"{self._check_token(slug, 'slug')}.md"
+    def wiki_page(self, slug) -> Path:
+        """registry/findings/<slug>.md — one wiki page. slug is a single token
+        (validate_token blocks '..'/separators), so traversal is impossible."""
+        return self.wiki_dir() / f"{self._check_token(slug, 'slug')}.md"
+
+    def wiki_index(self) -> Path:
+        """registry/index.md — auto-regenerated catalog (one line per page)."""
+        return self.omx_dir / "registry" / "index.md"
+
+    def wiki_log(self) -> Path:
+        """registry/log.md — append-only chronicle of wiki operations."""
+        return self.omx_dir / "registry" / "log.md"
+
+    def wiki_lock(self) -> Path:
+        """registry/.wiki-lock — file mutex for all wiki writes (fcntl)."""
+        return self.omx_dir / "registry" / ".wiki-lock"
 
     # --- state.json (single global file) ---
     def state_json(self) -> Path:

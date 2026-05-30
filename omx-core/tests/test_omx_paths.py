@@ -207,15 +207,18 @@ def test_scratch_requires_session_id(tmp_path):
 
 def test_registry_and_state(tmp_path):
     p = _paths(tmp_path)
-    assert p.registry_index() == p.omx_dir / "registry" / "INDEX.md"
-    assert p.finding("doraemon_kl") == p.omx_dir / "registry" / "findings" / "doraemon_kl.md"
+    assert p.wiki_index() == p.omx_dir / "registry" / "index.md"
+    assert p.wiki_log() == p.omx_dir / "registry" / "log.md"
+    assert p.wiki_lock() == p.omx_dir / "registry" / ".wiki-lock"
+    assert p.wiki_dir() == p.omx_dir / "registry" / "findings"
+    assert p.wiki_page("doraemon_kl") == p.omx_dir / "registry" / "findings" / "doraemon_kl.md"
     assert p.state_json() == p.omx_dir / "state.json"
 
 
 def test_finding_slug_validated(tmp_path):
     p = _paths(tmp_path)
     with pytest.raises(OmxPathError):
-        p.finding("Bad Slug")
+        p.wiki_page("Bad Slug")
 
 
 def test_run_id_vocab_tier_enforced_when_profile_present(tmp_path):
@@ -257,7 +260,7 @@ def test_getters_reject_traversal_end_to_end(tmp_path, evil):
     with pytest.raises(OmxPathError):
         p.cache_path("r1", source=evil, metric="ss_error")
     with pytest.raises(OmxPathError):
-        p.finding(evil)
+        p.wiki_page(evil)
 
 
 # =============================================================================
@@ -499,8 +502,11 @@ def test_every_public_path_getter_is_exercised(tmp_path):
         "scratch_plots": lambda: p.scratch_plots(session_id=sid),
         "scratch_py": lambda: p.scratch_py(session_id=sid),
         "scratch_notes": lambda: p.scratch_notes(session_id=sid),
-        "registry_index": lambda: p.registry_index(),
-        "finding": lambda: p.finding("slug1"),
+        "wiki_index": lambda: p.wiki_index(),
+        "wiki_log": lambda: p.wiki_log(),
+        "wiki_lock": lambda: p.wiki_lock(),
+        "wiki_dir": lambda: p.wiki_dir(),
+        "wiki_page": lambda: p.wiki_page("slug1"),
         "state_json": lambda: p.state_json(),
         # reference_evaluator loud-fails until Task 6 ships the .sh; exercise the
         # getter and accept either the resolved Path (Task 6 state) or the
