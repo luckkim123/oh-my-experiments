@@ -44,8 +44,8 @@ def parse_findings(text: str) -> list[Finding]:
 
     Non-tag lines between triplets are ignored (prose, headings, image refs).
     Raises ReportParseError if a [FINDING] is not immediately followed (skipping
-    nothing) by a matching [EVIDENCE] then [CONFIDENCE], or if an orphan
-    [EVIDENCE]/[CONFIDENCE] appears with no open [FINDING]. (Task 2 fills these.)
+    nothing) by a matching [EVIDENCE] then [CONFIDENCE], or if an orphan or
+    malformed [EVIDENCE]/[CONFIDENCE] appears with no open [FINDING].
     """
     findings: list[Finding] = []
     lines = text.splitlines()
