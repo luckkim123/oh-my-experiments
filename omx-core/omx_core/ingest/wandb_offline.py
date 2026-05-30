@@ -51,6 +51,7 @@ class WandbAdapter(IngestAdapter):
         ds = datastore.DataStore()
         ds.open_for_scan(str(wf))
         cols = defaultdict(list)
+        step_cols = defaultdict(list)
         try:
             while True:
                 data = ds.scan_data()
@@ -60,21 +61,32 @@ class WandbAdapter(IngestAdapter):
                 rec.ParseFromString(data)
                 if rec.WhichOneof("record_type") != "history":
                     continue
+                step = float(rec.history.step.num)
                 for item in rec.history.item:
                     key = item.key or "/".join(item.nested_key)
                     if not key:
                         continue
                     try:
-                        cols[key].append(float(item.value_json))
+                        value = float(item.value_json)
                     except (ValueError, TypeError):
                         # non-numeric history values (strings/objects) are not curves; skip
                         continue
+                    cols[key].append(value)
+                    # Append the step only on a successful parse so the _step companion
+                    # stays index-aligned with the value series (TB adapter contract).
+                    step_cols[key].append(step)
         finally:
             ds.close()
         if not cols:
             raise OmxError(f"no numeric history scalars in wandb log {wf}")
+        # Mirror the TB adapter: emit a _step/<key> companion (the logged history
+        # step) so omx plot puts wandb curves on the same global-step x-axis as TB.
         series = {k: np.array(v, dtype=float) for k, v in cols.items()}
+        for k, steps in step_cols.items():
+            series[f"_step/{k}"] = np.array(steps, dtype=float)
         return IngestResult(
             summary=[], series=series,
-            meta={"source": str(wf), "format": "wandb_offline", "n_keys": len(series)},
+            # n_keys counts metric series only (excludes the _step/<key> companions),
+            # matching the TB adapter's n_tags convention.
+            meta={"source": str(wf), "format": "wandb_offline", "n_keys": len(cols)},
         )
