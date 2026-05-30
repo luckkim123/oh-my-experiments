@@ -6,6 +6,12 @@ from omx_core.omx_paths import (
     resolve_session_id, atomic_path, atomic_dir,
 )
 from omx_core.report import Finding, parse_findings, ReportParseError
+from omx_core.loop import (
+    compute_deadline,
+    deadline_passed,
+    queue_pending_launch,
+    read_pending_launch,
+)
 
 __all__ = [
     "OmxPaths", "Profile", "OmxPathError",
@@ -13,4 +19,8 @@ __all__ = [
     "validate_run_id", "validate_token", "validate_ext",
     "resolve_session_id", "atomic_path", "atomic_dir",
     "Finding", "parse_findings", "ReportParseError",
+    "compute_deadline",
+    "deadline_passed",
+    "queue_pending_launch",
+    "read_pending_launch",
 ]
