@@ -29,6 +29,22 @@ def test_cli_promote_moves_referenced(tmp_path, capsys):
     assert (sp / "unused__bar.png").exists()
 
 
+def test_cli_promote_multiple_referenced(tmp_path, capsys):
+    from omx_core.omx_paths import OmxPaths
+    paths = OmxPaths(root=tmp_path)
+    sp = paths.scratch_plots(session_id="20260530-101010-1")
+    _png(sp / "a.png", b"A"); _png(sp / "b.png", b"B")
+    rc = main([
+        "promote-plots", "--root", str(tmp_path), "--session-id", "20260530-101010-1",
+        "--output-root", str(tmp_path / "experiments"), "--run-id", "run1",
+        "--analysis-id", "20260530-101010-compare",
+        "--referenced", "a.png", "--referenced", "b.png",
+    ])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert len(out["promoted"]) == 2
+
+
 def test_cli_promote_missing_loud_fails(tmp_path):
     from omx_core.omx_paths import OmxPaths
     paths = OmxPaths(root=tmp_path)

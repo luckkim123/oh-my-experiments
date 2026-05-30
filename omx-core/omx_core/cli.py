@@ -248,8 +248,9 @@ def build_parser() -> argparse.ArgumentParser:
     pp.set_defaults(func=_cmd_plot)
 
     pm = sub.add_parser("promote-plots", help="B3: move report-referenced PNGs scratch->permanent")
-    pm.add_argument("--root", required=True)
-    pm.add_argument("--session-id", required=True, dest="session_id")
+    pm.add_argument("--root", required=True, help="anchor dir under which .omx/ lives")
+    pm.add_argument("--session-id", required=True, dest="session_id",
+                    help="session id whose scratch/<sid>/plots/ holds the candidates")
     pm.add_argument("--output-root", required=True, dest="output_root")
     pm.add_argument("--run-id", required=True, dest="run_id")
     pm.add_argument("--analysis-id", required=True, dest="analysis_id")
