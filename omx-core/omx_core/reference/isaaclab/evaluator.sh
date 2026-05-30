@@ -11,8 +11,10 @@
 # EXACTLY where the live eval slots in; the stub emits a deterministic verdict so
 # the contract is testable end-to-end without a GPU.
 #
-# To make this a REAL evaluator, exp-init replaces the STUB block with, e.g.:
-#   cd /workspace/constrained-albc && python constrained_albc/analysis/eval_dr.py static \
+# To make this a REAL evaluator, exp-init replaces the STUB block with the
+# project's own eval command, e.g. (paths are illustrative — substitute your
+# repo/eval entrypoint; nothing here is machine-specific):
+#   cd "$OMX_PROJECT_DIR" && python <your_eval_entrypoint> static \
 #       --task "$OMX_TASK" --num_envs 64 --headless >/dev/null 2>&1
 #   # then parse the run's summary.json into a pass/score verdict and echo it.
 set -euo pipefail

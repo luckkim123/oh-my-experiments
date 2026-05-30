@@ -43,13 +43,13 @@ Carried high/medium fixes folded in below: **H1** (exp-init topology authored be
 
 ## 1. What OMX borrows from OMC (patterns, re-implemented — never imported)
 
-Verified against `/root/.claude/plugins/marketplaces/omc/` source this session:
+Verified against `<plugins>/marketplaces/omc/` source this session:
 
 | OMC pattern | Source (verified) | OMX re-implementation |
 |:--|:--|:--|
 | **Evaluator contract** `{pass: bool, score?: number}`, loud-fail on bad JSON | `src/autoresearch/contracts.ts` (`parseEvaluatorResult`) | `omx-core` evaluator runner: parse user evaluator stdout's last line as JSON, throw on missing `pass` / non-numeric `score`. |
 | **keep-policy + auto-revert** (`score_improvement`, `git reset --hard last_kept`) | `src/autoresearch/runtime.ts` (`decideAutoresearchOutcome`, `appendDecisionLog`) | `omx loop` keep/discard gate. Wraps repo "minimum-change revert" rule. |
-| **Decision-log 3-artifact** (`results.tsv` + `ledger.json` + `decision-log.md`) | `runtime.ts` | `.omx/runs/<id>/` writes the same trio → satisfies `/workspace/docs/results/<id>.md` YAML front-matter convention. |
+| **Decision-log 3-artifact** (`results.tsv` + `ledger.json` + `decision-log.md`) | `runtime.ts` | `.omx/runs/<id>/` writes the same trio → satisfies `<workspace>/docs/results/<id>.md` YAML front-matter convention. |
 | **Ambiguity-gated Socratic interview** (weighted dimension scoring, threshold gate, `pending approval` artifact) | `skills/deep-interview/SKILL.md` | `exp-init` skill: same gate, but with an **experiment-domain question topology** (objective / metrics / eval-method / success-criteria / launch-recipe). |
 | **Evidence tags** `[FINDING]/[EVIDENCE:file:lines]/[CONFIDENCE:HIGH|MED|LOW]` | `skills/sciomc/SKILL.md` | OMX analysis output schema — enforces repo "추측 금지, 코드/데이터로 증명" rule structurally. |
 | **Evidence-strength hierarchy + discriminating-probe** (controlled repro > primary artifact > inference > speculation; probe = next experiment) | `skills/trace/SKILL.md` | `exp-design` skill: 3-lane diagnosis (code-path / config-DR-hyperparam / measurement-artifact) → the discriminating probe IS the proposed next experiment. |

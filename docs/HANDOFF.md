@@ -5,7 +5,7 @@
 
 ## 현재 상태 (요약)
 
-레포 `/workspace/oh-my-experiments`. **#2 작업 브랜치 `feat/omx-evaluator`** (main 미병합, 8 commit `bc07337..c681b52`). working tree clean.
+레포 `<repo>`. **#2 작업 브랜치 `feat/omx-evaluator`** (main 미병합, 8 commit `bc07337..c681b52`). working tree clean.
 **이번 세션 범위 = #2 구현 + (이후) public 전환 + claudebase/marketplace 등록 + push.** push는 유저가 이번 세션에 명시 요청함(원래 "push 안 함" 철회됨) — 단 #2 검토 완료 후 배포 단계에서 묶어서.
 
 ### 완료된 build-order
@@ -35,9 +35,9 @@
 
 **등록 메커니즘 (recon 완료 — 정확한 파일·명령):**
 - omx repo: `github.com/luckkim123/oh-my-experiments` 현재 **PRIVATE** → `gh repo edit luckkim123/oh-my-experiments --visibility public`.
-- omha 카드: `/root/.claude/plugins/marketplaces/heroacademia/cards/omx.json` 신규작성(design §6 내용 그대로) — glob 발견이라 index 편집 불필요. heroacademia는 **shallow clone**(push는 됨), remote=`luckkim123/oh-my-heroacademia`. 추가로 그 repo `.claude-plugin/marketplace.json`에 oh-my-experiments entry.
-- OMX manifest: `/workspace/oh-my-experiments/.claude-plugin/{plugin.json,marketplace.json}` 신규(skills 배열 `[]` — #3~#6 전). plugin.json: name=oh-my-experiments, version 0.1.0.
-- claudebase(`/root/claudebase`, remote=`luckkim123/claudebase`): `config/settings.json`(enabledPlugins `"oh-my-experiments@omx": true` + extraKnownMarketplaces `omx`) + `installer/install.sh`(OMX marketplace block + OMC 버전핀 `pin_omc_version()`; 현재 OMC 4.14.1 설치/4.14.4 캐시 — **핀 버전 유저확인 필요**, sync_plugins는 version 미추적이라 installed_plugins.json 직접 읽는 별도 함수).
+- omha 카드: `<plugins>/marketplaces/heroacademia/cards/omx.json` 신규작성(design §6 내용 그대로) — glob 발견이라 index 편집 불필요. heroacademia는 **shallow clone**(push는 됨), remote=`luckkim123/oh-my-heroacademia`. 추가로 그 repo `.claude-plugin/marketplace.json`에 oh-my-experiments entry.
+- OMX manifest: `<repo>/.claude-plugin/{plugin.json,marketplace.json}` 신규(skills 배열 `[]` — #3~#6 전). plugin.json: name=oh-my-experiments, version 0.1.0.
+- claudebase(`<claudebase>`, remote=`luckkim123/claudebase`): `config/settings.json`(enabledPlugins `"oh-my-experiments@omx": true` + extraKnownMarketplaces `omx`) + `installer/install.sh`(OMX marketplace block + OMC 버전핀 `pin_omc_version()`; 현재 OMC 4.14.1 설치/4.14.4 캐시 — **핀 버전 유저확인 필요**, sync_plugins는 version 미추적이라 installed_plugins.json 직접 읽는 별도 함수).
 - push 3곳: oh-my-experiments(full clone) + oh-my-heroacademia(shallow) + claudebase.
 
 **이후 (다음 세션들 — design §8 DAG):** #3 exp-init(토폴로지 §4.1, H4 root-discovery 소유) → #4 exp-analyze(PNG-vision, WandB/TB 어댑터 실구현) → #5 exp-design → #6 exp-loop(여기서 #2 Minor NaN 가드도 처리) → #7 plugin.json skills 채우기 + 완성.

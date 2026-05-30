@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12 (run with `python3`, NOT `python` — that is an Isaac Sim wrapper), stdlib `subprocess`/`json`/`datetime`, pytest 9.x. No new dependencies (stays within numpy/pandas/matplotlib/pyyaml). `pip install -e` needs `--break-system-packages` (PEP 668, root Docker).
 
-**Source of truth:** `docs/design/2026-05-30-omx-experiment-harness-design.md` §8 item 2, §0.1 (B4/B5/B6), §1 (patterns to re-implement). OMC reference: `/root/.claude/plugins/marketplaces/omc/src/autoresearch/{contracts.ts,runtime.ts}`.
+**Source of truth:** `docs/design/2026-05-30-omx-experiment-harness-design.md` §8 item 2, §0.1 (B4/B5/B6), §1 (patterns to re-implement). OMC reference: `<plugins>/marketplaces/omc/src/autoresearch/{contracts.ts,runtime.ts}`.
 
 **Review provenance:** This plan was drafted then adversarially reviewed across 4 lenses (contract-fidelity, omx-core-convention, TDD-rigor, B6-revert-correctness) — all returned SOUND. Three IMPORTANT findings are folded in: (1) `baseline_commit` seeded at run-init and held invariant (NOT derived from first keep); (2) explicit non-keep-status pointer-leave test; (3) Task 1's reference-resolves test is strictly testable (loud-fail-when-absent now, strict-resolves in Task 6) — no self-weakening mid-task test.
 
@@ -16,7 +16,7 @@
 
 ## File Structure
 
-All paths absolute under `/workspace/oh-my-experiments/`. New code in `omx-core/omx_core/`, tests in `omx-core/tests/`. Work on branch `feat/omx-evaluator` off `main` (currently `e219c1f`, **160 tests green**).
+All paths absolute under `<repo>/`. New code in `omx-core/omx_core/`, tests in `omx-core/tests/`. Work on branch `feat/omx-evaluator` off `main` (currently `e219c1f`, **160 tests green**).
 
 **NEW FILES:**
 - `omx-core/omx_core/evaluator.py` — `parse_evaluator_result(raw)->dict` (loud-fail contract parser, re-impl of `contracts.ts:178-201`) + `run_evaluator(command, cwd, *, timeout=600)->dict` (subprocess; LAST non-empty stdout line; fault-tolerant-by-recording, re-impl of `runtime.ts:586-636`). Defines `EvaluatorError(OmxError)`. *(Deliverable 1)*
@@ -74,7 +74,7 @@ A standalone `checkpoint-pointer.json` mirrors `last_kept_checkpoint` so exp-loo
 
 **Pre-flight: branch off main.**
 ```bash
-cd /workspace/oh-my-experiments && git checkout -b feat/omx-evaluator
+cd <repo> && git checkout -b feat/omx-evaluator
 python3 -m pytest omx-core/tests/ -q   # expect: 160 passed (baseline)
 ```
 
@@ -1225,7 +1225,7 @@ are the shipped contract demonstrations, version-controlled with the package.
 # the contract is testable end-to-end without a GPU.
 #
 # To make this a REAL evaluator, exp-init replaces the STUB block with, e.g.:
-#   cd /workspace/constrained-albc && python constrained_albc/analysis/eval_dr.py static \
+#   cd "$OMX_PROJECT_DIR" && python <your_eval_entrypoint> static \
 #       --task "$OMX_TASK" --num_envs 64 --headless >/dev/null 2>&1
 #   # then parse the run's summary.json into a pass/score verdict and echo it.
 set -euo pipefail
@@ -1410,7 +1410,7 @@ Expected: PASS (**221 passed**, zero failures) — 160 baseline + Task1(5) + Tas
 - [ ] **Step 5: Smoke-test the CLI from Bash (Claude-free proof).**
 
 ```bash
-cd /workspace/oh-my-experiments/omx-core && python3 -m omx_core.cli eval \
+cd <repo>/omx-core && python3 -m omx_core.cli eval \
   --command "echo '{\"pass\": true, \"score\": 0.7}'" \
   --keep-policy score_improvement --last-kept-score 0.5
 echo "rc=$?"
@@ -1437,7 +1437,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - [ ] **Step 7 (branch close): full suite once more.**
 
 ```bash
-cd /workspace/oh-my-experiments && python3 -m pytest omx-core/tests/ -q
+cd <repo> && python3 -m pytest omx-core/tests/ -q
 ```
 
 Expected: all green, **221 passed**, zero failures. Build-order #2 deliverables complete on `feat/omx-evaluator` (evaluator runner, decision tree, B6 ledger+pointer, trio writers, reference evaluator, `omx eval`, B5 coupling). Leave the branch for the two-stage review + opus final review + merge (same pattern as #1). **Push is deferred to the session-level deployment step** (it is bundled with the public-transition + claudebase/marketplace registration the user requested) — do not push from inside this plan execution.

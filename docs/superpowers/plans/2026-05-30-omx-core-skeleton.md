@@ -14,7 +14,7 @@
 
 **Build-order #1 owns exactly:** ingest + reduce + `omx` CLI + minimal `state.json` + a one-line `cache_path` fix in the #0 module. It does **NOT** own: the evaluator-contract runner (build #2), exp-init/analyze/design/loop skills (builds #3-#6), `report.md` / `manifest.json` writers in the permanent tree (those are exp-analyze, build #4). The permanent-tree getters from #0 stay unused here — #1 writes only inside `.omx/` (cache, scratch) and prints to stdout.
 
-**Verified real-data schema (do not re-derive — confirmed against `/workspace/constrained-albc/.../eval/static_.../`):**
+**Verified real-data schema (do not re-derive — confirmed against `<your-project>/.../eval/static_.../`):**
 
 1. **`summary.json`** — nested dict `{dr_level: {axis: {field: float}}}`:
    - `dr_level` ∈ `{"none", "soft", "medium", "hard"}`
