@@ -31,9 +31,16 @@ def test_init_accepts_metrics_json(tmp_path, capsys):
     assert loaded["output_root"] == "out"
 
 
-def test_init_invalid_metrics_json_rc2(tmp_path, capsys):
+def test_init_bad_schema_rc2(tmp_path, capsys):
     bad = '{"keep_policy": "nope"}'
     rc = main(["init", "--root", str(tmp_path), "--metrics-json", bad])
+    assert rc == 2
+
+
+def test_init_malformed_json_rc2(tmp_path):
+    # genuinely malformed JSON -> json.loads raises -> SystemExit -> rc 2
+    # (distinct path from a schema violation, which is valid JSON)
+    rc = main(["init", "--root", str(tmp_path), "--metrics-json", "not-json{"])
     assert rc == 2
 
 
