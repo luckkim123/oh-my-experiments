@@ -60,5 +60,29 @@ def gen_tb():
     print("wrote", stable)
 
 
+def gen_wandb():
+    """Write a tiny REAL .wandb datastore log with 3 history records (no network)."""
+    from wandb.sdk.internal import datastore
+    from wandb.proto import wandb_internal_pb2 as pb
+    out_dir = HERE / "wandb"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target = out_dir / "run-synthetic.wandb"
+    if target.exists():
+        target.unlink()
+    ds = datastore.DataStore()
+    ds.open_for_write(str(target))
+    for step in range(3):
+        rec = pb.Record()
+        h = rec.history
+        it = h.item.add(); it.key = "Reward/total"; it.value_json = str(-0.5 + 0.1 * step)
+        it2 = h.item.add(); it2.nested_key.extend(["Track", "att", "roll_err_deg"])
+        it2.value_json = str(20.0 - 2.0 * step)
+        h.step.num = step
+        ds.write(rec)
+    ds.close()
+    print("wrote", target)
+
+
 if __name__ == "__main__":
     gen_tb()
+    gen_wandb()
