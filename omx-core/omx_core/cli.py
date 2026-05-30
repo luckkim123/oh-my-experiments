@@ -11,6 +11,8 @@ import sys
 
 from omx_core.ingest.eval_summary import EvalSummaryAdapter
 from omx_core.ingest.csv_longform import LongFormCsvAdapter
+from omx_core.ingest.tensorboard import TensorboardAdapter
+from omx_core.ingest.wandb_offline import WandbAdapter
 from omx_core.omx_paths import resolve_session_id
 from omx_core.reduce.summarize import to_dataframe, add_cv
 from omx_core.evaluator import run_evaluator
@@ -45,6 +47,8 @@ def _finite_clean(obj):
 _ADAPTERS = {
     "eval_summary": EvalSummaryAdapter,
     "csv_longform": LongFormCsvAdapter,
+    "tensorboard": TensorboardAdapter,
+    "wandb": WandbAdapter,
 }
 
 
