@@ -258,3 +258,94 @@ def test_getters_reject_traversal_end_to_end(tmp_path, evil):
         p.cache_path("r1", source=evil, metric="ss_error")
     with pytest.raises(OmxPathError):
         p.finding(evil)
+
+
+# =============================================================================
+# Task 4: permanent output-tree getters (output_root passed per-getter)
+# =============================================================================
+def test_analysis_tree(tmp_path):
+    p = _paths(tmp_path)
+    out = tmp_path / "experiments"
+    a = p.analysis_dir(out, "r13_teacher", "20260530-143022-compare")
+    assert a == out / "r13_teacher" / "analysis" / "20260530-143022-compare"
+    assert p.report_md(out, "r13_teacher", "20260530-143022-compare") == a / "report.md"
+    assert p.manifest_json(out, "r13_teacher", "20260530-143022-compare") == a / "manifest.json"
+
+
+def test_analysis_plot_uses_metric_view(tmp_path):
+    p = _paths(tmp_path)
+    out = tmp_path / "experiments"
+    plot = p.analysis_plot(out, "r13_teacher", "20260530-143022-compare",
+                           metric="attitude", view="trajectory")
+    assert plot.name == "attitude__trajectory.png"
+    assert plot.parent.name == "plots"
+
+
+def test_analysis_table_uses_metric_agg(tmp_path):
+    p = _paths(tmp_path)
+    out = tmp_path / "experiments"
+    tbl = p.analysis_table(out, "r13_teacher", "20260530-143022-compare",
+                           metric="ss_error", agg="by_axis")
+    assert tbl.name == "ss_error__by_axis.csv"
+    assert tbl.parent.name == "tables"
+
+
+def test_proposal_path(tmp_path):
+    p = _paths(tmp_path)
+    out = tmp_path / "experiments"
+    pr = p.proposal_md(out, "r13_teacher", "20260530-143022-next")
+    assert pr == out / "r13_teacher" / "proposals" / "20260530-143022-next.md"
+
+
+def test_bad_analysis_id_rejected_in_tree(tmp_path):
+    p = _paths(tmp_path)
+    out = tmp_path / "experiments"
+    with pytest.raises(OmxPathError):
+        p.report_md(out, "r13_teacher", "not-a-valid-id")
+
+
+@pytest.mark.parametrize("bad_root", ["", None])
+def test_output_root_required(tmp_path, bad_root):
+    p = _paths(tmp_path)
+    with pytest.raises(OmxPathError):
+        p.analysis_dir(bad_root, "r13_teacher", "20260530-143022-compare")
+
+
+def test_analysis_table_rejects_bad_token(tmp_path):
+    p = _paths(tmp_path)
+    out = tmp_path / "experiments"
+    with pytest.raises(OmxPathError):
+        p.analysis_table(out, "r1", "20260530-143022-x", metric="SS_error", agg="by_axis")
+    with pytest.raises(OmxPathError):
+        p.analysis_table(out, "r1", "20260530-143022-x", metric="ss_error", agg="bad-agg")
+
+
+def test_vocabulary_tier_enforced_in_permanent_tree(tmp_path):
+    prof = Profile(metrics={"ss_error"}, views={"trajectory"})
+    p = OmxPaths(root=tmp_path, profile=prof)
+    out = tmp_path / "experiments"
+    with pytest.raises(OmxPathError):
+        p.analysis_plot(out, "r13_teacher", "20260530-143022-compare",
+                        metric="attitude", view="trajectory")  # metric not in vocab
+    ok = p.analysis_plot(out, "r13_teacher", "20260530-143022-compare",
+                         metric="ss_error", view="trajectory")
+    assert ok.name == "ss_error__trajectory.png"
+
+
+def test_run_id_vocab_tier_in_permanent_tree(tmp_path):
+    prof = Profile(run_id_regex=r"\Ar\d+_.*\Z")
+    p = OmxPaths(root=tmp_path, profile=prof)
+    out = tmp_path / "experiments"
+    with pytest.raises(OmxPathError):
+        p.analysis_dir(out, "baseline", "20260530-143022-compare")  # run_id fails profile regex
+    assert p.analysis_dir(out, "r1_x", "20260530-143022-compare").parts[-3] == "r1_x"
+
+
+@pytest.mark.parametrize("evil", ["../../etc", "..", "a/b"])
+def test_permanent_tree_rejects_traversal(tmp_path, evil):
+    p = _paths(tmp_path)
+    out = tmp_path / "experiments"
+    with pytest.raises(OmxPathError):
+        p.analysis_dir(out, evil, "20260530-143022-compare")  # bad run_id
+    with pytest.raises(OmxPathError):
+        p.proposal_md(out, "r1", evil + "-000000-x")  # bad proposal_id

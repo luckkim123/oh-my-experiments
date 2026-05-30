@@ -189,6 +189,50 @@ class OmxPaths:
     def state_json(self) -> Path:
         return self.omx_dir / "state.json"
 
+    # --- permanent output tree (output_root passed per-getter; design 10.1) ---
+    # These live OUTSIDE .omx/. output_root originates from metrics.yaml and is
+    # supplied by the caller every call; it is never derived from self.root.
+    def _out_root(self, output_root) -> Path:
+        """Return output_root as a Path.
+
+        output_root is CALLER-TRUSTED (it is the user's chosen permanent-tree
+        root, from metrics.yaml) — only its presence is checked, its content is
+        intentionally NOT validated (it may be any absolute/relative path the
+        user picked). The untrusted parts are the ids (run_id/analysis_id/
+        metric/...), which every getter validates separately.
+        """
+        if output_root is None or str(output_root) == "":
+            raise OmxPathError("output_root is required for permanent-tree paths")
+        return Path(output_root)
+
+    def analysis_dir(self, output_root, run_id, analysis_id) -> Path:
+        base = self._out_root(output_root)
+        rid = self._check_run_id(run_id)
+        aid = validate_analysis_id(analysis_id)
+        return base / rid / "analysis" / aid
+
+    def report_md(self, output_root, run_id, analysis_id) -> Path:
+        return self.analysis_dir(output_root, run_id, analysis_id) / "report.md"
+
+    def manifest_json(self, output_root, run_id, analysis_id) -> Path:
+        return self.analysis_dir(output_root, run_id, analysis_id) / "manifest.json"
+
+    def analysis_plot(self, output_root, run_id, analysis_id, *, metric, view) -> Path:
+        met = self._check_token(metric, "metric", vocab_attr="metrics")
+        vw = self._check_token(view, "view", vocab_attr="views")
+        return self.analysis_dir(output_root, run_id, analysis_id) / "plots" / f"{met}__{vw}.png"
+
+    def analysis_table(self, output_root, run_id, analysis_id, *, metric, agg) -> Path:
+        met = self._check_token(metric, "metric", vocab_attr="metrics")
+        ag = self._check_token(agg, "agg", vocab_attr="aggs")
+        return self.analysis_dir(output_root, run_id, analysis_id) / "tables" / f"{met}__{ag}.csv"
+
+    def proposal_md(self, output_root, run_id, proposal_id) -> Path:
+        base = self._out_root(output_root)
+        rid = self._check_run_id(run_id)
+        pid = validate_proposal_id(proposal_id)
+        return base / rid / "proposals" / f"{pid}.md"
+
     # --- internal 2-tier validation helpers ---
     def _check_run_id(self, run_id) -> str:
         rid = validate_run_id(run_id)
