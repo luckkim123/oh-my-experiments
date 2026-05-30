@@ -7,7 +7,17 @@ The skill writes nothing to .omx/profile/ directly.
 """
 from __future__ import annotations
 
-from omx_core.omx_paths import OmxError, Profile, validate_token
+import shutil
+
+import yaml
+
+from omx_core.omx_paths import (
+    OmxError,
+    OmxPaths,
+    Profile,
+    atomic_path,
+    validate_token,
+)
 
 _KEEP_POLICIES = frozenset({"pass_only", "score_improvement"})
 # ordered tuple (not a set) for deterministic error messages; all four always validated
@@ -66,12 +76,6 @@ def validate_metrics_schema(data: dict) -> dict:
 
     return data
 
-
-import shutil
-
-import yaml
-
-from omx_core.omx_paths import OmxPaths, atomic_path
 
 RULES_TEMPLATE = """\
 # Analysis discipline (consumed as guidance by exp-analyze)
