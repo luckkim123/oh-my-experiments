@@ -127,6 +127,34 @@ def default_metrics() -> dict:
     }
 
 
+def load_profile(root) -> "Profile":
+    """Read .omx/profile/metrics.yaml under `root` and build an omx_paths.Profile.
+
+    Activates the B1 vocabulary tier for exp-analyze: metric/view/agg/source are
+    drawn from the profile's closed vocab, run_id from its regex. Loud-fails if the
+    profile is absent or its metrics.yaml lacks the vocab fields. Does NOT apply the
+    bootstrap-only pending_approval invariant (an approved profile has cleared it).
+    """
+    paths = root if isinstance(root, OmxPaths) else OmxPaths(root=root)
+    metrics_path = paths.profile_file("metrics.yaml")
+    if not metrics_path.exists():
+        raise OmxError(f"no profile at {metrics_path}; run exp-init first")
+    data = yaml.safe_load(metrics_path.read_text())
+    if not isinstance(data, dict):
+        raise OmxError(f"metrics.yaml at {metrics_path} did not parse to a mapping")
+    for field in _VOCAB_FIELDS:
+        seq = data.get(field)
+        if not isinstance(seq, list) or not seq:
+            raise OmxError(f"metrics.yaml: {field} must be a non-empty list")
+    return Profile(
+        metrics=set(data["metrics"]),
+        views=set(data["views"]),
+        aggs=set(data["aggs"]),
+        sources=set(data["sources"]),
+        run_id_regex=data.get("run_id_regex"),
+    )
+
+
 def bootstrap_profile(paths: OmxPaths, *, profile_name: str = "isaaclab",
                       metrics: dict | None = None, force: bool = False) -> list:
     """Write the four .omx/profile/ files atomically; return the written Paths.
