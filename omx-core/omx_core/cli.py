@@ -22,6 +22,9 @@ from omx_core.reduce.promote import promote_plots
 from omx_core.evaluator import run_evaluator
 from omx_core.decision import decide_outcome, parse_keep_policy
 from omx_core.omx_paths import OmxError, OmxPaths, validate_token, resolve_session_id
+from datetime import datetime, timezone
+
+from omx_core.loop import queue_pending_launch, read_pending_launch, deadline_passed
 from omx_core.profile import bootstrap_profile, default_metrics
 from omx_core.report import parse_findings
 
@@ -226,6 +229,51 @@ def _cmd_report_parse(args) -> int:
     return 0
 
 
+def _cmd_queue_launch(args) -> int:
+    """Queue the next training launch as a pending-approval artifact (B8).
+
+    NEVER launches — writes runs/<run_id>/pending-launch.json and prints it.
+    queued_at is the real clock, injected here (the core stays time-pure)."""
+    paths = OmxPaths(root=args.root)
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        queue_pending_launch(
+            paths, args.run_id,
+            proposal_id=args.proposal_id, launch_delta=args.launch_delta,
+            gpu_gate=args.gpu_gate, queued_at=now)
+        print(json.dumps(read_pending_launch(paths, args.run_id)))
+    except OmxError as e:
+        raise SystemExit(str(e))
+    return 0
+
+
+def _cmd_loop_status(args) -> int:
+    """Report loop status as one JSON: whether the deadline ceiling passed and
+    what (if anything) is queued for launch. Claude-free; the skill reads this
+    to decide stop-or-continue. --now defaults to the real clock; pass it
+    explicitly for deterministic tests."""
+    paths = OmxPaths(root=args.root)
+    now = args.now or datetime.now(timezone.utc).isoformat()
+    passed = None
+    if args.deadline:
+        try:
+            passed = deadline_passed(args.deadline, now)
+        except OmxError as e:
+            raise SystemExit(str(e))
+    try:
+        pending = read_pending_launch(paths, args.run_id)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps({
+        "run_id": args.run_id,
+        "now": now,
+        "deadline": args.deadline,
+        "deadline_passed": passed,
+        "pending_launch": pending,
+    }))
+    return 0
+
+
 def _now_stamp() -> str:
     # local wall-clock; deterministic format YYYYMMDD-HHMMSS
     import time
@@ -296,6 +344,25 @@ def build_parser() -> argparse.ArgumentParser:
     prp = sub.add_parser("report-parse", help="parse exp-analyze report.md -> JSON findings (Claude-free)")
     prp.add_argument("--path", required=True, help="path to an exp-analyze report.md")
     prp.set_defaults(func=_cmd_report_parse)
+
+    pq = sub.add_parser("queue-launch",
+                        help="queue the next training launch as pending-approval (B8; never fires)")
+    pq.add_argument("--root", required=True)
+    pq.add_argument("--run-id", required=True)
+    pq.add_argument("--proposal-id", required=True)
+    pq.add_argument("--launch-delta", required=True)
+    pq.add_argument("--gpu-gate", required=True)
+    pq.set_defaults(func=_cmd_queue_launch)
+
+    pl = sub.add_parser("loop-status",
+                        help="report deadline-ceiling + pending-launch as JSON (Claude-free)")
+    pl.add_argument("--root", required=True)
+    pl.add_argument("--run-id", required=True)
+    pl.add_argument("--deadline", default=None,
+                    help="ISO-8601 deadline; omit to skip the ceiling check")
+    pl.add_argument("--now", default=None,
+                    help="ISO-8601 now (defaults to the real clock; pass for tests)")
+    pl.set_defaults(func=_cmd_loop_status)
 
     return p
 

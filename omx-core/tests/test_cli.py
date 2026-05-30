@@ -259,3 +259,45 @@ def test_cli_report_parse_empty_report_rc0(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["n_findings"] == 0
     assert out["findings"] == []
+
+
+def test_queue_launch_writes_pending(tmp_path, capsys):
+    rc = main([
+        "queue-launch", "--root", str(tmp_path), "--run-id", "run-9",
+        "--proposal-id", "20260530-120000-next",
+        "--launch-delta", "set radius=0.05",
+        "--gpu-gate", "GPU0 free",
+    ])
+    assert rc == 0
+    from omx_core.omx_paths import OmxPaths
+    target = OmxPaths(root=tmp_path).pending_launch_json("run-9")
+    assert target.exists()
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "pending approval"
+    assert out["queued_at"]  # CLI injected a real timestamp
+
+
+def test_loop_status_reports_deadline_and_queue(tmp_path, capsys):
+    main([
+        "queue-launch", "--root", str(tmp_path), "--run-id", "run-9",
+        "--proposal-id", "20260530-120000-next",
+        "--launch-delta", "set radius=0.05", "--gpu-gate", "GPU0 free",
+    ])
+    capsys.readouterr()  # drain
+    rc = main([
+        "loop-status", "--root", str(tmp_path), "--run-id", "run-9",
+        "--deadline", "2026-05-30T12:00:00+00:00",
+        "--now", "2026-05-30T12:00:01+00:00",
+    ])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["deadline_passed"] is True
+    assert out["pending_launch"]["proposal_id"] == "20260530-120000-next"
+
+
+def test_loop_status_no_deadline_is_none(tmp_path, capsys):
+    rc = main(["loop-status", "--root", str(tmp_path), "--run-id", "run-9"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["deadline_passed"] is None
+    assert out["pending_launch"] is None
