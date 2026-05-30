@@ -20,6 +20,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
+# Number of steps written per scalar tag. The adapter test asserts
+# series.shape == (_STEPS,), so keep the two in sync.
+_STEPS = 5
+
 
 def _scalar_event(tag, value, step):
     from tensorboard.compat.proto import event_pb2, summary_pb2
@@ -35,7 +39,7 @@ def gen_tb():
     out_dir = HERE / "tb"
     out_dir.mkdir(parents=True, exist_ok=True)
     writer = EventFileWriter(str(out_dir))
-    for step in range(5):
+    for step in range(_STEPS):
         writer.add_event(_scalar_event("Reward/total", -0.5 + 0.1 * step, step))
         writer.add_event(_scalar_event("Track/att/roll_err_deg", 20.0 - 2.0 * step, step))
     writer.flush()
@@ -46,6 +50,7 @@ def gen_tb():
     produced = sorted(f for f in out_dir.glob("events.out.tfevents.*")
                       if f.name != "events.out.tfevents.synthetic")
     assert produced, "TB writer produced no event file"
+    assert produced[0].stat().st_size > 0, "event file appears empty -- flush may have failed"
     stable = out_dir / "events.out.tfevents.synthetic"
     if stable.exists():
         stable.unlink()
