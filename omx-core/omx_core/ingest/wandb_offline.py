@@ -18,7 +18,10 @@ from omx_core.omx_paths import OmxError
 class WandbAdapter(IngestAdapter):
     def can_handle(self, path) -> bool:
         p = str(path)
-        return p.startswith("wandb://") or p.endswith(".wandb")
+        if p.startswith("wandb://") or p.endswith(".wandb"):
+            return True
+        d = Path(p)
+        return d.is_dir() and any(d.glob("*.wandb"))
 
     def _resolve(self, path) -> Path:
         """Map a wandb:// pointer or a path to the concrete .wandb file.
@@ -48,23 +51,26 @@ class WandbAdapter(IngestAdapter):
         ds = datastore.DataStore()
         ds.open_for_scan(str(wf))
         cols = defaultdict(list)
-        while True:
-            data = ds.scan_data()
-            if data is None:
-                break
-            rec = pb.Record()
-            rec.ParseFromString(data)
-            if rec.WhichOneof("record_type") != "history":
-                continue
-            for item in rec.history.item:
-                key = item.key or "/".join(item.nested_key)
-                if not key:
+        try:
+            while True:
+                data = ds.scan_data()
+                if data is None:
+                    break
+                rec = pb.Record()
+                rec.ParseFromString(data)
+                if rec.WhichOneof("record_type") != "history":
                     continue
-                try:
-                    cols[key].append(float(item.value_json))
-                except (ValueError, TypeError):
-                    # non-numeric history values (strings/objects) are not curves; skip
-                    continue
+                for item in rec.history.item:
+                    key = item.key or "/".join(item.nested_key)
+                    if not key:
+                        continue
+                    try:
+                        cols[key].append(float(item.value_json))
+                    except (ValueError, TypeError):
+                        # non-numeric history values (strings/objects) are not curves; skip
+                        continue
+        finally:
+            ds.close()
         if not cols:
             raise OmxError(f"no numeric history scalars in wandb log {wf}")
         series = {k: np.array(v, dtype=float) for k, v in cols.items()}

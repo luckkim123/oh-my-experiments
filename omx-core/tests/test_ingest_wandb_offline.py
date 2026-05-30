@@ -32,5 +32,10 @@ def test_wandb_ingest_offline_fills_series(fixtures_dir):
 
 def test_wandb_ingest_loud_fails_on_missing(tmp_path):
     from omx_core.omx_paths import OmxError
-    with pytest.raises((OmxError, FileNotFoundError, ValueError)):
+    with pytest.raises(OmxError):
         WandbAdapter().ingest(tmp_path / "run-nope.wandb")
+
+
+def test_wandb_ingest_dir_resolution(fixtures_dir):
+    res = WandbAdapter().ingest(f"wandb://{fixtures_dir / 'wandb'}")
+    assert len(res.series) >= 2
