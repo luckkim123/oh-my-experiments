@@ -11,10 +11,10 @@ from omx_core.ingest.base import IngestAdapter, IngestResult
 
 
 class WandbAdapter(IngestAdapter):
-    def can_handle(self, path) -> bool:
+    def can_handle(self, path: Path) -> bool:
         return str(path).startswith("wandb://")
 
-    def ingest(self, path) -> IngestResult:
+    def ingest(self, path: Path) -> IngestResult:
         raise NotImplementedError(
             "WandbAdapter.ingest is a deferred extension point — implemented in "
             "build #4 (exp-analyze) where WandB is validated on live data."
@@ -22,10 +22,10 @@ class WandbAdapter(IngestAdapter):
 
 
 class TensorboardAdapter(IngestAdapter):
-    def can_handle(self, path) -> bool:
+    def can_handle(self, path: Path) -> bool:
         return "events.out.tfevents" in Path(path).name
 
-    def ingest(self, path) -> IngestResult:
+    def ingest(self, path: Path) -> IngestResult:
         raise NotImplementedError(
             "TensorboardAdapter.ingest is a deferred extension point — implemented "
             "in build #4 (exp-analyze) where TB event files are validated."

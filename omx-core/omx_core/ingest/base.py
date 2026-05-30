@@ -10,8 +10,6 @@ from dataclasses import dataclass, field as dc_field
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
-
 
 @dataclass(frozen=True)
 class SummaryRecord:
