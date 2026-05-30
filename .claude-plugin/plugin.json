@@ -16,5 +16,7 @@
     "ml-research",
     "harness"
   ],
-  "skills": []
+  "skills": [
+    "./skills/exp-init/"
+  ]
 }
