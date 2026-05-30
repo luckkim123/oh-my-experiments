@@ -18,6 +18,7 @@ from omx_core.ingest.wandb_offline import WandbAdapter
 from omx_core.reduce.summarize import to_dataframe, add_cv
 from omx_core.reduce.series import downsample
 from omx_core.reduce.plot import line_plot
+from omx_core.reduce.promote import promote_plots
 from omx_core.evaluator import run_evaluator
 from omx_core.decision import decide_outcome, parse_keep_policy
 from omx_core.omx_paths import OmxError, OmxPaths, validate_token, resolve_session_id
@@ -154,6 +155,22 @@ def _cmd_plot(args) -> int:
     return 0
 
 
+def _cmd_promote(args) -> int:
+    """Promote report-referenced PNGs from scratch into the permanent analysis tree (B3).
+
+    --referenced may be repeated. Loud-fails (rc 2) if any referenced PNG is absent
+    in scratch (promote_plots raises OmxError -> SystemExit)."""
+    paths = OmxPaths(root=args.root)
+    scratch = paths.scratch_plots(session_id=args.session_id)
+    dest = paths.analysis_dir(args.output_root, args.run_id, args.analysis_id) / "plots"
+    try:
+        moved = promote_plots(scratch, dest, args.referenced)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps({"promoted": [str(p) for p in moved]}))
+    return 0
+
+
 def _cmd_init(args) -> int:
     """Bootstrap .omx/profile/ from the interview-derived metrics (Claude-free).
 
@@ -229,6 +246,16 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--metric", required=True, help="metric token (output filename field)")
     pp.add_argument("--view", required=True, help="view token (output filename field)")
     pp.set_defaults(func=_cmd_plot)
+
+    pm = sub.add_parser("promote-plots", help="B3: move report-referenced PNGs scratch->permanent")
+    pm.add_argument("--root", required=True)
+    pm.add_argument("--session-id", required=True, dest="session_id")
+    pm.add_argument("--output-root", required=True, dest="output_root")
+    pm.add_argument("--run-id", required=True, dest="run_id")
+    pm.add_argument("--analysis-id", required=True, dest="analysis_id")
+    pm.add_argument("--referenced", action="append", default=[],
+                    help="a report-referenced PNG filename; repeat for multiple")
+    pm.set_defaults(func=_cmd_promote)
 
     pn = sub.add_parser("init", help="bootstrap .omx/profile/ from interview metrics (Claude-free)")
     pn.add_argument("--root", required=True, help="anchor dir under which .omx/ lives (design H4)")
