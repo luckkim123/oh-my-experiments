@@ -185,7 +185,7 @@ def test_run_dir_and_artifacts(tmp_path):
 def test_cache_path_uses_double_underscore(tmp_path):
     p = _paths(tmp_path)
     cp = p.cache_path("r13_teacher", source="wandb", metric="ss_error")
-    assert cp == p.run_dir("r13_teacher") / "cache" / "wandb__ss_error.parquet"
+    assert cp == p.run_dir("r13_teacher") / "cache" / "wandb__ss_error.npz"
 
 
 def test_cache_path_rejects_bad_token(tmp_path):
@@ -231,7 +231,7 @@ def test_run_id_vocab_tier_enforced_when_profile_present(tmp_path):
 def test_cache_metric_vocab_tier(tmp_path):
     prof = Profile(metrics={"ss_error"}, sources={"wandb"})
     p = OmxPaths(root=tmp_path, profile=prof)
-    assert p.cache_path("r1", source="wandb", metric="ss_error").name == "wandb__ss_error.parquet"
+    assert p.cache_path("r1", source="wandb", metric="ss_error").name == "wandb__ss_error.npz"
     with pytest.raises(OmxPathError):
         p.cache_path("r1", source="wandb", metric="attitude")  # not in profile.metrics
 
@@ -242,7 +242,7 @@ def test_empty_vocab_means_no_restriction(tmp_path):
     prof = Profile(metrics={"ss_error"})  # sources defaults to empty frozenset
     p = OmxPaths(root=tmp_path, profile=prof)
     # arbitrary (structurally-valid) source passes because sources vocab is empty
-    assert p.cache_path("r1", source="anything", metric="ss_error").name == "anything__ss_error.parquet"
+    assert p.cache_path("r1", source="anything", metric="ss_error").name == "anything__ss_error.npz"
     # metric still restricted
     with pytest.raises(OmxPathError):
         p.cache_path("r1", source="anything", metric="vx")
@@ -524,3 +524,11 @@ def test_atomic_dir_failed_promotion_leaves_no_tmp(tmp_path):
     # original target untouched, no stray .tmp left behind
     assert (target / "old.md").read_text() == "old"
     assert list((tmp_path / "out").glob("*.tmp")) == []
+
+
+def test_cache_path_uses_npz_extension(tmp_path):
+    from omx_core.omx_paths import OmxPaths
+    p = OmxPaths(tmp_path)
+    out = p.cache_path("run01", source="eval_summary", metric="ss_error")
+    assert out.name == "eval_summary__ss_error.npz"
+    assert out.suffix == ".npz"

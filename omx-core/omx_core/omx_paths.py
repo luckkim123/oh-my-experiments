@@ -165,7 +165,7 @@ class OmxPaths:
     def cache_path(self, run_id, *, source, metric) -> Path:
         src = self._check_token(source, "source", vocab_attr="sources")
         met = self._check_token(metric, "metric", vocab_attr="metrics")
-        return self.run_dir(run_id) / "cache" / f"{src}__{met}.parquet"
+        return self.run_dir(run_id) / "cache" / f"{src}__{met}.npz"
 
     # --- scratch/<session_id>/ (session-bound; session_id MANDATORY, B2) ---
     def scratch_dir(self, *, session_id) -> Path:
