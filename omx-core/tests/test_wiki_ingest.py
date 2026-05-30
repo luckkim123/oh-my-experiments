@@ -69,3 +69,11 @@ def test_wiki_links_extracted(tmp_path):
                             tags=[], category="pattern", confidence="low", sources=[])
     page = storage.read_page(p, "alpha.md")
     assert "roll_heavy_tail.md" in page.links
+
+
+def test_aware_now_loud_fails(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    with pytest.raises(WikiError):
+        ingest.ingest_knowledge(p, now="2026-05-31T10:00:00+00:00", title="X",
+                                content="c", tags=[], category="pattern",
+                                confidence="high", sources=[])

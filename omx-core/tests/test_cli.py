@@ -340,3 +340,115 @@ def test_loop_status_rejects_bad_max_runtime(tmp_path, capsys):
         "--now", "2026-05-30T12:00:00+00:00",
     ])
     assert rc != 0  # compute_deadline loud-fails on non-positive -> SystemExit
+
+
+# ---------------------------------------------------------------------------
+# wiki verbs
+# ---------------------------------------------------------------------------
+
+def test_wiki_add_write_mode_creates_page(tmp_path, capsys):
+    from omx_core.cli import build_parser
+    args = build_parser().parse_args(
+        ["wiki", "add", "--root", str(tmp_path), "--title", "Roll heavy-tail",
+         "--category", "pattern", "--tags", "roll,heavy-tail",
+         "--confidence", "high", "--content", "roll axis heavy tail"])
+    rc = args.func(args)
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["action"] == "created"
+    assert out["slug"] == "roll_heavy_tail.md"
+
+
+def test_wiki_add_from_report_extract_only(tmp_path, capsys):
+    from omx_core.cli import build_parser
+    from omx_core.omx_paths import OmxPaths
+    report = tmp_path / "report.md"
+    report.write_text(
+        "[FINDING] roll regressed\n[EVIDENCE: summary.json hard/roll]\n[CONFIDENCE: HIGH]\n",
+        encoding="utf-8",
+    )
+    args = build_parser().parse_args(
+        ["wiki", "add", "--root", str(tmp_path), "--from-report", str(report)])
+    rc = args.func(args)
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["candidates"][0]["claim"] == "roll regressed"
+    # extract-only wrote NOTHING:
+    assert OmxPaths(root=tmp_path).wiki_dir().exists() is False
+
+
+def test_wiki_query_returns_json(tmp_path, capsys):
+    from omx_core.cli import build_parser
+    from omx_core.omx_paths import OmxPaths
+    from omx_core.wiki import ingest
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Heavy tail",
+                            content="body", tags=[], category="pattern",
+                            confidence="high", sources=[])
+    args = build_parser().parse_args(["wiki", "query", "--root", str(tmp_path), "heavy tail"])
+    rc = args.func(args)
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["n_matches"] == 1
+
+
+def test_wiki_lint_returns_json(tmp_path, capsys):
+    from omx_core.cli import build_parser
+    from omx_core.omx_paths import OmxPaths
+    from omx_core.wiki import ingest
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="A",
+                            content="body", tags=["roll"], category="pattern",
+                            confidence="high", sources=[])
+    args = build_parser().parse_args(["wiki", "lint", "--root", str(tmp_path)])
+    rc = args.func(args)
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert "issues" in out and "stats" in out
+
+
+def test_wiki_list_returns_json(tmp_path, capsys):
+    from omx_core.cli import build_parser
+    from omx_core.omx_paths import OmxPaths
+    from omx_core.wiki import ingest
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="A",
+                            content="body", tags=[], category="pattern",
+                            confidence="high", sources=[])
+    args = build_parser().parse_args(["wiki", "list", "--root", str(tmp_path)])
+    rc = args.func(args)
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["pages"][0]["slug"] == "a.md"
+
+
+def test_wiki_add_bad_category_loud_fails(tmp_path):
+    import pytest
+    from omx_core.cli import build_parser
+    args = build_parser().parse_args(
+        ["wiki", "add", "--root", str(tmp_path), "--title", "X",
+         "--category", "bogus", "--tags", "", "--confidence", "high",
+         "--content", "c"])
+    with pytest.raises(SystemExit):
+        args.func(args)
+
+
+def test_wiki_add_write_mode_requires_fields(tmp_path):
+    import pytest
+    from omx_core.cli import build_parser
+    # missing --content in write mode (no --from-report) must loud-fail
+    args = build_parser().parse_args(
+        ["wiki", "add", "--root", str(tmp_path), "--title", "X",
+         "--category", "pattern", "--confidence", "high"])
+    with pytest.raises(SystemExit):
+        args.func(args)
+
+
+def test_wiki_add_write_mode_requires_confidence(tmp_path):
+    import pytest
+    from omx_core.cli import build_parser
+    args = build_parser().parse_args(
+        ["wiki", "add", "--root", str(tmp_path), "--title", "X",
+         "--category", "pattern", "--content", "c"])
+    with pytest.raises(SystemExit):
+        args.func(args)

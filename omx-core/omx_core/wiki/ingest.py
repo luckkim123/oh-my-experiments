@@ -37,6 +37,8 @@ def ingest_knowledge(paths: OmxPaths, *, now: str, title: str, content: str,
                      tags: list, category: str, confidence: str,
                      sources: list) -> dict:
     """Create or append-merge a wiki page. Returns {action, slug}."""
+    if "+" in now or now.endswith("Z"):
+        raise WikiError(f"now must be a naive ISO timestamp (no tz offset); got {now!r}")
     if category not in CATEGORIES:
         raise WikiError(f"category {category!r} not in {sorted(CATEGORIES)}")
     if confidence not in CONFIDENCES:

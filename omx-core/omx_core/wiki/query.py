@@ -37,6 +37,9 @@ def query_wiki(paths: OmxPaths, *, now: str, text: str, tags: list | None = None
     are present in `matches` after the limit cap. Skills use n_matches to judge
     coverage, so it must reflect the full matched set, not the truncated slice.
 
+    The injected `now` is used ONLY to timestamp the advisory query-log entry; it
+    is not part of scoring.
+
     The query is logged via append_log without holding the wiki lock; the query
     log is advisory (pages are the knowledge), so an interleaved log line under
     concurrent queries is acceptable.

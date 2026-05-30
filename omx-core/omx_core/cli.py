@@ -8,6 +8,7 @@ import json
 import math
 import os
 import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -27,6 +28,8 @@ from datetime import datetime, timezone
 from omx_core.loop import queue_pending_launch, read_pending_launch, deadline_passed, compute_deadline
 from omx_core.profile import bootstrap_profile, default_metrics
 from omx_core.report import parse_findings
+from omx_core.wiki import ingest as _wiki_ingest, query as _wiki_query, lint as _wiki_lint, storage as _wiki_storage
+
 
 def _finite_or_none(x):
     """Map non-finite floats (nan/inf) to None so json.dumps emits valid JSON null."""
@@ -287,6 +290,88 @@ def _now_stamp() -> str:
     return time.strftime("%Y%m%d-%H%M%S", time.localtime())
 
 
+def _now_iso() -> str:
+    """Wall-clock now as a NAIVE UTC ISO string (no tz offset).
+
+    The wiki stamps created/updated with this and lint subtracts naive-vs-naive;
+    a tz-aware value would make lint's stale-delta raise. Naive-everywhere is the
+    wiki's contract (loop.py's aware path is separate)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+
+
+def _cmd_wiki_add(args) -> int:
+    paths = OmxPaths(root=args.root)
+    if args.from_report is not None:
+        report = Path(args.from_report)
+        if not report.exists():
+            raise SystemExit(f"report not found: {report}")
+        try:
+            findings = parse_findings(report.read_text(encoding="utf-8"))
+        except OmxError as e:
+            raise SystemExit(str(e))
+        print(json.dumps({"candidates": [
+            {"claim": f.claim, "evidence": f.evidence, "confidence": f.confidence}
+            for f in findings
+        ]}))
+        return 0
+    for need in ("title", "category", "content", "confidence"):
+        if getattr(args, need) is None:
+            raise SystemExit(f"--{need} is required in write mode (omit only with --from-report)")
+    tags = [t.strip() for t in (args.tags or "").split(",") if t.strip()]
+    content = args.content
+    if content == "-":
+        content = sys.stdin.read()
+    try:
+        res = _wiki_ingest.ingest_knowledge(
+            paths, now=_now_iso(), title=args.title, content=content,
+            tags=tags, category=args.category, confidence=args.confidence,
+            sources=[s.strip() for s in (args.sources or "").split(",") if s.strip()])
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(res))
+    return 0
+
+
+def _cmd_wiki_query(args) -> int:
+    paths = OmxPaths(root=args.root)
+    tags = [t.strip() for t in (args.tags or "").split(",") if t.strip()] or None
+    try:
+        res = _wiki_query.query_wiki(
+            paths, now=_now_iso(), text=args.text, tags=tags,
+            category=args.category, limit=args.limit)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(res))
+    return 0
+
+
+def _cmd_wiki_lint(args) -> int:
+    paths = OmxPaths(root=args.root)
+    try:
+        res = _wiki_lint.lint_wiki(
+            paths, now=_now_iso(), stale_days=args.stale_days,
+            max_page_size=args.max_page_size)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(res))
+    return 0
+
+
+def _cmd_wiki_list(args) -> int:
+    paths = OmxPaths(root=args.root)
+    out = {"pages": [], "corrupt_pages": []}
+    for slug in _wiki_storage.list_pages(paths):
+        try:
+            page = _wiki_storage.read_page(paths, slug)
+        except OmxError:
+            out["corrupt_pages"].append(slug)
+            continue
+        if page is not None:
+            out["pages"].append({"slug": slug, "title": page.title, "category": page.category})
+    print(json.dumps(out))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="omx", description="OMX experiment-analysis core")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -373,6 +458,39 @@ def build_parser() -> argparse.ArgumentParser:
                     help="seconds; when --deadline is omitted, the deadline is "
                          "computed as now + max-runtime (the leaving-work ceiling)")
     pl.set_defaults(func=_cmd_loop_status)
+
+    pw = sub.add_parser("wiki", help="workspace knowledge wiki (keyword-indexed, no embeddings)")
+    wsub = pw.add_subparsers(dest="wiki_cmd", required=True)
+
+    pwa = wsub.add_parser("add", help="add/merge a page, OR --from-report to extract candidates")
+    pwa.add_argument("--root", required=True)
+    pwa.add_argument("--title", default=None)
+    pwa.add_argument("--category", default=None)
+    pwa.add_argument("--tags", default=None, help="comma-separated")
+    pwa.add_argument("--confidence", default=None, choices=["high", "medium", "low"])
+    pwa.add_argument("--content", default=None, help="content text, or '-' for stdin")
+    pwa.add_argument("--sources", default=None, help="comma-separated source ids")
+    pwa.add_argument("--from-report", default=None, dest="from_report",
+                     help="extract-only: print [FINDING] candidates from a report.md, write nothing")
+    pwa.set_defaults(func=_cmd_wiki_add)
+
+    pwq = wsub.add_parser("query", help="keyword + tag search (tag>title>content, CJK-aware)")
+    pwq.add_argument("--root", required=True)
+    pwq.add_argument("text", help="query text")
+    pwq.add_argument("--tags", default=None, help="comma-separated tag filter")
+    pwq.add_argument("--category", default=None)
+    pwq.add_argument("--limit", type=int, default=20)
+    pwq.set_defaults(func=_cmd_wiki_query)
+
+    pwl = wsub.add_parser("lint", help="audit pages (orphan/stale/broken-ref/oversized), report-only")
+    pwl.add_argument("--root", required=True)
+    pwl.add_argument("--stale-days", type=int, default=30, dest="stale_days")
+    pwl.add_argument("--max-page-size", type=int, default=10240, dest="max_page_size")
+    pwl.set_defaults(func=_cmd_wiki_lint)
+
+    pwls = wsub.add_parser("list", help="catalog of pages (slug/title/category)")
+    pwls.add_argument("--root", required=True)
+    pwls.set_defaults(func=_cmd_wiki_list)
 
     return p
 
