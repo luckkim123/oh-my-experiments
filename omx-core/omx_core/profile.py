@@ -10,11 +10,12 @@ from __future__ import annotations
 from omx_core.omx_paths import OmxError, Profile, validate_token
 
 _KEEP_POLICIES = frozenset({"pass_only", "score_improvement"})
+# ordered tuple (not a set) for deterministic error messages; all four always validated
 _VOCAB_FIELDS = ("metrics", "views", "aggs", "sources")
 
 
 def validate_metrics_schema(data: dict) -> dict:
-    """Validate a metrics.yaml dict (loud-fail OmxError); return it unchanged on success.
+    """Validate a FRESHLY-BOOTSTRAPPED metrics.yaml dict (loud-fail OmxError); return it unchanged on success.
 
     Enforces the schema locked in the build-#3 plan: output_root present;
     metrics/views/aggs/sources are non-empty token lists; run_id_regex null-or-
@@ -40,7 +41,11 @@ def validate_metrics_schema(data: dict) -> dict:
     regex = data.get("run_id_regex", None)
     if regex is not None:
         # Construct a Profile so a bad pattern fails loud HERE (post_init compiles it).
-        Profile(run_id_regex=regex)
+        # Re-wrap so the error message is owned by profile.py, not omx_paths internals.
+        try:
+            Profile(run_id_regex=regex)
+        except OmxError as e:
+            raise OmxError(f"metrics.yaml: run_id_regex invalid: {e}") from e
 
     policy = data.get("keep_policy")
     if policy not in _KEEP_POLICIES:
@@ -53,6 +58,8 @@ def validate_metrics_schema(data: dict) -> dict:
             "metrics.yaml: score_formula is required (non-empty string) under "
             "keep_policy=score_improvement (B5: score-less candidates are discarded)")
 
+    # This validator runs only at bootstrap time; pending_approval=True is a
+    # fresh-profile invariant (the approval workflow later flips it to false).
     if data.get("pending_approval") is not True:
         raise OmxError(
             "metrics.yaml: pending_approval must be true on a freshly bootstrapped profile")

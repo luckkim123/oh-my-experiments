@@ -82,3 +82,9 @@ def test_pending_approval_must_be_true_when_bootstrapping():
     d = _good(); d["pending_approval"] = False
     with pytest.raises(OmxError, match="pending_approval"):
         validate_metrics_schema(d)
+
+
+def test_score_formula_ignored_under_pass_only():
+    # under pass_only, a present score_formula is allowed (not required, not rejected)
+    d = _good(); d["score_formula"] = "anything"
+    assert validate_metrics_schema(d) == d
