@@ -32,6 +32,9 @@ class TensorboardAdapter(IngestAdapter):
         ea.Reload()
         tags = ea.Tags().get("scalars", [])
         series = {}
+        # For each scalar tag T, two series keys are written:
+        #   series[T]          -- the float values
+        #   series["_step/" + T] -- the corresponding global step indices (x-axis)
         for tag in tags:
             events = ea.Scalars(tag)
             series[tag] = np.array([e.value for e in events], dtype=float)
