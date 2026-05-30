@@ -65,3 +65,97 @@ def validate_metrics_schema(data: dict) -> dict:
             "metrics.yaml: pending_approval must be true on a freshly bootstrapped profile")
 
     return data
+
+
+import shutil
+
+import yaml
+
+from omx_core.omx_paths import OmxPaths, atomic_path
+
+RULES_TEMPLATE = """\
+# Analysis discipline (consumed as guidance by exp-analyze)
+
+## Always
+- (e.g.) Report CV = std/mean for every metric; mean alone is half the picture.
+
+## Never
+- (e.g.) Assert "heavy-tail" without per-env peak counting.
+
+## Notes
+- (free form)
+"""
+
+LAUNCH_TEMPLATE = """\
+#!/usr/bin/env bash
+# OMX profile - training launch recipe. exp-loop (#6) QUEUES this as a
+# 'pending approval' artifact; it is NEVER auto-fired (design D4/B8).
+# Fill in your training command + GPU gate, then the human launches it.
+set -euo pipefail
+
+# GPU gate (example - adapt to your setup):
+#   nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits
+
+# Training command (placeholder - substitute your entrypoint; nothing machine-specific):
+#   cd "$OMX_PROJECT_DIR" && python <your_train_entrypoint> --task "$OMX_TASK" ...
+echo "launch.sh is a template; fill in your training command. exp-init never runs it."
+"""
+
+_METRICS_HEADER = (
+    "# OMX profile - metrics vocabulary + output root.\n"
+    "# Consumed by omx_paths.Profile (vocabulary tier) and exp-analyze (#4).\n"
+    "# Set pending_approval to false (or delete the key) on approval.\n"
+)
+
+
+def default_metrics() -> dict:
+    """The locked metrics.yaml schema with placeholder vocab — the interview fills it in."""
+    return {
+        "pending_approval": True,
+        "output_root": "experiments",
+        "metrics": ["ss_error", "attitude", "lin_vel", "survival_pct"],
+        "views": ["trajectory", "per_axis_bar", "overlay"],
+        "aggs": ["by_axis", "mean_std"],
+        "sources": ["eval_summary"],
+        "run_id_regex": None,
+        "keep_policy": "pass_only",
+        "score_formula": None,
+    }
+
+
+def bootstrap_profile(paths: OmxPaths, *, profile_name: str = "isaaclab",
+                      metrics: dict | None = None, force: bool = False) -> list:
+    """Write the four .omx/profile/ files atomically; return the written Paths.
+
+    Order is loud-fail-before-write: validate the schema and resolve the shipped
+    reference evaluator FIRST, so an invalid profile or unknown reference leaves
+    NO partial files (test_bootstrap_invalid_metrics_writes_nothing). Refuses to
+    overwrite an existing profile unless force=True (a bootstrapped profile is the
+    user's tuning - never silently clobbered; design 10.3 'profile is sacred').
+    """
+    metrics = default_metrics() if metrics is None else metrics
+    validate_metrics_schema(metrics)                       # loud-fail #1 (before any write)
+    reference = paths.reference_evaluator(profile_name)    # loud-fail #2 (missing reference)
+
+    targets = {name: paths.profile_file(name)
+               for name in ("evaluator.sh", "metrics.yaml", "rules.md", "launch.sh")}
+    if not force:
+        existing = [p for p in targets.values() if p.exists()]
+        if existing:
+            raise OmxError(
+                f"profile already exists ({[p.name for p in existing]}); pass force=True "
+                "to overwrite (profile is the user's tuning - never silently clobbered)")
+
+    metrics_text = _METRICS_HEADER + yaml.safe_dump(metrics, sort_keys=True, default_flow_style=False)
+
+    written = []
+    with atomic_path(targets["evaluator.sh"]) as tmp:
+        shutil.copyfile(reference, tmp)
+    written.append(targets["evaluator.sh"])
+    for name, text in (("metrics.yaml", metrics_text),
+                       ("rules.md", RULES_TEMPLATE),
+                       ("launch.sh", LAUNCH_TEMPLATE)):
+        with atomic_path(targets[name]) as tmp:
+            tmp.write_text(text)
+        written.append(targets[name])
+    return written

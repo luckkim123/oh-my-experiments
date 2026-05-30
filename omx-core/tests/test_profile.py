@@ -88,3 +88,74 @@ def test_score_formula_ignored_under_pass_only():
     # under pass_only, a present score_formula is allowed (not required, not rejected)
     d = _good(); d["score_formula"] = "anything"
     assert validate_metrics_schema(d) == d
+
+
+import yaml
+
+from omx_core.omx_paths import OmxPaths
+from omx_core.profile import bootstrap_profile
+
+
+def _bootstrap(tmp_path, **kw):
+    paths = OmxPaths(root=tmp_path)
+    metrics = kw.pop("metrics", _good())
+    return paths, bootstrap_profile(paths, profile_name="isaaclab", metrics=metrics, **kw)
+
+
+def test_bootstrap_writes_all_four_files(tmp_path):
+    paths, written = _bootstrap(tmp_path)
+    for name in ("evaluator.sh", "metrics.yaml", "rules.md", "launch.sh"):
+        assert paths.profile_file(name).exists(), f"{name} not written"
+    assert {p.name for p in written} == {"evaluator.sh", "metrics.yaml", "rules.md", "launch.sh"}
+
+
+def test_bootstrap_metrics_yaml_roundtrips_and_is_valid(tmp_path):
+    paths, _ = _bootstrap(tmp_path)
+    loaded = yaml.safe_load(paths.profile_file("metrics.yaml").read_text())
+    assert loaded["pending_approval"] is True
+    assert loaded["metrics"] == _good()["metrics"]
+    validate_metrics_schema(loaded)
+
+
+def test_bootstrap_evaluator_copied_from_reference(tmp_path):
+    paths, _ = _bootstrap(tmp_path)
+    written = paths.profile_file("evaluator.sh").read_text()
+    reference = paths.reference_evaluator("isaaclab").read_text()
+    assert written == reference
+
+
+def test_bootstrap_invalid_metrics_writes_nothing(tmp_path):
+    bad = _good(); bad["keep_policy"] = "nope"
+    paths = OmxPaths(root=tmp_path)
+    with pytest.raises(OmxError, match="keep_policy"):
+        bootstrap_profile(paths, profile_name="isaaclab", metrics=bad)
+    assert not paths.profile_file("metrics.yaml").exists()
+    assert not paths.profile_dir.exists() or list(paths.profile_dir.iterdir()) == []
+
+
+def test_bootstrap_refuses_overwrite_without_force(tmp_path):
+    paths, _ = _bootstrap(tmp_path)
+    with pytest.raises(OmxError, match="already exists"):
+        bootstrap_profile(paths, profile_name="isaaclab", metrics=_good(), force=False)
+
+
+def test_bootstrap_force_overwrites(tmp_path):
+    paths, _ = _bootstrap(tmp_path)
+    m2 = _good(); m2["metrics"] = ["only_one"]
+    bootstrap_profile(paths, profile_name="isaaclab", metrics=m2, force=True)
+    loaded = yaml.safe_load(paths.profile_file("metrics.yaml").read_text())
+    assert loaded["metrics"] == ["only_one"]
+
+
+def test_bootstrap_unknown_reference_raises(tmp_path):
+    paths = OmxPaths(root=tmp_path)
+    with pytest.raises(OmxError):
+        bootstrap_profile(paths, profile_name="nonexistent", metrics=_good())
+
+
+def test_rules_and_launch_are_nonempty_templates(tmp_path):
+    paths, _ = _bootstrap(tmp_path)
+    assert "Analysis discipline" in paths.profile_file("rules.md").read_text()
+    launch = paths.profile_file("launch.sh").read_text()
+    assert launch.startswith("#!/usr/bin/env bash")
+    assert "never auto-fired" in launch.lower() or "never runs it" in launch.lower()
