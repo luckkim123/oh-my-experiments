@@ -12,7 +12,9 @@ Two-tier validation (design doc B1):
 """
 from __future__ import annotations
 
+import os
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -250,3 +252,77 @@ class OmxPaths:
                 raise OmxPathError(
                     f"{label} {v!r} not in profile {vocab_attr} {sorted(vocab)}")
         return v
+
+
+# =============================================================================
+# Module-level helpers (Task 5)
+# =============================================================================
+
+def resolve_session_id(explicit=None, env=None, autogen=None) -> str:
+    """B2 precedence: explicit flag -> env -> autogen(). Validates the result.
+
+    `autogen` is a zero-arg callable (the CLI supplies one building
+    '<YYYYMMDD-HHMMSS>-<pid>'); kept injectable so this module stays pure
+    (no datetime/getpid baked in -> deterministic tests). Raises OmxPathError
+    if nothing resolves or the resolved id is structurally invalid.
+    """
+    candidate = explicit or env
+    if not candidate:
+        if autogen is None:
+            raise OmxPathError("session_id unresolved: no explicit/env/autogen")
+        candidate = autogen()
+    return validate_session_id(candidate)
+
+
+@contextmanager
+def atomic_path(target):
+    """Yield a '.tmp' sibling; on clean exit os.replace -> target (atomic).
+
+    On exception the .tmp is removed and target is untouched, so partial
+    artifacts never pollute the clean tree (design 10.1). Parent dirs created.
+    """
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    try:
+        yield tmp
+    except BaseException:
+        if tmp.exists():
+            tmp.unlink()
+        raise
+    else:
+        os.replace(tmp, target)
+
+
+@contextmanager
+def atomic_dir(target):
+    """Like atomic_path but for a directory: build under '<name>.tmp/', then
+    os.replace the whole dir onto target on clean exit; discard on exception.
+
+    Linux note: os.replace onto a directory requires `target` to NOT exist or be
+    empty (a non-empty existing dir raises OSError Errno 39). OMX analysis ids
+    carry an HHMMSS timestamp so collisions are near-impossible; if a caller
+    genuinely needs to overwrite, it must shutil.rmtree(target) first — this
+    helper deliberately does NOT auto-delete an existing target (silently
+    destroying prior output is a worse failure than a loud Errno 39).
+    """
+    import shutil
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    tmp.mkdir(parents=True)
+    try:
+        yield tmp
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    else:
+        # os.replace is OUTSIDE the except above; guard it so a failed promotion
+        # (e.g. Errno 39 on a non-empty target) doesn't leak the .tmp dir.
+        try:
+            os.replace(tmp, target)
+        except BaseException:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise

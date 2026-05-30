@@ -349,3 +349,114 @@ def test_permanent_tree_rejects_traversal(tmp_path, evil):
         p.analysis_dir(out, evil, "20260530-143022-compare")  # bad run_id
     with pytest.raises(OmxPathError):
         p.proposal_md(out, "r1", evil + "-000000-x")  # bad proposal_id
+
+
+# =============================================================================
+# Task 5: resolve_session_id (B2 precedence) + atomic write helpers
+# =============================================================================
+from omx_core.omx_paths import resolve_session_id, atomic_path, atomic_dir
+
+
+def test_resolve_session_id_prefers_explicit():
+    assert resolve_session_id(explicit="abc-1", env=None, autogen=lambda: "GEN") == "abc-1"
+
+
+def test_resolve_session_id_falls_back_to_env():
+    assert resolve_session_id(explicit=None, env="env-sid", autogen=lambda: "GEN") == "env-sid"
+
+
+def test_resolve_session_id_autogens_last():
+    assert resolve_session_id(explicit=None, env=None,
+                              autogen=lambda: "20260530-143022-77") == "20260530-143022-77"
+
+
+def test_resolve_session_id_empty_explicit_falls_through():
+    # empty string is falsy -> should fall through to env, then autogen
+    assert resolve_session_id(explicit="", env="", autogen=lambda: "gen-1") == "gen-1"
+
+
+def test_resolve_session_id_validates_result():
+    with pytest.raises(OmxPathError):
+        resolve_session_id(explicit="has/slash", env=None, autogen=lambda: "x")
+
+
+def test_resolve_session_id_validates_autogen_output():
+    with pytest.raises(OmxPathError):
+        resolve_session_id(explicit=None, env=None, autogen=lambda: "bad/sid")
+
+
+def test_resolve_session_id_raises_when_nothing_resolves():
+    with pytest.raises(OmxPathError):
+        resolve_session_id(explicit=None, env=None, autogen=None)
+
+
+def test_atomic_path_writes_via_tmp_then_replaces(tmp_path):
+    target = tmp_path / "out" / "report.md"
+    with atomic_path(target) as tmp:
+        assert tmp != target
+        assert tmp.name.endswith(".tmp")
+        tmp.write_text("hello")
+        assert not target.exists()  # not yet committed
+    assert target.read_text() == "hello"  # committed on clean exit
+
+
+def test_atomic_path_discards_on_exception(tmp_path):
+    target = tmp_path / "out" / "report.md"
+    with pytest.raises(RuntimeError):
+        with atomic_path(target) as tmp:
+            tmp.write_text("partial")
+            raise RuntimeError("boom")
+    assert not target.exists()                       # partial never promoted
+    assert list((tmp_path / "out").glob("*.tmp")) == []  # no stray .tmp
+
+
+def test_atomic_dir_promotes_on_success(tmp_path):
+    target = tmp_path / "out" / "analysis_x"
+    with atomic_dir(target) as tmp:
+        (tmp / "report.md").write_text("r")
+        assert not target.exists()
+    assert (target / "report.md").read_text() == "r"
+
+
+def test_atomic_dir_discards_on_exception(tmp_path):
+    target = tmp_path / "out" / "analysis_x"
+    with pytest.raises(RuntimeError):
+        with atomic_dir(target) as tmp:
+            (tmp / "report.md").write_text("partial")
+            raise RuntimeError("boom")
+    assert not target.exists()
+
+
+def test_atomic_path_cleans_up_on_baseexception(tmp_path):
+    # BaseException (e.g. KeyboardInterrupt) must also clean up, not just Exception.
+    target = tmp_path / "out" / "f.md"
+    with pytest.raises(KeyboardInterrupt):
+        with atomic_path(target) as tmp:
+            tmp.write_text("partial")
+            raise KeyboardInterrupt
+    assert not target.exists()
+    assert list((tmp_path / "out").glob("*.tmp")) == []
+
+
+def test_atomic_dir_cleans_up_on_baseexception(tmp_path):
+    target = tmp_path / "out" / "d"
+    with pytest.raises(KeyboardInterrupt):
+        with atomic_dir(target) as tmp:
+            (tmp / "x").write_text("partial")
+            raise KeyboardInterrupt
+    assert not target.exists()
+    assert list((tmp_path / "out").glob("*.tmp")) == []
+
+
+def test_atomic_dir_failed_promotion_leaves_no_tmp(tmp_path):
+    # os.replace onto a non-empty existing target raises Errno 39; the .tmp dir
+    # must NOT leak (the os.replace in the else-branch is exception-guarded).
+    target = tmp_path / "out" / "d"
+    target.mkdir(parents=True)
+    (target / "old.md").write_text("old")  # pre-existing non-empty target
+    with pytest.raises(OSError):
+        with atomic_dir(target) as tmp:
+            (tmp / "new.md").write_text("new")
+    # original target untouched, no stray .tmp left behind
+    assert (target / "old.md").read_text() == "old"
+    assert list((tmp_path / "out").glob("*.tmp")) == []
