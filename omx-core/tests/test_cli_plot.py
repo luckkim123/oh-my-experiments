@@ -30,3 +30,38 @@ def test_cli_plot_unknown_series_loud_fails(fixtures_dir, tmp_path):
         "--series", "Nope/missing", "--metric", "attitude", "--view", "trajectory",
     ])
     assert rc == 2  # loud-fail via SystemExit -> rc 2
+
+
+def test_cli_plot_bad_metric_token_fails(fixtures_dir, tmp_path):
+    ev = fixtures_dir / "tb" / "events.out.tfevents.synthetic"
+    rc = main([
+        "plot", "--root", str(tmp_path), "--session-id", "20260530-101010-1",
+        "--path", str(ev), "--format", "tensorboard",
+        "--series", "Track/att/roll_err_deg",
+        "--metric", "Bad__Token", "--view", "trajectory",
+    ])
+    assert rc == 2
+
+
+def test_cli_plot_npz_1d_series(fixtures_dir, tmp_path, capsys):
+    npz = fixtures_dir / "data_none.npz"
+    rc = main([
+        "plot", "--root", str(tmp_path), "--session-id", "20260530-101010-1",
+        "--path", str(npz), "--format", "npz",
+        "--series", "target_roll_deg", "--metric", "attitude", "--view", "trajectory",
+    ])
+    assert rc == 0
+    import json
+    out = json.loads(capsys.readouterr().out)
+    from pathlib import Path
+    assert Path(out["plot"]).name == "attitude__trajectory.png"
+
+
+def test_cli_plot_npz_2d_series_gives_nd_hint(fixtures_dir, tmp_path, capsys):
+    npz = fixtures_dir / "data_none.npz"
+    rc = main([
+        "plot", "--root", str(tmp_path), "--session-id", "20260530-101010-1",
+        "--path", str(npz), "--format", "npz",
+        "--series", "error_roll", "--metric", "attitude", "--view", "trajectory",
+    ])
+    assert rc == 2

@@ -15,16 +15,13 @@ from omx_core.ingest.eval_summary import EvalSummaryAdapter
 from omx_core.ingest.csv_longform import LongFormCsvAdapter
 from omx_core.ingest.tensorboard import TensorboardAdapter
 from omx_core.ingest.wandb_offline import WandbAdapter
-from omx_core.omx_paths import resolve_session_id
 from omx_core.reduce.summarize import to_dataframe, add_cv
 from omx_core.reduce.series import downsample
 from omx_core.reduce.plot import line_plot
 from omx_core.evaluator import run_evaluator
 from omx_core.decision import decide_outcome, parse_keep_policy
-from omx_core.omx_paths import OmxError
-from omx_core.omx_paths import validate_token
+from omx_core.omx_paths import OmxError, OmxPaths, validate_token, resolve_session_id
 from omx_core.profile import bootstrap_profile, default_metrics
-from omx_core.omx_paths import OmxPaths
 
 def _finite_or_none(x):
     """Map non-finite floats (nan/inf) to None so json.dumps emits valid JSON null."""
@@ -62,9 +59,12 @@ def _ingest(path, fmt):
         from omx_core.reduce.series import load_npz
         from omx_core.ingest.base import IngestResult
         arrs = load_npz(path)
+        all_keys = set(arrs)
         # only 1-D numeric arrays are plottable series; keep those
         series = {k: v for k, v in arrs.items() if getattr(v, "ndim", 0) == 1}
-        return IngestResult(summary=[], series=series, meta={"source": str(path), "format": "npz"})
+        return IngestResult(summary=[], series=series,
+                            meta={"source": str(path), "format": "npz",
+                                  "skipped_nd": sorted(all_keys - set(series))})
     if fmt not in _ADAPTERS:
         raise SystemExit(f"unknown --format {fmt!r}; choose from {sorted(_ADAPTERS) + ['npz']}")
     return _ADAPTERS[fmt]().ingest(path)
@@ -134,8 +134,11 @@ def _cmd_plot(args) -> int:
     """
     res = _ingest(args.path, args.format)
     if args.series not in res.series:
+        skipped = res.meta.get("skipped_nd", [])
+        hint = (f" (NOTE: {args.series!r} is in the file but is N-D; only 1-D arrays are plottable)"
+                if args.series in skipped else "")
         raise SystemExit(
-            f"series {args.series!r} not in source; available: {sorted(res.series)[:20]}")
+            f"series {args.series!r} not in source{hint}; available: {sorted(res.series)[:20]}")
     try:
         metric = validate_token(args.metric, "metric")
         view = validate_token(args.view, "view")
