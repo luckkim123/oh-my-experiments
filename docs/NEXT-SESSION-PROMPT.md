@@ -1,84 +1,74 @@
-# OMX 다음 세션 시작 prompt — build-order #4 `exp-analyze` skill
+# OMX 다음 세션 시작 prompt — build-order #5 `exp-design` skill
 
 > 이 파일을 다음 세션에 그대로 붙여넣거나, "이 파일 읽고 시작해" 라고 지시하면 됨.
-> 작성: 2026-05-30 (build #3 exp-init merge 직후). HEAD = main `786afb2` (origin보다 15 커밋 앞섬, **미push** — push는 유저 게이트).
+> 작성: 2026-05-30 (build #4 exp-analyze merge + push 직후). HEAD = main `642140a`, origin/main과 동기화됨 (build #0-4 전부 push 완료).
 
 ---
 
 ## 붙여넣을 prompt (이 블록만 복사해도 됨)
 
 ```
-OMX build-order #4 (exp-analyze skill) 진행. ew opus.
+OMX build-order #5 (exp-design skill) 진행. ew opus.
 
 먼저 읽어라 (순서대로):
 1. docs/HANDOFF.md — 현재 상태 + 환경 함정
 2. docs/design/2026-05-30-omx-experiment-harness-design.md
-   §4 (skills 표, exp-analyze 행) + §5 (analysis hybrid router — 이게 #4의 핵심 IP) +
-   §8 #4 + §10.1 (B3 plot promotion 규칙 + 영구 output 트리 레이아웃)
-3. skills/exp-init/SKILL.md — #3가 만든 첫 스킬. #4는 이게 만든 profile을 READS.
-4. 메모리 project-omx-harness-2026-05-30 (이미 컨텍스트에 로드됨)
+   §4 (skills 표, exp-design 행) + §5/§6 (trace 3-lane diagnosis →
+   discriminating-probe = 이게 #5의 핵심 IP) + §8 #5 + §10 (proposals 트리)
+3. skills/exp-analyze/SKILL.md — #4가 만든 분석 스킬. #5는 그 report.md를 입력으로 받음.
+4. 메모리 omx-build4-exp-analyze-2026-05-30 (이미 컨텍스트에 로드됨)
 
-작업: design §4 + §5 + §10.1 그대로 exp-analyze 스킬 + 받쳐주는 코어를 구현.
-- exp-analyze = N개 run의 런타임 분석. profile(metrics.yaml)을 읽어 vocabulary tier(B1)를 활성화.
-  hybrid router(§5): summary-stat-first → shape 질문이면 PNG-vision → 정확수치는 code-exec.
-- Claude-required 스킬 (PNG-vision, H3) — ingest/reduce는 Claude-free 코어가 이미 함.
-- 산출물: report.md (영구 트리 <output_root>/<run_id>/analysis/<analysis_id>/, B3) +
-  promoted PNG + evidence-tagged findings([FINDING]/[EVIDENCE]/[CONFIDENCE]).
-- plot promotion(B3): 후보 PNG는 scratch/<sid>/plots/에 먼저, report.md가 참조한 것만
-  영구 analysis/<aid>/plots/로 os.replace 승격. 미참조는 scratch에 남아 omx clean이 쓸어감.
-- WandbAdapter / TensorboardAdapter (ingest/stubs.py, 현재 NotImplementedError) 실구현 —
-  실데이터로 검증. eval_dr summary.json은 이미 EvalSummaryAdapter가 처리.
+작업: design §4 + trace 3-lane + §10 그대로 exp-design 스킬 + 받쳐주는 코어를 구현.
+- exp-design = exp-analyze의 evidence-tagged report를 입력으로, 3-lane 차별 진단
+  (code-path / config-DR-hyperparam / measurement-artifact)을 수행 → 가설을 가르는
+  discriminating probe를 산출. 그 probe가 곧 "다음 실험 config 제안"임.
+- 산출물: `<output_root>/<run_id>/proposals/<proposal_id>.md` (pending approval).
+  exp-init의 hard gate와 동일하게, 제안은 절대 자동 실행 안 됨 (훈련 launch 금지).
+- Claude-required 스킬 (진단 판단). 코어(Claude-free)는 proposal 트리 경로 getter +
+  atomic write IO만 담당 (omx_paths에 proposal_md/proposals_dir getter가 이미 있는지
+  먼저 확인 — 없으면 #5에서 추가, 있으면 재사용).
 
 워크플로우: superpowers writing-plans → subagent-driven-development.
-- #3에서 검증된 패턴 그대로: task별 fresh implementer(sonnet) → spec 리뷰(haiku) → quality 리뷰(sonnet)
-  → 통과 시 다음 → 전체 끝나면 opus 최종 리뷰 → finishing-a-development-branch(merge-local, push 안 함).
-- plan 쓰기 전 ground-truth recon 필수: (a) §5 hybrid router 4분기 표, (b) reduce/plot.py·series.py의
-  실제 시그니처(이미 있음 — PNG 생성/downsample), (c) omx_paths의 analysis_dir/report_md/manifest_json/
-  analysis_plot/analysis_table + scratch_plots getter(이미 있음), (d) Profile vocabulary tier가
-  metric/view/agg를 어떻게 검증하는지(omx_paths._check_token).
-- 새 CLI verb가 필요한지 plan에서 결정: `omx analyze`는 Claude-required라 순수-파이썬 verb가 아닐 수 있음.
-  대신 스킬이 ingest/reduce/plot 코어를 조립 호출 + PNG를 vision으로 되읽는 구조(§4 "thin Claude wrapper").
-  plot 생성/promotion 같은 파일 IO·검증은 코어(omx_paths atomic_dir/atomic_path)에 둘 것 — D8.
+- #3/#4에서 검증된 패턴 그대로: task별 fresh implementer(sonnet) → spec 리뷰(haiku)
+  → quality 리뷰(sonnet) → 통과 시 다음 → 전체 끝나면 opus 최종 리뷰 →
+  finishing-a-development-branch(merge-local → push는 유저 명시 승인 시).
+- plan 쓰기 전 ground-truth recon 필수:
+  (a) design의 trace 3-lane 정의 + discriminating-probe 산출 규칙,
+  (b) omx_paths에 proposal_* getter 존재 여부 (있으면 시그니처, 없으면 추가 설계),
+  (c) exp-analyze report.md/manifest.json 포맷 (exp-design의 입력 계약),
+  (d) skills/exp-analyze/SKILL.md의 evidence-tag 포맷 ([FINDING]/[EVIDENCE]/[CONFIDENCE]) —
+      exp-design은 이 태그를 읽어 lane을 가름.
 
 제약 (반드시 지킴):
-- 훈련/eval 자동발사 금지 — exp-analyze는 이미 존재하는 run 결과를 분석만. 새 훈련 launch 절대 없음.
-- omx-core의 Claude-free 부분(ingest/reduce/eval/paths)은 Claude-free 유지. 스킬(Claude)과 경계 안 흐림.
-  PNG-vision·evidence-tag 판단은 스킬(Claude) 몫, exact arithmetic·plot 파일생성은 코어(파이썬) 몫.
+- 훈련/eval 자동발사 금지 — exp-design은 proposal md만 씀 (pending approval). 새 훈련 launch 절대 없음.
+- omx-core의 Claude-free 부분(paths/ingest/reduce/eval)은 Claude-free 유지. 스킬(Claude)과 경계 안 흐림.
+  3-lane 진단 판단은 스킬(Claude) 몫, proposal 트리 파일생성/검증은 코어(파이썬) 몫.
 - 절대경로/private repo명 박지 말 것 (public repo). placeholder.
 - 커밋은 중요 변화마다 자동, 메시지 끝 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>.
-- push는 유저 명시 요청 시만. 작업 끝나면 plugin.json skills:[]에 exp-analyze 등록(#7 점진).
-- AskUserQuestion이 이 환경에서 깨짐(guard 훅 stale path, claudebase-rename 메모리 참조) →
-  결정은 prose 권장안+진행. fix 0eee90d 미배포 상태.
+- push는 유저 명시 요청 시만. 작업 끝나면 plugin.json skills:[]에 exp-design 등록.
+- 응답은 한국어. 코드/주석/마크다운은 영어. 이모지 금지. AI-attribution 텍스트 금지(git 트레일러는 예외).
 ```
 
 ---
 
 ## 다음 세션이 알아야 할 현재 상태 (요약)
 
-### 완료 (엔진 + 배포 + 첫 스킬)
+### 완료 (엔진 + 배포 + 스킬 2개)
 - **#0/#1/#2** = 엔진 (paths/ingest/reduce/cli/evaluator-runner). main 병합.
-- **#3 exp-init** = 첫 스킬. main 병합 (merge 커밋 `786afb2`). **252 passed / 1 skipped.**
-  - `omx_core/profile.py`(validate_metrics_schema + bootstrap_profile + default_metrics) +
-    `omx init` CLI verb + `skills/exp-init/SKILL.md`(3-dim 게이트, prose 옵션, pending-approval hard gate) +
-    plugin.json 등록. 부수: `main()`이 loud-fail 메시지를 stderr로 surface(이전엔 rc=2에 손실).
-- **배포** (이전 세션): omx repo PUBLIC, 자체 marketplace, heroacademia 카드(cards/omx.json, exp-analyze 이미 triggers.skills에 등록됨), claudebase 등록. 단 #3·#4 산출물은 **미push**.
+- **#3 exp-init** = 첫 스킬 (인터뷰 → profile bootstrap). main 병합.
+- **#4 exp-analyze** = 둘째 스킬 (hybrid PNG-vision 분석 + WandB/TB 어댑터 실구현). **main 병합 + push 완료** (merge `43963f9`). **278 passed / 1 skipped.**
+  - 실 ingest 어댑터: `ingest/tensorboard.py`(EventAccumulator) + `ingest/wandb_offline.py`(offline `.wandb` datastore parse). 둘 다 `_step/<key>` x-axis companion emit (한 계약). stub 은퇴.
+  - `profile.load_profile`(B1 vocabulary tier), `reduce/promote.py`(B3 plot promotion), `omx plot`/`omx promote-plots` verbs, `analyze` optional-deps extra + import guard, `skills/exp-analyze/SKILL.md`(§5 hybrid router).
+- **배포**: omx repo PUBLIC, self-hosted marketplace(`.claude-plugin/marketplace.json`), claudebase 등록(`settings.json` enabledPlugins + extraKnownMarketplaces, 버전 핀 없음 = 최신 추적). plugin.json = exp-init + exp-analyze 2개 skill.
 
 ### 미완 (= 다음 세션들)
-- **스킬 3개 미구현**: exp-analyze(#4, 다음) → exp-design(#5) → exp-loop(#6).
-- **ingest stub 2개**: WandbAdapter / TensorboardAdapter (`ingest/stubs.py`, NotImplementedError) → **#4가 실구현**.
-- **plugin.json skills**: 현재 `["./skills/exp-init/"]` 1개. #4 끝나면 exp-analyze 추가.
-- **미push**: main이 origin보다 15 커밋 앞섬. 유저가 push 지시하면 그때.
-
-### 실데이터 ground-truth (#1에서 검증, #4에서 재사용)
-- eval_dr `summary.json` = `{dr_level: {axis: {field: float}}}`. dr_level∈{none,soft,medium,hard},
-  axis∈{roll,pitch,vx,vy,vz,yaw,att_norm(4필드),survival_pct(스칼라)}, full axis=15필드.
-- `data_*.npz` = trajectory (7750,4)=(timesteps,n_envs) + target (7750,) + time_to_failure (4,).
-- pyarrow 미설치 → cache는 `.npz`.
+- **스킬 2개 미구현**: exp-design(#5, 다음) → exp-loop(#6).
+- **plugin.json skills**: 현재 2개. #5 끝나면 exp-design 추가.
+- **legitimate deferral** (갭 아님): `tables/` 출력 트리(`analysis_table` getter는 있으나 미사용, future hook), NaN 가드(#2 Minor → #6에서 처리).
 
 ### 남은 build 순서 (design §8 DAG)
 ```
-#4 exp-analyze  ← 다음 (PNG-vision hybrid router, WandB/TB 어댑터 실구현)   [이 세션]
-#5 exp-design   (trace 3-lane 진단 → discriminating probe = 다음 실험 제안)
+#5 exp-design   ← 다음 (trace 3-lane 진단 → discriminating probe = 다음 실험 제안)  [이 세션]
 #6 exp-loop     (자율 루프 + 퇴근토글, 훈련 자동발사 금지 = 큐잉; #2 Minor NaN 가드도 여기)
 #7 plugin.json skills 채우기 + 완성
 ```
@@ -87,9 +77,6 @@ OMX build-order #4 (exp-analyze skill) 진행. ew opus.
 - `python` = Isaac 래퍼 → 반드시 `python3` (3.12.3, pytest 9.x).
 - `pip install -e .` → `--break-system-packages` 필요.
 - dist dir = `omx-core/`(하이픈), import pkg = `omx_core/`(언더스코어). cache = `.npz`.
-- cwd 오염: `cd omx-core` 후 상대경로 재진입하면 깨짐 → 절대경로 또는 repo-root에서.
-- Pyright `reportMissingImports`(omx_core.*) + `from __future__ import annotations` unreachable +
-  unused pytest/capsys = 전부 editable/fixture false positive, 무시.
-- 백그라운드 subagent에 SendMessage로 review-fix 시킬 때: 완료 알림이 1턴 늦을 수 있음.
-  fallback wakeup을 걸면 stale 발화로 뒤늦게 깨어날 수 있으니, 깨어나면 먼저 git log로 실제 상태 확인.
-```
+- Pyright `reportMissingImports`(omx_core.*) + protobuf dynamic-attr = 전부 editable/false positive, 무시.
+- 백그라운드 subagent에 SendMessage로 review-fix 시 완료 알림이 1턴 늦을 수 있음 → 깨어나면 git log로 실제 상태 먼저 확인.
+- 리뷰어 프롬프트엔 추측 SHA 금지, implementer 완료 후 git log로 실제 SHA 확인해 전달.
