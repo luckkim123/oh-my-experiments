@@ -179,17 +179,31 @@ Lean toward `pattern`/`decision`/`reference` for facts that recur across runs; r
 ## Record engine-gap specs — the analysis ENGINE specializes too (not just knowledge)
 
 The wiki captures more than findings ABOUT runs; it also captures how this workspace's
-analysis ENGINE should grow. The engine is a reference adapter the profile points at
-(`.omx/profile/` — e.g. a TB/wandb diagnostic script). When, during analysis, you hit a
-limit of that engine — a metric pattern it does not diagnose, a plot it cannot render, a
-threshold it hardcodes wrong for this workspace, or the user says "the analyzer should
-also check X" — **record that as an engine-gap spec in the wiki** (`category=decision`),
+analysis ENGINE should grow. The "engine" is ALL the ANALYSIS code this workspace owns —
+code that READS results without changing them. Two homes:
+- the reference adapter the profile points at (`.omx/profile/` — e.g. a TB/wandb diagnostic
+  script), and
+- the workspace's own pure post-processing source (e.g. a `analysis/` package that reads
+  saved `*.npz`/`summary.json` and computes heavy-tail / divergence / comparison stats).
+Both are fair game to specialize. The dividing line is NOT where the file lives — it is
+whether the code READS experiment results or PRODUCES them. Analysis/post-processing code
+(reads results) may be grown; experiment-determining source (model / reward / training /
+env — code whose change would alter the results themselves) is OFF LIMITS here (that is
+what the next experiment's probe proposes, never an analysis-time edit).
+
+When, during analysis, you hit a limit of that engine — a metric pattern it does not
+diagnose, a plot it cannot render, a threshold it hardcodes wrong for this workspace, a
+post-processing stat the `analysis/` package is missing, or the user says "the analyzer
+should also check X" — **record that as an engine-gap spec in the wiki** (`category=decision`),
 so the next session can act on it instead of re-discovering the same gap.
 
 An engine-gap spec is a CODE-CHANGE specification, not a finding. Write it concretely:
 - `[ENGINE-GAP]` what the engine cannot currently do (one line).
-- `[WHERE]` the adapter file + section to change (e.g. `.omx/profile/analyze_training.py`
-  DIAGNOSIS block), as best you can point.
+- `[WHERE]` the analysis file + section to change — either the profile adapter (e.g.
+  `.omx/profile/analyze_training.py` DIAGNOSIS block) or the workspace's own post-processing
+  source (e.g. `analysis/<module>.py` <function>), and which of the two it is — as best you
+  can point. If the capability is genuinely new (no file does it yet), say "new module" and
+  name where it should live.
 - `[SPEC]` the rule/behaviour to add, precise enough to implement (e.g. "flag mode-switch
   rate > 0.2 as CYCLING").
 - `[EVIDENCE]` what in THIS analysis exposed the gap (the run + metric that needed it).

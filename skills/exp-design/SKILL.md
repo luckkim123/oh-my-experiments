@@ -70,26 +70,39 @@ discriminating probe. An empty result just means this is new ground.
 ## Act on engine-gap specs (close the engine self-specialization loop)
 
 exp-analyze records ENGINE-GAP SPECS — code-change specifications for the analysis
-engine (the reference adapter the profile points at, e.g. `.omx/profile/`). They are the
-write half of "the engine specializes the more the workspace is used"; this is the read
-half. Before designing the probe, surface any open specs:
+engine. The engine is ALL the ANALYSIS code this workspace owns (code that READS results
+without changing them): both the reference adapter the profile points at (`.omx/profile/`)
+AND the workspace's own pure post-processing source (e.g. an `analysis/` package that reads
+saved `*.npz`/`summary.json`). They are the write half of "the engine specializes the more
+the workspace is used"; this is the read half. Before designing the probe, surface any open
+specs:
 
 `omx wiki query --root <root> "engine-gap" --category decision`
 
 For each hit with `[STATUS] proposed` that is RELEVANT to the symptom you are diagnosing
 (it would let the engine actually diagnose this case): implement it as a SMALL, surgical
-change to the adapter at the `[WHERE]` it names, following its `[SPEC]`. Then flip that
-wiki page to `[STATUS] implemented` (append a dated note via `omx wiki add` — append-only
-merge). This makes the engine sharper for THIS workspace each cycle, exactly as intended.
+change at the `[WHERE]` it names (the profile adapter, or the workspace's post-processing
+source — whichever the spec points at), following its `[SPEC]`. Then flip that wiki page to
+`[STATUS] implemented` (append a dated note via `omx wiki add` — append-only merge). This
+makes the engine sharper for THIS workspace each cycle, exactly as intended.
 
-Boundaries (do not overreach):
-- Only the ADAPTER under `.omx/profile/` is in scope — NEVER edit omx core or skills, and
-  NEVER touch the project's training/model/reward source (that is what the probe proposes,
-  separately).
+Boundaries (do not overreach) — the line is READS-results vs PRODUCES-results, not where the
+file lives:
+- IN scope: ANALYSIS code that reads results without changing them — the `.omx/profile/`
+  adapter AND the workspace's pure post-processing source (metrics, plots, comparison,
+  heavy-tail/divergence stats). A spec may also create a NEW analysis module if `[WHERE]`
+  says so.
+- OFF LIMITS: omx core and skills (never edit the harness itself); and any
+  experiment-determining source — model / reward / training / env code, anything whose
+  change would alter the results themselves. That is what the probe proposes, separately;
+  it is NEVER an analysis-time edit. When unsure whether a file "reads" or "produces"
+  results, treat it as produces (off limits) and leave the spec `proposed`.
 - Implement only specs whose `[SPEC]` is concrete enough to act on safely; leave vague or
   irrelevant ones `proposed`.
-- Still NEVER launch training or eval. This step edits an analysis helper script, nothing
-  that runs the experiment.
+- Still NEVER launch training or eval. This step edits analysis code, nothing that runs the
+  experiment. (If the analysis file you touch ALSO contains run/eval-launch code — e.g. an
+  Isaac-Sim eval runner — change only the pure post-processing parts, never the launch path;
+  if they cannot be separated cleanly, leave the spec `proposed` and flag it for the user.)
 - If no engine-gap specs are open, skip this step — it is opportunistic, not required.
 
 ## Step 2 — 3-lane differential diagnosis (the core IP, design §1 / OMC trace pattern)
