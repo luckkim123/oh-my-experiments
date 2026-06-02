@@ -135,7 +135,7 @@ dict and shell the Claude-free core verb, which validates and atomic-writes it:
 
 3. **Shell `omx init`** with the assembled dict as JSON:
    ```bash
-   omx init --root "<anchor>" --profile-name "<profile-name, default isaaclab>" \
+   omx init --root "<anchor>" --profile-name "<profile-name — the shipped reference profile to seed from; defaults to isaaclab, the one reference omx currently ships>" \
        --metrics-json '<the JSON dict from step 1>'
    ```
    - rc 0 → it prints `{"written": [...], "pending_approval": true, ...}`.
