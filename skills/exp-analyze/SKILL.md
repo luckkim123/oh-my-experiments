@@ -176,6 +176,31 @@ something specific by each:
 Lean toward `pattern`/`decision`/`reference` for facts that recur across runs; reserve
 `debugging` for reusable how-to. Do not over-record working preferences as findings.
 
+## Record engine-gap specs — the analysis ENGINE specializes too (not just knowledge)
+
+The wiki captures more than findings ABOUT runs; it also captures how this workspace's
+analysis ENGINE should grow. The engine is a reference adapter the profile points at
+(`.omx/profile/` — e.g. a TB/wandb diagnostic script). When, during analysis, you hit a
+limit of that engine — a metric pattern it does not diagnose, a plot it cannot render, a
+threshold it hardcodes wrong for this workspace, or the user says "the analyzer should
+also check X" — **record that as an engine-gap spec in the wiki** (`category=decision`),
+so the next session can act on it instead of re-discovering the same gap.
+
+An engine-gap spec is a CODE-CHANGE specification, not a finding. Write it concretely:
+- `[ENGINE-GAP]` what the engine cannot currently do (one line).
+- `[WHERE]` the adapter file + section to change (e.g. `.omx/profile/analyze_training.py`
+  DIAGNOSIS block), as best you can point.
+- `[SPEC]` the rule/behaviour to add, precise enough to implement (e.g. "flag mode-switch
+  rate > 0.2 as CYCLING").
+- `[EVIDENCE]` what in THIS analysis exposed the gap (the run + metric that needed it).
+- `[STATUS]` `proposed` (until a later session implements it).
+
+Title these pages so they are findable (e.g. "engine-gap: <capability>"), tag `engine-gap`.
+This is how "the engine specializes the more the wiki is used" actually closes: analysis
+writes the spec → a later session reads it (see exp-design / the implement step) → the
+adapter is updated → the spec page is flipped to `[STATUS] implemented`. Do NOT edit the
+adapter yourself during analysis (exp-analyze never mutates code) — only record the spec.
+
 ## When done
 
 Tell the user where the report is (`<output_root>/<run_id>/analysis/<analysis_id>/report.md`),
