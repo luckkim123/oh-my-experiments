@@ -56,6 +56,13 @@ Before the diagnosis, check whether the workspace already diagnosed this symptom
 `omx wiki query --root <root> "<the symptom you are diagnosing>" --category decision`
 `omx wiki query --root <root> "<the symptom you are diagnosing>" --category pattern`
 
+These two categories are queried for a reason: `decision` holds why a cause was
+adopted/discarded with the data that decided it (= a past confirmed cause), and
+`pattern` holds recurring metric behaviours (= the shape this symptom tends to take).
+`debugging` (a reusable diagnostic procedure) is also worth a query when the symptom is
+unfamiliar. exp-analyze writes these via its auto-capture loop, so the more the
+workspace is analyzed, the more this query returns.
+
 Treat hits as PRIOR EVIDENCE feeding the diagnosis (a past confirmed cause is strong
 evidence for that lane). If a prior probe was already tried, design a DIFFERENT
 discriminating probe. An empty result just means this is new ground.

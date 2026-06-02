@@ -1,7 +1,7 @@
 ---
 name: exp-analyze
 description: Analyze N existing experiment/training runs into an evidence-tagged report. Use when comparing runs, reading eval/training curves, or diagnosing why a run regressed — the hybrid router decides per question whether to use exact code-exec stats, a vision-read PNG curve, or both. Reads the OMX profile (metrics.yaml) for the metric vocabulary. Writes report.md + promoted plots into the permanent analysis tree. Never launches training or eval. Triggers on "analyze these runs", "compare run A and B", "why did this regress", "런 분석", "eval plot 보여줘".
-argument-hint: "[--root <dir>] <run ids or result paths to analyze>"
+argument-hint: "[--root <dir>] [--no-wiki] <run ids or result paths to analyze>"
 ---
 
 # exp-analyze — hybrid PNG-vision + code-exec run analysis
@@ -114,10 +114,16 @@ A finding with a numeric claim and `[CONFIDENCE: HIGH]` MUST cite a code-exec so
 - Candidate plots that the report doesn't reference are LEFT in scratch (omx clean sweeps them) — do not delete them yourself.
 - Respond to the user in Korean (repo rule); keep report.md/code/markdown in English.
 
-## Record reusable findings into the wiki (after the report is written)
+## Capture reusable findings into the wiki (auto-capture — the write half of the loop)
 
 The report.md is this analysis's full deliverable. The wiki holds the SUBSET worth
-reusing across future runs. To not miss candidates, let the core extract them:
+reusing across future runs. exp-analyze already QUERIES the wiki before analyzing
+(see "Ground in prior workspace knowledge" above); this step closes the WRITE half
+so the harness specializes to THIS workspace the more it is used — no explicit
+"learn" invocation needed. **Do this automatically at the end of every analysis**
+(light channel, no approval needed) unless the user passed `--no-wiki`.
+
+To not miss candidates, let the core extract them first:
 
 `omx wiki add --root <root> --from-report "<output_root>/<run_id>/analysis/<analysis_id>/report.md"`
 
@@ -127,8 +133,48 @@ title/category/tags - the core does not):
 
 `omx wiki add --root <root> --title "<short reusable title>" --category <pattern|debugging|decision|reference> --confidence <high|medium|low> --tags "<axis>,<symptom>" --sources "<analysis_id>" --content "<the finding, with its evidence>"`
 
-Record findings sparingly - a wiki full of every run's noise stops being useful.
-Skip this entirely if nothing in the report is reusable beyond this run.
+Auto-capture discipline (append-only, non-destructive, frictionless):
+- **Automatic, not gated.** Append at analysis end without asking; `omx wiki add`
+  merges (append-only, never overwrites — same slug unions tags/sources, keeps the
+  higher confidence). Honor `--no-wiki` to skip entirely.
+- **Dedupe before writing.** If the same finding already lives in a page, the merge
+  appends a dated update rather than a duplicate — that is fine; do not hand-create a
+  second page for the same topic.
+- **Nothing to record is a valid outcome.** An analysis that surfaced only
+  run-specific noise writes ZERO pages. Skip silently — a wiki full of every run's
+  noise stops being useful.
+
+### Write the CONCLUSION *and* its evidence — never a bare label (re-read-cost rule)
+
+A wiki note must carry the load-bearing evidence that backs its claim, not just the
+label. A label-only note forces the next session to re-open the source to find out
+*why* — that re-read cost is the classic learning failure. Co-locate, in the same note:
+- the conclusion (one line),
+- the supporting evidence — concrete numbers WITH their code-exec source (the command
+  or `file:field` that produced them), and an internal navigation pointer
+  (`analysis_id` / report section to re-visit), NOT a bare metric name.
+
+"roll regresses under hard DR" is a label. "roll ss_error 0.31→0.76 from soft→hard DR
+(summary.json hard/roll/ss_error; analysis `<analysis_id>` §heavy-tail) — CV 1.4 so a
+few envs dominate" is reusable knowledge. This mirrors the skill's own hard constraint
+(a numeric claim must trace to a code-exec source, never a PNG) — carry that trace INTO
+the wiki note. This is a *recommendation*, not a gate: the light channel's value is being
+cheap and frictionless, so missing evidence does not block the write — it just makes the
+note weaker.
+
+### Which category — what each holds in an experiment workspace
+
+The 8 categories are domain-neutral; for run analysis, lean on these four and mean
+something specific by each:
+- `pattern` — a recurring metric BEHAVIOUR (e.g. "entropy collapses when noise_std
+  floors"). The *shape* a run takes.
+- `debugging` — a diagnostic PROCEDURE that worked ("to tell heavy-tail from
+  sample-mean divergence, run per-env CV then axis rho").
+- `decision` — why something was adopted or discarded, with the data that decided it.
+- `reference` — a stable threshold / formula / fact (e.g. an axis acceptance bound).
+
+Lean toward `pattern`/`decision`/`reference` for facts that recur across runs; reserve
+`debugging` for reusable how-to. Do not over-record working preferences as findings.
 
 ## When done
 
