@@ -69,7 +69,7 @@ A finding with a numeric claim and `[CONFIDENCE: HIGH]` MUST cite a code-exec so
 
 ## Building the report (permanent tree, via the core — never hand-write paths)
 
-1. Choose an `analysis_id` = `<YYYYMMDD-HHMMSS>-<verb>` (verb = lowercase, e.g. `compare`, `diagnose`). Get the timestamp from `date +%Y%m%d-%H%M%S` via Bash.
+1. Choose an `analysis_id` = `<verb>-<YYYYMMDD-HHMMSS>` (verb = lowercase, e.g. `compare`, `diagnose`; verb FIRST so output names read label-before-date consistently). Get the timestamp from `date +%Y%m%d-%H%M%S` via Bash and prefix the verb: e.g. `diagnose-$(date +%Y%m%d-%H%M%S)`.
 2. Resolve `output_root` from the profile's `metrics.yaml`.
 3. Draft `report.md` referencing ONLY the plots you actually used (by bare filename, e.g. `![](plots/ss_error__trajectory.png)`).
 4. Promote the referenced plots: `omx promote-plots --root <root> --session-id <sid> --output-root <output_root> --run-id <run_id> --analysis-id <analysis_id> --referenced <name> [--referenced <name> ...]`. This moves them from scratch into `analysis/<analysis_id>/plots/`. If it loud-fails on a missing plot, you referenced a plot you never rendered — fix the report or render it. A pure-numbers analysis may reference ZERO plots — that is valid; skip this step if so (atomic_path in the next step will create the analysis dir).
@@ -84,7 +84,18 @@ A finding with a numeric claim and `[CONFIDENCE: HIGH]` MUST cite a code-exec so
    print(p)
    PY
    ```
-6. Write `manifest.json` next to it, the same way (path from `manifest_json(...)`, write through `atomic_path`):
+6. Write the Korean mirror `report.ko.md` the same way — author the SAME analysis (same findings, same evidence tags, same numbers — a faithful translation, not a re-analysis) as Korean prose, path from `report_ko_md(...)`, written through `atomic_path`. `report.md` (English) stays canonical: wiki auto-capture and `omx report-parse` read `report.md`, NEVER `report.ko.md`. The Korean file is the human-facing mirror only; both share the same `plots/` and `manifest.json`.
+
+   ```bash
+   python3 - <<'PY'
+   from omx_core.omx_paths import OmxPaths, atomic_path
+   p = OmxPaths(root="<root>").report_ko_md("<output_root>", "<run_id>", "<analysis_id>")
+   with atomic_path(p) as tmp:
+       tmp.write_text(r"""<the full report.ko.md text — Korean translation of report.md>""")
+   print(p)
+   PY
+   ```
+7. Write `manifest.json` next to it, the same way (path from `manifest_json(...)`, write through `atomic_path`):
 
    ```bash
    python3 - <<'PY'
