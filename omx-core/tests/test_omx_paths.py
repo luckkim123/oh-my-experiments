@@ -21,6 +21,16 @@ def test_analysis_id_accepts_timestamped(good):
     validate_analysis_id(good)  # must not raise
 
 
+@pytest.mark.parametrize("good", ["compare-20260530-143022", "diagnose-20260605-190606", "next-20260101-000000"])
+def test_analysis_id_accepts_verb_first(good):
+    validate_analysis_id(good)  # new label-before-date shape must not raise
+
+
+@pytest.mark.parametrize("legacy", ["20260530-143022-compare", "20260101-000000-next"])
+def test_analysis_id_still_accepts_legacy_date_first(legacy):
+    validate_analysis_id(legacy)  # dual-accept: old on-disk dirs keep validating
+
+
 @pytest.mark.parametrize("bad", [
     "2026-05-30-compare",        # wrong timestamp shape
     "20260530-143022",           # missing verb
