@@ -535,6 +535,7 @@ def test_every_public_path_getter_is_exercised(tmp_path):
         "pending_launch_json": lambda: p.pending_launch_json(rid),
         "analysis_dir": lambda: p.analysis_dir(out, rid, aid),
         "report_md": lambda: p.report_md(out, rid, aid),
+        "report_ko_md": lambda: p.report_ko_md(out, rid, aid),
         "manifest_json": lambda: p.manifest_json(out, rid, aid),
         "analysis_plot": lambda: p.analysis_plot(out, rid, aid, metric="m", view="v"),
         "analysis_table": lambda: p.analysis_table(out, rid, aid, metric="m", agg="a"),
