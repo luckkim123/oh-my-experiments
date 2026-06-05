@@ -21,6 +21,16 @@ def test_analysis_id_accepts_timestamped(good):
     validate_analysis_id(good)  # must not raise
 
 
+@pytest.mark.parametrize("good", ["compare-20260530-143022", "diagnose-20260605-190606", "next-20260101-000000"])
+def test_analysis_id_accepts_verb_first(good):
+    validate_analysis_id(good)  # new label-before-date shape must not raise
+
+
+@pytest.mark.parametrize("legacy", ["20260530-143022-compare", "20260101-000000-next"])
+def test_analysis_id_still_accepts_legacy_date_first(legacy):
+    validate_analysis_id(legacy)  # dual-accept: old on-disk dirs keep validating
+
+
 @pytest.mark.parametrize("bad", [
     "2026-05-30-compare",        # wrong timestamp shape
     "20260530-143022",           # missing verb
@@ -272,7 +282,16 @@ def test_analysis_tree(tmp_path):
     a = p.analysis_dir(out, "r13_teacher", "20260530-143022-compare")
     assert a == out / "r13_teacher" / "analysis" / "20260530-143022-compare"
     assert p.report_md(out, "r13_teacher", "20260530-143022-compare") == a / "report.md"
+    assert p.report_ko_md(out, "r13_teacher", "20260530-143022-compare") == a / "report.ko.md"
     assert p.manifest_json(out, "r13_teacher", "20260530-143022-compare") == a / "manifest.json"
+
+
+def test_report_ko_md_verb_first(tmp_path):
+    p = _paths(tmp_path)
+    out = tmp_path / "experiments"
+    a = p.analysis_dir(out, "r13_teacher", "diagnose-20260605-190606")
+    assert p.report_ko_md(out, "r13_teacher", "diagnose-20260605-190606") == a / "report.ko.md"
+    assert p.report_ko_md(out, "r13_teacher", "diagnose-20260605-190606").name == "report.ko.md"
 
 
 def test_analysis_plot_uses_metric_view(tmp_path):
@@ -516,6 +535,7 @@ def test_every_public_path_getter_is_exercised(tmp_path):
         "pending_launch_json": lambda: p.pending_launch_json(rid),
         "analysis_dir": lambda: p.analysis_dir(out, rid, aid),
         "report_md": lambda: p.report_md(out, rid, aid),
+        "report_ko_md": lambda: p.report_ko_md(out, rid, aid),
         "manifest_json": lambda: p.manifest_json(out, rid, aid),
         "analysis_plot": lambda: p.analysis_plot(out, rid, aid, metric="m", view="v"),
         "analysis_table": lambda: p.analysis_table(out, rid, aid, metric="m", agg="a"),

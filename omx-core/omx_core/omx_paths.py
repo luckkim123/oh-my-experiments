@@ -36,8 +36,13 @@ class OmxPathError(OmxError, ValueError):
 # while $ also matches just before a trailing newline. .fullmatch already guards
 # against that, but \A...\Z makes the no-newline intent explicit and robust even
 # if a future getter switches to .match/.search.
-_TS = r"\d{8}-\d{6}"  # YYYYMMDD-HHMMSS — numeric sort == chrono sort
-_ANALYSIS_ID = re.compile(rf"\A{_TS}-[a-z][a-z0-9]*\Z")
+_TS = r"\d{8}-\d{6}"  # YYYYMMDD-HHMMSS — the timestamp component
+# Accept BOTH label-before-date (new default: diagnose-20260605-190606) and the
+# legacy date-before-verb shape (existing on-disk dirs: 20260605-190606-diagnose).
+# Dual-accept so analysis/proposal dirs written before the 2026-06-05 format flip
+# keep validating. No omx code sorts analysis_id chronologically (verified grep), so
+# verb-first leading does not break any ordering.
+_ANALYSIS_ID = re.compile(rf"\A(?:[a-z][a-z0-9]*-{_TS}|{_TS}-[a-z][a-z0-9]*)\Z")
 _SESSION_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 _RUN_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _TOKEN = re.compile(r"\A[a-z0-9][a-z0-9_]*\Z")  # single semantic token; no '__'
@@ -54,7 +59,7 @@ def validate_analysis_id(value) -> str:
     v = _require_str(value, "analysis_id")
     if not _ANALYSIS_ID.fullmatch(v):
         raise OmxPathError(
-            f"analysis_id {v!r} must match YYYYMMDD-HHMMSS-<verb> (lowercase verb)")
+            f"analysis_id {v!r} must match <verb>-YYYYMMDD-HHMMSS (lowercase verb)")
     return v
 
 
@@ -270,6 +275,11 @@ class OmxPaths:
 
     def report_md(self, output_root, run_id, analysis_id) -> Path:
         return self.analysis_dir(output_root, run_id, analysis_id) / "report.md"
+
+    def report_ko_md(self, output_root, run_id, analysis_id) -> Path:
+        """Korean mirror of report.md. report.md stays canonical (wiki / report-parse
+        read it); report.ko.md is the human-facing Korean translation alongside it."""
+        return self.analysis_dir(output_root, run_id, analysis_id) / "report.ko.md"
 
     def manifest_json(self, output_root, run_id, analysis_id) -> Path:
         return self.analysis_dir(output_root, run_id, analysis_id) / "manifest.json"

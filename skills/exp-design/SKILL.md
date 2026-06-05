@@ -164,8 +164,9 @@ setup, IS the proposed next experiment. It is a PROPOSAL — never run it.
 
 ## Step 4 — write the proposal (permanent tree, via the core — never hand-write paths)
 
-1. Choose a `proposal_id` = `<YYYYMMDD-HHMMSS>-next` (the verb is literally `next`,
-   matching design §10.1). Get the timestamp from `date +%Y%m%d-%H%M%S` via Bash.
+1. Choose a `proposal_id` = `next-<YYYYMMDD-HHMMSS>` (the verb is literally `next`,
+   FIRST, so names read label-before-date consistently). Get the timestamp from
+   `date +%Y%m%d-%H%M%S` via Bash and prefix the verb: `next-$(date +%Y%m%d-%H%M%S)`.
 2. Resolve `output_root` from the profile's `metrics.yaml` (the same value
    exp-analyze used) and the `run_id` (the run the analysis was about).
 3. Draft the proposal markdown. It MUST contain, in order:
@@ -205,7 +206,7 @@ setup, IS the proposed next experiment. It is a PROPOSAL — never run it.
   no live eval_dr, no `omx eval` against a live run. (design D4/B8 — the repo rule
   "훈련 종료/시작은 유저가 직접" has no override path here.)
 - NEVER write a path by hand; the proposal path comes from `proposal_md(...)` and
-  the write goes through `atomic_path`. `proposal_id` = `<YYYYMMDD-HHMMSS>-next`.
+  the write goes through `atomic_path`. `proposal_id` = `next-<YYYYMMDD-HHMMSS>`.
 - NEVER invent a finding or a number. Every claim traces to a `report.md` finding
   (read via `omx report-parse`) or its `[EVIDENCE: ...]` source. If the report has
   no finding supporting a lane, say that lane is unsupported — do not manufacture one.
