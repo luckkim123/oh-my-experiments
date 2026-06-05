@@ -282,7 +282,16 @@ def test_analysis_tree(tmp_path):
     a = p.analysis_dir(out, "r13_teacher", "20260530-143022-compare")
     assert a == out / "r13_teacher" / "analysis" / "20260530-143022-compare"
     assert p.report_md(out, "r13_teacher", "20260530-143022-compare") == a / "report.md"
+    assert p.report_ko_md(out, "r13_teacher", "20260530-143022-compare") == a / "report.ko.md"
     assert p.manifest_json(out, "r13_teacher", "20260530-143022-compare") == a / "manifest.json"
+
+
+def test_report_ko_md_verb_first(tmp_path):
+    p = _paths(tmp_path)
+    out = tmp_path / "experiments"
+    a = p.analysis_dir(out, "r13_teacher", "diagnose-20260605-190606")
+    assert p.report_ko_md(out, "r13_teacher", "diagnose-20260605-190606") == a / "report.ko.md"
+    assert p.report_ko_md(out, "r13_teacher", "diagnose-20260605-190606").name == "report.ko.md"
 
 
 def test_analysis_plot_uses_metric_view(tmp_path):

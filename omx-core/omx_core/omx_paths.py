@@ -276,6 +276,11 @@ class OmxPaths:
     def report_md(self, output_root, run_id, analysis_id) -> Path:
         return self.analysis_dir(output_root, run_id, analysis_id) / "report.md"
 
+    def report_ko_md(self, output_root, run_id, analysis_id) -> Path:
+        """Korean mirror of report.md. report.md stays canonical (wiki / report-parse
+        read it); report.ko.md is the human-facing Korean translation alongside it."""
+        return self.analysis_dir(output_root, run_id, analysis_id) / "report.ko.md"
+
     def manifest_json(self, output_root, run_id, analysis_id) -> Path:
         return self.analysis_dir(output_root, run_id, analysis_id) / "manifest.json"
 
