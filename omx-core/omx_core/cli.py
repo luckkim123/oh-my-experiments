@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 from omx_core.loop import queue_pending_launch, read_pending_launch, deadline_passed, compute_deadline
 from omx_core.profile import bootstrap_profile, default_metrics
 from omx_core.report import parse_findings
+from omx_core.coverage import check_coverage
+from omx_core.profile import load_profile_metrics
 from omx_core.wiki import ingest as _wiki_ingest, query as _wiki_query, lint as _wiki_lint, storage as _wiki_storage
 
 
@@ -231,6 +233,46 @@ def _cmd_report_parse(args) -> int:
             for f in findings
         ],
     }))
+    return 0
+
+
+def _cmd_report_coverage(args) -> int:
+    """Lint a report.md for diagnostic-group + engine-marker completeness (GAP 4).
+
+    Reads the profile's optional groups/engine_markers, checks the report covered
+    each declared diagnostic group and cited the training-log engine. rc 0 + JSON
+    {ok, missing_groups, engine_cited, ...} when ok; rc 3 (loud-fail) when a group
+    was skipped or the engine was never cited, so a 'When done' gate in the skill
+    can hard-block a hand-extracted, engine-skipping report. The exact incident:
+    a report can touch most vocab via final scalars yet never run the engine."""
+    path = args.path
+    if not os.path.exists(path):
+        raise SystemExit(f"report not found: {path}")
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    try:
+        profile = load_profile_metrics(args.root)
+        res = check_coverage(text, profile)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    out = {
+        "ok": res.ok,
+        "missing_groups": res.missing_groups,
+        "engine_cited": res.engine_cited,
+        "checked_groups": res.checked_groups,
+        "markers_declared": res.markers_declared,
+    }
+    print(json.dumps(out))
+    if not res.ok:
+        # loud-fail so the skill's coverage gate can detect it by exit code
+        reasons = []
+        if res.missing_groups:
+            reasons.append(f"diagnostic groups not referenced: {res.missing_groups}")
+        if not res.engine_cited:
+            reasons.append(
+                "no engine marker cited (report appears hand-extracted, not grounded "
+                f"in the engine output {res.markers_declared})")
+        raise SystemExit("report coverage FAILED — " + "; ".join(reasons))
     return 0
 
 
@@ -461,6 +503,13 @@ def build_parser() -> argparse.ArgumentParser:
     prp = sub.add_parser("report-parse", help="parse exp-analyze report.md -> JSON findings (Claude-free)")
     prp.add_argument("--path", required=True, help="path to an exp-analyze report.md")
     prp.set_defaults(func=_cmd_report_parse)
+
+    prc = sub.add_parser(
+        "report-coverage",
+        help="lint report.md for diagnostic-group + engine-marker completeness (GAP 4; loud-fail)")
+    prc.add_argument("--path", required=True, help="path to an exp-analyze report.md")
+    prc.add_argument("--root", required=True, help="workspace root holding .omx/profile/metrics.yaml")
+    prc.set_defaults(func=_cmd_report_coverage)
 
     pq = sub.add_parser("queue-launch",
                         help="queue the next training launch as pending-approval (B8; never fires)")

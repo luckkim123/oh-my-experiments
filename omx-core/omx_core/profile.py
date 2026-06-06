@@ -127,6 +127,25 @@ def default_metrics() -> dict:
     }
 
 
+def load_profile_metrics(root) -> dict:
+    """Read .omx/profile/metrics.yaml under `root` and return the raw dict.
+
+    Unlike load_profile (which builds the closed-vocab Profile), this preserves the
+    OPTIONAL lint fields — `groups` (diagnostic-group -> [metric]) and
+    `engine_markers` (training-log engine output markers) — that omx.coverage reads
+    for the report-coverage completeness lint (GAP 4). Loud-fails if the profile is
+    absent or does not parse to a mapping.
+    """
+    paths = root if isinstance(root, OmxPaths) else OmxPaths(root=root)
+    metrics_path = paths.profile_file("metrics.yaml")
+    if not metrics_path.exists():
+        raise OmxError(f"no profile at {metrics_path}; run exp-init first")
+    data = yaml.safe_load(metrics_path.read_text())
+    if not isinstance(data, dict):
+        raise OmxError(f"metrics.yaml at {metrics_path} did not parse to a mapping")
+    return data
+
+
 def load_profile(root) -> "Profile":
     """Read .omx/profile/metrics.yaml under `root` and build an omx_paths.Profile.
 
