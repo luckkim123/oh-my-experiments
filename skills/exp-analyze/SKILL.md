@@ -341,6 +341,29 @@ writes the spec → a later session reads it (see exp-design / the implement ste
 adapter is updated → the spec page is flipped to `[STATUS] implemented`. Do NOT edit the
 adapter yourself during analysis (exp-analyze never mutates code) — only record the spec.
 
+## Wiki maintenance (gc)
+
+When the wiki accumulates overlapping or superseded pages, consolidate it — but
+the core never decides *what* to remove; you do, and a human approves.
+
+1. `omx wiki gc --root <r>` — read-only. Returns `{lint, pages:[{slug,title,category,updated,bytes}]}`.
+2. For each merge/delete candidate, `omx wiki read --slug <slug> --root <r>` to read the
+   FULL body. lint catches mechanical signals (orphan/stale/oversized); only reading the
+   bodies reveals *semantic* duplicates (two pages that are one topic, a later page that
+   supersedes an earlier one).
+3. Write a proposal `proposals/<ts>-wiki-gc.md` with `---\nkind: wiki-gc\n---` frontmatter,
+   a `## DELETE` section (`- slug: X` + `reason:`), and a `## MERGE` section
+   (`- into: X` / `from:` list + `reason:`). Each item carries a one-line reason.
+4. STOP. The user reviews the proposal and deletes any line they disagree with —
+   editing the file IS the approval. Never apply without this human gate.
+5. `omx wiki gc-apply --proposal <file> --root <r>` — two-phase: validates the whole
+   proposal (slugs exist, git-tracked, no self-merge) then executes under the wiki lock.
+   It REFUSES to touch any page git does not track (so `git restore` always recovers).
+   The core executes but does not commit — commit the result yourself after review.
+
+Never hand-delete or hand-merge wiki pages with Edit/Write/rm: that bypasses the lock,
+the index regeneration, the append-log, and the git-recovery guard.
+
 ## Completeness gate — the backstop (GAP 4); the PRE-WRITE checklist is the real fix
 
 The PRE-WRITE checklist ("Before drafting" above) is what prevents a skipped group.
