@@ -4,6 +4,66 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.1.8] - 2026-06-06
+
+Round-4 CLI honesty fixes: five gaps where the tooling silently swallowed
+misuse or a structural limit, surfaced while re-analyzing a teacher run. Same
+family as the 0.1.7 chain ("the engine ran" vs "the result is grounded"), now
+extended to "the CLI loud-fails on misuse" and "the report lands where it
+belongs". All landed test-first; no machine- or project-specific assumptions
+(the path fix is documentation-only — the core getter stays general).
+
+### Added
+
+- **`omx plot --format eval_summary --view per_axis_bar`** now renders a real
+  per-axis bar PNG (GAP B). The eval_summary adapter is tabular (`series={}`);
+  the plot layer now builds the bar chart directly from `SummaryRecord`s, one
+  bar per axis for a dr_level. Schema-driven — works for any
+  `{dr_level:{axis:{field:value}}}` summary.json, no axis names hardcoded.
+- **`partial_groups` in `omx report-coverage`** (GAP E) — lenient mode used to
+  pass a group with only 1 of N tokens referenced as `ok:true`, silently
+  accepting field-level omissions within a passing group. Coverage now surfaces
+  groups with `hits < total` (but `>= required`) as `partial_groups` in the
+  JSON output plus a per-group stderr WARNING. `ok` semantics and lenient mode
+  are unchanged (advisory only), so an intentionally-N/A whole group is still
+  distinct from a contracted field missing.
+
+### Changed
+
+- **`omx reduce summarize --cv-field <x>`** now loud-fails (exit 2 + sorted
+  `available:` field list) when the field is not in the ingested record
+  vocabulary (GAP A) — previously it returned `{"cv": []}` at exit 0, so an
+  axis name like `roll` (instead of a field like `ss_error`) gave a silent
+  empty result. An empty summary (0 records) still returns `[]` quietly — a
+  genuine data absence is distinguished from a bad field name.
+- **exp-analyze SKILL** gains three guidance rules (GAP C + D), documentation
+  only, no code: (C) the "Grouped runs" box now states the group MUST carry all
+  path segments between `output_root` and `run_id` — for RSL-RL runs the
+  framework subdir too (`rsl_rl/<exp>/<purpose>`), since omitting it silently
+  drops the report into a sibling tree; (D1) an `[EVIDENCE]` block with 3+
+  numbers or a multi-axis × DR comparison must use a bullet list or table, not
+  a wall paragraph; (D2) `report.md` contains only this run's analysis —
+  harness/engine-gap metadata and CLI-misuse notes go to the wiki + fix-prompt,
+  not the report body.
+
+### Verification
+
+- Full suite: 462 passed, 1 skipped (was 451; +5 GAP A/B tests, +6 GAP E
+  tests). No new ruff violations in changed files (a pre-existing F401 in
+  `reduce/summarize.py` is untouched, out of scope).
+- Deployment generality preserved: core changes confined to `cli.py` and
+  `coverage.py`; the `omx_paths` getter and the `EvalSummaryAdapter` are
+  unchanged, so no workspace-specific path or field name leaks into the
+  distributed core.
+
+### Notes
+
+- Delivered via a `team` (native-agents) workflow: the lead session planned,
+  reviewed, and merged; two isolated workers fixed on separate branches
+  (GAP A–D in the main tree, GAP E in a git worktree) — branch conflicts made
+  structurally impossible rather than negotiated. Merged via two `--no-ff`
+  commits.
+
 ## [0.1.7] - 2026-06-06
 
 Three exp-analyze reliability fixes plus a wiki garbage-collection workflow,
