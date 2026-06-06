@@ -64,6 +64,19 @@ def test_session_id_env_fallback(monkeypatch, capsys):
     assert capsys.readouterr().out.strip() == "from-env"
 
 
+def test_session_id_autogen_when_no_flag_or_env(monkeypatch, capsys):
+    """argless `omx session-id` with no flag and no env must autogen a fresh id.
+
+    Reproduces the `'str' object is not callable` crash: the CLI passed a string
+    where resolve_session_id expects a zero-arg callable, so the autogen branch
+    (only reached when neither flag nor env is set) blew up at call time."""
+    monkeypatch.delenv("OMX_SESSION_ID", raising=False)
+    rc = main(["session-id"])
+    assert rc == 0
+    out = capsys.readouterr().out.strip()
+    assert out, "autogen produced an empty session id"
+
+
 def test_reduce_summarize_nan_becomes_null(tmp_path, capsys):
     # a zero-mean axis -> CV = 0/0 = nan -> must serialize as JSON null, not NaN
     csv = tmp_path / "zero.csv"
@@ -420,6 +433,57 @@ def test_wiki_list_returns_json(tmp_path, capsys):
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out["pages"][0]["slug"] == "a.md"
+
+
+def _seed_wiki_page(tmp_path):
+    from omx_core.omx_paths import OmxPaths
+    from omx_core.wiki import ingest
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Roll heavy-tail",
+                            content="roll axis shows a heavy-tailed error spread",
+                            tags=["roll"], category="pattern",
+                            confidence="high", sources=[])
+    return "roll_heavy_tail.md"
+
+
+def test_wiki_read_emits_full_page_with_frontmatter(tmp_path, capsys):
+    """`omx wiki read --slug` prints the WHOLE page (frontmatter + body) by
+    default, so a caller that found a slug via query can pull the full text
+    through a first-class verb instead of hand-reading the findings/ path."""
+    from omx_core.cli import build_parser
+    slug = _seed_wiki_page(tmp_path)
+    args = build_parser().parse_args(["wiki", "read", "--root", str(tmp_path), "--slug", slug])
+    rc = args.func(args)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert out.startswith("---\n")                      # frontmatter block present
+    assert "category: pattern" in out                   # a frontmatter field
+    assert "roll axis shows a heavy-tailed error spread" in out  # body present
+
+
+def test_wiki_read_no_frontmatter_emits_body_only(tmp_path, capsys):
+    from omx_core.cli import build_parser
+    slug = _seed_wiki_page(tmp_path)
+    args = build_parser().parse_args(
+        ["wiki", "read", "--root", str(tmp_path), "--slug", slug, "--no-frontmatter"])
+    rc = args.func(args)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "---" not in out                              # no frontmatter block
+    assert "category:" not in out                        # no frontmatter field
+    assert "roll axis shows a heavy-tailed error spread" in out  # body present
+
+
+def test_wiki_read_missing_slug_loud_fails(tmp_path, capsys):
+    """Unknown slug must loud-fail (non-zero), NOT print empty output — else a
+    caller can't tell 'page absent' from 'page empty'."""
+    import pytest
+    from omx_core.cli import build_parser
+    args = build_parser().parse_args(
+        ["wiki", "read", "--root", str(tmp_path), "--slug", "does_not_exist.md"])
+    with pytest.raises(SystemExit):
+        args.func(args)
+    assert capsys.readouterr().out == ""
 
 
 def test_wiki_add_bad_category_loud_fails(tmp_path):

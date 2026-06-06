@@ -108,7 +108,7 @@ def _cmd_session_id(args) -> int:
     sid = resolve_session_id(
         explicit=args.session_id,
         env=os.environ.get("OMX_SESSION_ID"),
-        autogen=f"{_now_stamp()}-{os.getpid()}",
+        autogen=lambda: f"{_now_stamp()}-{os.getpid()}",
     )
     print(sid)
     return 0
@@ -374,6 +374,26 @@ def _cmd_wiki_list(args) -> int:
     return 0
 
 
+def _cmd_wiki_read(args) -> int:
+    """Print one wiki page's FULL text by slug (query=search, read=full text;
+    symmetric with list/add). Default emits the '---' frontmatter block + body
+    via serialize_page; --no-frontmatter emits only the body. An absent slug
+    loud-fails (SystemExit) rather than printing nothing, so callers can tell
+    'page absent' from 'page empty'."""
+    paths = OmxPaths(root=args.root)
+    try:
+        page = _wiki_storage.read_page(paths, args.slug)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    if page is None:
+        raise SystemExit(f"wiki page not found: {args.slug}")
+    if args.no_frontmatter:
+        print(page.content)
+    else:
+        print(_wiki_storage.serialize_page(page))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="omx", description="OMX experiment-analysis core")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -496,6 +516,13 @@ def build_parser() -> argparse.ArgumentParser:
     pwls = wsub.add_parser("list", help="catalog of pages (slug/title/category)")
     pwls.add_argument("--root", required=True)
     pwls.set_defaults(func=_cmd_wiki_list)
+
+    pwr = wsub.add_parser("read", help="print one page's full text by slug (loud-fail if absent)")
+    pwr.add_argument("--root", required=True)
+    pwr.add_argument("--slug", required=True, help="page slug (with or without '.md')")
+    pwr.add_argument("--no-frontmatter", action="store_true", dest="no_frontmatter",
+                     help="emit only the body, omitting the '---' frontmatter block")
+    pwr.set_defaults(func=_cmd_wiki_read)
 
     return p
 

@@ -1,6 +1,6 @@
 {
   "name": "oh-my-experiments",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Experiment-analysis & design harness for RL/ML research. Analyze training runs, diagnose regressions, design the next experiment, and run a semi-autonomous analyze-design-eval loop. Self-contained: an omx CLI over .omx/ JSON state, with zero runtime dependency on other harnesses.",
   "author": {
     "name": "luckkim123"
