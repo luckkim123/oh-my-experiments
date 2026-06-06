@@ -39,6 +39,10 @@ class CoverageResult:
     markers_declared: list[str] = field(default_factory=list)
     # per-group (hit, total) token counts so the caller sees WHERE coverage is thin
     group_hits: dict[str, tuple[int, int]] = field(default_factory=dict)
+    # GAP E: groups that pass the coverage threshold (ok stays True in lenient mode)
+    # but have hits < total — field-level omissions within a passing group.
+    # Surfaced as a warning so the analyst cannot silently skip sub-group fields.
+    partial_groups: list[str] = field(default_factory=list)
 
 
 def _leaf(token: str) -> str:
@@ -83,6 +87,7 @@ def check_coverage(report_text: str, profile: dict,
     missing_groups: list[str] = []
     checked_groups: list[str] = []
     group_hits: dict[str, tuple[int, int]] = {}
+    partial_groups: list[str] = []
     if groups is not None:
         if not isinstance(groups, dict):
             raise OmxError(
@@ -101,6 +106,10 @@ def check_coverage(report_text: str, profile: dict,
             required = 1 if min_coverage is None else max(1, math.ceil(total * min_coverage))
             if hits < required:
                 missing_groups.append(name)
+            elif hits < total:
+                # GAP E: group passes threshold but has unreferenced tokens — surface
+                # as partial so the analyst sees field-level omissions even when ok.
+                partial_groups.append(name)
 
     markers = profile.get("engine_markers")
     markers_declared: list[str] = []
@@ -121,4 +130,5 @@ def check_coverage(report_text: str, profile: dict,
         checked_groups=checked_groups,
         markers_declared=markers_declared,
         group_hits=group_hits,
+        partial_groups=partial_groups,
     )
