@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 from omx_core.omx_paths import OmxPaths, OmxError
 from omx_core.wiki import storage
-from omx_core.wiki.types import WikiError, WikiPage, WIKI_SCHEMA_VERSION
+from omx_core.wiki.types import WikiError, WikiPage, WIKI_SCHEMA_VERSION, RESERVED_FILES
 
 
 def _norm_slug(slug: str) -> str:
@@ -96,3 +96,17 @@ def is_git_tracked(repo_root, file_path) -> bool:
     except (FileNotFoundError, OSError):
         return False
     return proc.returncode == 0
+
+
+def delete_page(paths: OmxPaths, slug: str) -> None:
+    """Unlink one wiki page. Caller MUST hold the wiki lock and is responsible for
+    update_index/append_log afterwards (apply_gc batches these). Loud-fail on a
+    reserved file or an absent page. No git check here — apply_gc validates the
+    whole plan against git before any mutation."""
+    norm = _norm_slug(slug)
+    if norm in RESERVED_FILES:
+        raise WikiError(f"cannot delete reserved file {norm!r}")
+    fp = paths.wiki_page(norm[:-3])  # validates token -> blocks traversal
+    if not fp.exists():
+        raise WikiError(f"cannot delete absent page {norm!r}")
+    fp.unlink()

@@ -98,3 +98,38 @@ def test_is_git_tracked_false_when_no_repo(tmp_path):
     f = tmp_path / "c.txt"
     f.write_text("hi", encoding="utf-8")
     assert gc.is_git_tracked(tmp_path, f) is False
+
+
+from omx_core.omx_paths import OmxPaths
+
+
+def _seed_page(tmp_path, title, content="body text", category="reference"):
+    """Create one wiki page via ingest, return its slug."""
+    from omx_core.wiki import ingest
+    res = ingest.ingest_knowledge(
+        OmxPaths(root=tmp_path), now="2026-06-06T00:00:00",
+        title=title, content=content, tags=["t"], category=category,
+        confidence="medium", sources=[])
+    return res["slug"]
+
+
+def test_delete_page_removes_file(tmp_path):
+    slug = _seed_page(tmp_path, "Doomed Page")
+    paths = OmxPaths(root=tmp_path)
+    assert paths.wiki_page(slug[:-3]).exists()
+    gc.delete_page(paths, slug)
+    assert not paths.wiki_page(slug[:-3]).exists()
+
+
+def test_delete_page_missing_loud_fails(tmp_path):
+    paths = OmxPaths(root=tmp_path)
+    paths.wiki_dir().mkdir(parents=True, exist_ok=True)
+    with pytest.raises(OmxError):
+        gc.delete_page(paths, "ghost.md")
+
+
+def test_delete_page_reserved_loud_fails(tmp_path):
+    paths = OmxPaths(root=tmp_path)
+    paths.wiki_dir().mkdir(parents=True, exist_ok=True)
+    with pytest.raises(OmxError):
+        gc.delete_page(paths, "index.md")
