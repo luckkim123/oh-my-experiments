@@ -94,6 +94,14 @@ def _cmd_ingest(args) -> int:
 def _cmd_reduce_summarize(args) -> int:
     res = _ingest(args.path, args.format)
     df = to_dataframe(res.summary)
+    # GAP A: loud-fail when the requested cv-field is not in the ingested field
+    # vocabulary (e.g. user passed an axis name like "roll" instead of a field
+    # name like "ss_error").  Guard only fires when at least one record exists
+    # so that an empty summary (genuine data absence) still returns [] quietly.
+    available_fields = sorted(df["field"].dropna().unique()) if not df.empty else []
+    if available_fields and args.cv_field not in available_fields:
+        raise SystemExit(
+            f"field {args.cv_field!r} not found; available: {available_fields}")
     cv = add_cv(df, base_field=args.cv_field)
     rows = [
         {"dr_level": r.dr_level, "axis": r.axis,
