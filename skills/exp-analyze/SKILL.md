@@ -148,6 +148,32 @@ Every finding is tagged:
 
 A finding with a numeric claim and `[CONFIDENCE: HIGH]` MUST cite a code-exec source, not a PNG.
 
+**D1 — Readable format inside [EVIDENCE] (rule 06 Output Form: parallel items = bullets,
+comparisons = tables).** When an [EVIDENCE] block contains 3+ numbers, or compares
+multiple axes × DR levels, render it as a line-broken bullet list or a markdown table —
+never a single wall-of-text paragraph. One [EVIDENCE] = one bullet list or table, not a
+run-on sentence. Example:
+
+```
+# BAD — wall paragraph (unreadable):
+[EVIDENCE: summary.json] hard/roll ss_error=1.10 CV=2.65, hard/pitch ss_error=0.35
+CV=1.87, none/roll ss_error=0.55 CV=0.84, soft/roll ss_error=0.30 CV=1.12
+
+# GOOD — bullet list:
+[EVIDENCE: summary.json hard/roll, soft/roll, none/roll]
+- none:  roll ss_error=0.55, CV=0.84
+- soft:  roll ss_error=0.30, CV=1.12
+- hard:  roll ss_error=1.10, CV=2.65 (heavy-tail: some envs dominate)
+
+# GOOD — table for multi-axis × multi-DR:
+[EVIDENCE: summary.json]
+| dr_level | roll ss_error | pitch ss_error | roll CV |
+|----------|--------------|----------------|---------|
+| none     | 0.55         | 0.15           | 0.84    |
+| soft     | 0.30         | 0.13           | 1.12    |
+| hard     | 1.10         | 0.35           | 2.65    |
+```
+
 ## Before drafting — the groups ARE the required table of contents (PRE-WRITE gate)
 
 Completeness is decided BEFORE a single sentence is written, not audited after.
@@ -244,6 +270,12 @@ run in "When done" is the backstop that catches a checklist you didn't honor.
 - NEVER claim a number you did not get from code-exec. PNG vision is for SHAPE, not digits.
 - Candidate plots that the report doesn't reference are LEFT in scratch (omx clean sweeps them) — do not delete them yourself.
 - Respond to the user in the user's language (the machine's locale language); keep report.md/code/markdown in English.
+- **D2 — report.md contains ONLY this run's analysis results.** Harness/engine-gap
+  metadata, CLI-misuse notes, and metrics.yaml coverage checks do NOT belong in
+  report.md — those go to the wiki engine-gap page + docs/plans fix-prompt. The report
+  is an analysis deliverable, not a harness audit log. (Incident: a report included
+  "Cross-check ledger / Harness gaps / metrics.yaml note" sections that had to be
+  removed manually. The SKILL did not block it — this rule does.)
 
 ## Capture reusable findings into the wiki (auto-capture — the write half of the loop)
 
@@ -339,6 +371,11 @@ An engine-gap spec is a CODE-CHANGE specification, not a finding. Write it concr
   rate > 0.2 as CYCLING").
 - `[EVIDENCE]` what in THIS analysis exposed the gap (the run + metric that needed it).
 - `[STATUS]` `proposed` (until a later session implements it).
+
+**Engine-gap specs go to the WIKI, NOT to report.md.** An engine-gap spec is
+operational metadata about the harness, not a finding about the run — see the
+D2 hard constraint above. Write it with `omx wiki add ... --category decision
+--tags engine-gap`, never inline in the analysis report body.
 
 Title these pages so they are findable (e.g. "engine-gap: <capability>"), tag `engine-gap`.
 This is how "the engine specializes the more the wiki is used" actually closes: analysis
