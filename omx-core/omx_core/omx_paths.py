@@ -83,6 +83,29 @@ def validate_run_id(value) -> str:
     return v
 
 
+def validate_group(value) -> str:
+    """Validate an optional run-grouping prefix (e.g. ``rsl_rl/albc_trpo_teacher/dr_harder``).
+
+    A *group* lets runs cluster under the output_root by experiment_name / purpose
+    (``output_root/<group>/<run_id>/...``) instead of flat ``output_root/<run_id>/...``.
+    ``None``/``""`` means "no group" (the flat layout) and returns ``""``.
+
+    Each ``/``-separated segment must satisfy the same charset as a run_id
+    (``alnum/_/-``); '.' is forbidden, so ``..`` traversal, absolute paths, and empty
+    segments (``a//b``, leading/trailing ``/``) are all rejected. Returns the cleaned
+    group string (forward-slash joined) for use in path construction.
+    """
+    if value is None or value == "":
+        return ""
+    v = _require_str(value, "group")
+    segs = v.split("/")
+    for seg in segs:
+        if not _RUN_ID.fullmatch(seg):  # forbids '', '..', and any bad char
+            raise OmxPathError(
+                f"group {v!r} invalid: segment {seg!r} must be alnum/_/- (no '', '..', '/')")
+    return "/".join(segs)
+
+
 def validate_token(value, label: str) -> str:
     v = _require_str(value, label)
     if not _TOKEN.fullmatch(v) or "__" in v:
@@ -267,38 +290,46 @@ class OmxPaths:
             raise OmxPathError("output_root is required for permanent-tree paths")
         return Path(output_root)
 
-    def analysis_dir(self, output_root, run_id, analysis_id) -> Path:
+    def _run_base(self, output_root, run_id, group) -> Path:
+        """``output_root[/<group>]/<run_id>`` — the run's permanent-tree root.
+
+        *group* (optional) clusters runs by experiment_name / purpose; when falsy the
+        layout is the flat ``output_root/<run_id>`` (back-compat). Both group and run_id
+        are validated (charset / no traversal) before they touch the path.
+        """
         base = self._out_root(output_root)
+        grp = validate_group(group)
         rid = self._check_run_id(run_id)
+        return (base / grp / rid) if grp else (base / rid)
+
+    def analysis_dir(self, output_root, run_id, analysis_id, *, group=None) -> Path:
         aid = validate_analysis_id(analysis_id)
-        return base / rid / "analysis" / aid
+        return self._run_base(output_root, run_id, group) / "analysis" / aid
 
-    def report_md(self, output_root, run_id, analysis_id) -> Path:
-        return self.analysis_dir(output_root, run_id, analysis_id) / "report.md"
+    def report_md(self, output_root, run_id, analysis_id, *, group=None) -> Path:
+        return self.analysis_dir(output_root, run_id, analysis_id, group=group) / "report.md"
 
-    def report_ko_md(self, output_root, run_id, analysis_id) -> Path:
+    def report_ko_md(self, output_root, run_id, analysis_id, *, group=None) -> Path:
         """Korean mirror of report.md. report.md stays canonical (wiki / report-parse
         read it); report.ko.md is the human-facing Korean translation alongside it."""
-        return self.analysis_dir(output_root, run_id, analysis_id) / "report.ko.md"
+        return self.analysis_dir(output_root, run_id, analysis_id, group=group) / "report.ko.md"
 
-    def manifest_json(self, output_root, run_id, analysis_id) -> Path:
-        return self.analysis_dir(output_root, run_id, analysis_id) / "manifest.json"
+    def manifest_json(self, output_root, run_id, analysis_id, *, group=None) -> Path:
+        return self.analysis_dir(output_root, run_id, analysis_id, group=group) / "manifest.json"
 
-    def analysis_plot(self, output_root, run_id, analysis_id, *, metric, view) -> Path:
+    def analysis_plot(self, output_root, run_id, analysis_id, *, metric, view, group=None) -> Path:
         met = self._check_token(metric, "metric", vocab_attr="metrics")
         vw = self._check_token(view, "view", vocab_attr="views")
-        return self.analysis_dir(output_root, run_id, analysis_id) / "plots" / f"{met}__{vw}.png"
+        return self.analysis_dir(output_root, run_id, analysis_id, group=group) / "plots" / f"{met}__{vw}.png"
 
-    def analysis_table(self, output_root, run_id, analysis_id, *, metric, agg) -> Path:
+    def analysis_table(self, output_root, run_id, analysis_id, *, metric, agg, group=None) -> Path:
         met = self._check_token(metric, "metric", vocab_attr="metrics")
         ag = self._check_token(agg, "agg", vocab_attr="aggs")
-        return self.analysis_dir(output_root, run_id, analysis_id) / "tables" / f"{met}__{ag}.csv"
+        return self.analysis_dir(output_root, run_id, analysis_id, group=group) / "tables" / f"{met}__{ag}.csv"
 
-    def proposal_md(self, output_root, run_id, proposal_id) -> Path:
-        base = self._out_root(output_root)
-        rid = self._check_run_id(run_id)
+    def proposal_md(self, output_root, run_id, proposal_id, *, group=None) -> Path:
         pid = validate_proposal_id(proposal_id)
-        return base / rid / "proposals" / f"{pid}.md"
+        return self._run_base(output_root, run_id, group) / "proposals" / f"{pid}.md"
 
     # --- internal 2-tier validation helpers ---
     def _check_run_id(self, run_id) -> str:

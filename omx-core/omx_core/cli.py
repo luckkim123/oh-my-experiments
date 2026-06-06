@@ -169,7 +169,9 @@ def _cmd_promote(args) -> int:
     in scratch (promote_plots raises OmxError -> SystemExit)."""
     paths = OmxPaths(root=args.root)
     scratch = paths.scratch_plots(session_id=args.session_id)
-    dest = paths.analysis_dir(args.output_root, args.run_id, args.analysis_id) / "plots"
+    dest = paths.analysis_dir(
+        args.output_root, args.run_id, args.analysis_id, group=getattr(args, "group", None)
+    ) / "plots"
     try:
         moved = promote_plots(scratch, dest, args.referenced)
     except OmxError as e:
@@ -420,6 +422,9 @@ def build_parser() -> argparse.ArgumentParser:
     pm.add_argument("--output-root", required=True, dest="output_root")
     pm.add_argument("--run-id", required=True, dest="run_id")
     pm.add_argument("--analysis-id", required=True, dest="analysis_id")
+    pm.add_argument("--group", default=None,
+                    help="optional run-grouping prefix, e.g. rsl_rl/<exp>/dr_harder "
+                         "(flat output_root/<run_id>/ when omitted)")
     pm.add_argument("--referenced", action="append", default=[],
                     help="a report-referenced PNG filename; repeat for multiple")
     pm.set_defaults(func=_cmd_promote)

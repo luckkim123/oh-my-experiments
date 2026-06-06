@@ -319,6 +319,62 @@ def test_proposal_path(tmp_path):
     assert pr == out / "r13_teacher" / "proposals" / "20260530-143022-next.md"
 
 
+# --- grouped run layout: output_root/<group>/<run_id>/... (e.g. rsl_rl/<exp>/dr_harder) ---
+def test_analysis_tree_grouped(tmp_path):
+    p = _paths(tmp_path)
+    out = tmp_path / "experiments"
+    grp = "rsl_rl/albc_trpo_teacher/dr_harder"
+    a = p.analysis_dir(out, "trpo_e1_260605", "20260530-143022-compare", group=grp)
+    assert a == out / grp / "trpo_e1_260605" / "analysis" / "20260530-143022-compare"
+    assert p.report_md(out, "trpo_e1_260605", "20260530-143022-compare", group=grp) == a / "report.md"
+    assert p.report_ko_md(out, "trpo_e1_260605", "20260530-143022-compare", group=grp) == a / "report.ko.md"
+    assert p.manifest_json(out, "trpo_e1_260605", "20260530-143022-compare", group=grp) == a / "manifest.json"
+
+
+def test_grouped_plot_and_table(tmp_path):
+    p = _paths(tmp_path)
+    out = tmp_path / "experiments"
+    grp = "rsl_rl/albc_trpo_teacher/dr_harder"
+    plot = p.analysis_plot(out, "r1", "20260530-143022-x", metric="ss_error", view="trajectory", group=grp)
+    assert plot == out / grp / "r1" / "analysis" / "20260530-143022-x" / "plots" / "ss_error__trajectory.png"
+    tbl = p.analysis_table(out, "r1", "20260530-143022-x", metric="ss_error", agg="by_axis", group=grp)
+    assert tbl == out / grp / "r1" / "analysis" / "20260530-143022-x" / "tables" / "ss_error__by_axis.csv"
+
+
+def test_grouped_proposal(tmp_path):
+    p = _paths(tmp_path)
+    out = tmp_path / "experiments"
+    grp = "rsl_rl/albc_trpo_teacher/dr_harder"
+    pr = p.proposal_md(out, "r1", "20260530-143022-next", group=grp)
+    assert pr == out / grp / "r1" / "proposals" / "20260530-143022-next.md"
+
+
+def test_group_none_is_flat_backcompat(tmp_path):
+    # group omitted / None / "" must reproduce the existing flat layout exactly.
+    p = _paths(tmp_path)
+    out = tmp_path / "experiments"
+    flat = p.analysis_dir(out, "r13_teacher", "20260530-143022-compare")
+    assert p.analysis_dir(out, "r13_teacher", "20260530-143022-compare", group=None) == flat
+    assert p.analysis_dir(out, "r13_teacher", "20260530-143022-compare", group="") == flat
+    assert flat == out / "r13_teacher" / "analysis" / "20260530-143022-compare"
+
+
+@pytest.mark.parametrize("evil_group", ["../escape", "a/../b", "/abs/path", "a//b", "a/..", ".."])
+def test_grouped_rejects_traversal(tmp_path, evil_group):
+    p = _paths(tmp_path)
+    out = tmp_path / "experiments"
+    with pytest.raises(OmxPathError):
+        p.analysis_dir(out, "r1", "20260530-143022-compare", group=evil_group)
+
+
+def test_group_segment_charset_enforced(tmp_path):
+    # each segment obeys the run_id charset (alnum/_/-); a bad char is rejected.
+    p = _paths(tmp_path)
+    out = tmp_path / "experiments"
+    with pytest.raises(OmxPathError):
+        p.analysis_dir(out, "r1", "20260530-143022-compare", group="ok/bad seg")
+
+
 def test_bad_analysis_id_rejected_in_tree(tmp_path):
     p = _paths(tmp_path)
     out = tmp_path / "experiments"

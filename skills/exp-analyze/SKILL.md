@@ -78,6 +78,15 @@ A finding with a numeric claim and `[CONFIDENCE: HIGH]` MUST cite a code-exec so
 
 ## Building the report (permanent tree, via the core — never hand-write paths)
 
+> **Grouped runs (purpose / experiment_name layer).** When a run lives under an extra
+> grouping layer — `<output_root>/<group>/<run_id>/` (e.g. `rsl_rl/albc_trpo_teacher/dr_harder`)
+> rather than flat `<output_root>/<run_id>/` — pass that prefix as `--group <group>` to
+> `omx promote-plots` AND as the keyword arg `group="<group>"` to every `OmxPaths` getter
+> (`report_md` / `report_ko_md` / `manifest_json` / `analysis_dir`), so the report lands
+> BESIDE the run instead of in a phantom flat dir. Omit it for flat layouts (the default).
+> The group string is validated (alnum/_/- per segment, no traversal). The `omx wiki add
+> --from-report` path then becomes `<output_root>/<group>/<run_id>/analysis/<analysis_id>/report.md`.
+
 1. Choose an `analysis_id` = `<verb>-<YYYYMMDD-HHMMSS>` (verb = lowercase, e.g. `compare`, `diagnose`; verb FIRST so output names read label-before-date consistently). Get the timestamp from `date +%Y%m%d-%H%M%S` via Bash and prefix the verb: e.g. `diagnose-$(date +%Y%m%d-%H%M%S)`.
 2. Resolve `output_root` from the profile's `metrics.yaml`.
 3. Draft `report.md` referencing ONLY the plots you actually used (by bare filename, e.g. `![](plots/ss_error__trajectory.png)`).
