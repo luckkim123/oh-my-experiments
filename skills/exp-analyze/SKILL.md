@@ -1,6 +1,6 @@
 ---
 name: exp-analyze
-description: Analyze N existing experiment/training runs into an evidence-tagged report. Use when comparing runs, reading eval/training curves, or diagnosing why a run regressed — the hybrid router decides per question whether to use exact code-exec stats, a vision-read PNG curve, or both. Reads the OMX profile (metrics.yaml) for the metric vocabulary. Writes report.md + promoted plots into the permanent analysis tree. Never launches training or eval. Triggers on "analyze these runs", "compare run A and B", "why did this regress", "런 분석", "eval plot 보여줘".
+description: Analyze N existing experiment/training runs into an evidence-tagged report. Use when comparing runs, reading eval/training curves, or diagnosing why a run regressed — the hybrid router decides per question whether to use exact code-exec stats, a vision-read PNG curve, or both. Reads the OMX profile (metrics.yaml) for the metric vocabulary. Writes report.md + promoted plots into the permanent analysis tree — this report IS the deliverable, so any request to "make/write a report on these runs" is exp-analyze, not a hand-written summary. Never launches training or eval. Triggers on "analyze these runs", "compare run A and B", "why did this regress", "make a report on this run", "write up these results", "런 분석", "eval plot 보여줘", "리포트 만들어줘", "이 런 report 만들어줘", "결과 정리해줘".
 argument-hint: "[--root <dir>] [--no-wiki] <run ids or result paths to analyze>"
 ---
 
@@ -13,6 +13,15 @@ eval (design D4/B8). It reads the OMX profile written by exp-init, then runs the
 hybrid router (design §5) to answer each analysis question with the cheapest
 sufficient evidence, and writes a single human deliverable: `report.md` (+ the
 plots it references) in the permanent analysis tree.
+
+**`report.md` in the analysis tree is OMX's canonical analysis output.** When the
+user asks to "make a report" on a run, this is what they get — do NOT reach for a
+hand-written summary, and do NOT conclude "a report already exists" just because the
+run folder or some project doc holds other notes. A pre-existing eval/summary file is
+INPUT to exp-analyze, never a substitute for its `report.md`. Producing this report is
+exp-analyze's reason to exist; if you are unsure whether OMX "can make a report", the
+answer is yes and this skill is how — verify by reading this file, not by scanning the
+`omx` CLI verb list (report authoring lives in the skill layer, not as a CLI verb).
 
 **Announce at start:** "Using exp-analyze to analyze the runs and write an evidence-tagged report."
 

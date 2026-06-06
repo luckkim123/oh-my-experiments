@@ -1,6 +1,6 @@
 ---
 name: exp-design
-description: Design the next experiment from an exp-analyze report. Use after analyzing runs, when you need to decide what to change next — runs a 3-lane differential diagnosis (code-path / config-DR-hyperparam / measurement-artifact) over the evidence-tagged findings and proposes the single discriminating probe (the next-experiment config) as a pending-approval artifact. Reads report.md, writes proposals/<id>.md. Never launches training or eval. Triggers on "design the next experiment", "what should I change next", "diagnose why this regressed and propose a fix experiment", "다음 실험 설계", "다음에 뭘 바꿔야 할까".
+description: Design the next experiment from an exp-analyze report. Use after analyzing runs, when you need to decide what to change next — runs a 3-lane differential diagnosis (code-path / config-DR-hyperparam / measurement-artifact) over the evidence-tagged findings and proposes the single discriminating probe (the next-experiment config) as a pending-approval artifact. Reads report.md, writes proposals/<id>.md — this proposal IS the deliverable, so any request to "make/write a proposal for the next experiment" is exp-design. Never launches training or eval. Triggers on "design the next experiment", "what should I change next", "diagnose why this regressed and propose a fix experiment", "write a proposal for the next run", "what experiment next", "다음 실험 설계", "다음에 뭘 바꿔야 할까", "다음 실험 제안해줘", "next 실험 proposal 만들어줘".
 argument-hint: "[--root <dir>] <path to an exp-analyze report.md, or run id + analysis id>"
 ---
 
