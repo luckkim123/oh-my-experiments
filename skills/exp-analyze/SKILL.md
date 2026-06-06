@@ -58,6 +58,43 @@ This is about USING the engine, not editing it: growing/specializing the adapter
 separate, optional activity (see "Record engine-gap specs"); running it during analysis
 is mandatory.
 
+## Verify the engine's output — an empty cell is a HYPOTHESIS, not a fact (the engine-output-unverified anti-pattern)
+
+Running the engine is necessary but NOT sufficient. The engine can run cleanly and
+still print `0` / `()` / an empty table for a metric group **because its tag-naming
+assumption missed how THIS workspace logs** — not because the data is absent. Trusting
+that empty cell as "no data" and copying it into the report (or worse, concluding "the
+engine can't produce X") is the second failure mode this skill forbids.
+
+**엔진의 빈 셀은 가설('도구가 그 tag를 못 찾음')이지 결론('데이터 없음')이 아니다.**
+(This is the repo's `verify implementation, not name` + `no premature assertion` rules
+applied to a tool's output: the engine's *name* for a group says nothing about whether
+the group's *tags exist*.)
+
+So whenever the engine reports a diagnostic group as `0` / empty / absent (e.g.
+`constraints=0`, an empty constraint table, "no reward decomposition"), **cross-check
+the raw TB before asserting absence**:
+
+1. **Dump the raw scalar tag set.** With the TB event file in hand:
+   ```python
+   from tensorboard.backend.event_processing import event_accumulator
+   ea = event_accumulator.EventAccumulator(str(ev), size_guidance={event_accumulator.SCALARS: 0})
+   ea.Reload(); tags = ea.Tags()["scalars"]
+   ```
+   Grep `tags` for the group's prefix (e.g. `Constraint/`, `Reward/`). 
+2. **If the tags EXIST** → the engine's prefix/naming assumption is wrong, not the data.
+   - Pull the values yourself with `omx reduce tb-final --path <ev> --format tensorboard
+     --tag <T> ...` (named final-window means, a code-exec source you can cite) — do NOT
+     hand-average a curve. Put the real numbers in the report.
+   - Record an **engine-gap spec** (see "Record engine-gap specs") naming the tags the
+     engine failed to scan, so the adapter gets fixed in a later session.
+3. **Only if the tags are genuinely ABSENT** may you write "the run did not log X".
+
+This is exactly how the dr-harder report failed even with the engine run: it printed
+`constraints=0` + no reward decomposition, the agent copied that as truth, and wrote a
+false "reward 8-term decomposition unavailable" conclusion — while the TB held all 8
+`Reward/*` tags and 21 `Constraint/*` tags the engine's `cost_return_*` scan never saw.
+
 ## Ground in prior workspace knowledge (query the wiki — TWO passes)
 
 Before analyzing, pull accumulated knowledge so you do not re-derive what the
@@ -295,6 +332,14 @@ genuinely N/A for this run — state that explicitly in the report, then re-run 
 lint. Do not mark the report done while the lint fails without a stated reason.
 (If the profile declares neither field the lint is a vacuous pass — that is fine
 for a fresh workspace; consider proposing the fields as an engine-gap spec.)
+
+A group is allowed to be "N/A for this run" ONLY after the cross-check above:
+"the engine reported it empty" is NOT a valid reason to skip a group. If the
+engine printed `0`/empty for that group, you must first dump the raw TB tags
+(see "Verify the engine's output") — if the tags exist, the group is NOT N/A
+(extract it via `omx reduce tb-final` and cite it); only genuinely-absent tags
+justify the N/A. This closes the loop: the gate catches a skipped group, and the
+cross-check rule stops "the engine said 0" from being used to wave the skip through.
 
 ## When done
 
