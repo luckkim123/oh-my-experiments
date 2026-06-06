@@ -269,7 +269,7 @@ def _cmd_report_coverage(args) -> int:
         text = fh.read()
     try:
         profile = load_profile_metrics(args.root)
-        res = check_coverage(text, profile)
+        res = check_coverage(text, profile, min_coverage=args.min_coverage)
     except OmxError as e:
         raise SystemExit(str(e))
     out = {
@@ -278,6 +278,9 @@ def _cmd_report_coverage(args) -> int:
         "engine_cited": res.engine_cited,
         "checked_groups": res.checked_groups,
         "markers_declared": res.markers_declared,
+        # per-group hit/total so the agent sees WHERE coverage is thin (GAP 4b)
+        "group_hits": {g: list(ht) for g, ht in res.group_hits.items()},
+        "min_coverage": args.min_coverage,
     }
     print(json.dumps(out))
     if not res.ok:
@@ -536,6 +539,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="lint report.md for diagnostic-group + engine-marker completeness (GAP 4; loud-fail)")
     prc.add_argument("--path", required=True, help="path to an exp-analyze report.md")
     prc.add_argument("--root", required=True, help="workspace root holding .omx/profile/metrics.yaml")
+    prc.add_argument(
+        "--min-coverage", type=float, default=None, dest="min_coverage",
+        help="strict mode: require this FRACTION (0<f<=1) of each group's tokens to be "
+             "referenced, not just >=1. Omit for the lenient default (>=1 token per group).")
     prc.set_defaults(func=_cmd_report_coverage)
 
     pq = sub.add_parser("queue-launch",

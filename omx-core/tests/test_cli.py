@@ -516,3 +516,53 @@ def test_wiki_add_write_mode_requires_confidence(tmp_path):
          "--category", "pattern", "--content", "c"])
     with pytest.raises(SystemExit):
         args.func(args)
+
+
+# --- report-coverage CLI: --min-coverage strict flag + group_hits output (GAP 4b) ---
+
+def _write_coverage_profile(tmp_path):
+    """Write a minimal .omx/profile/metrics.yaml with multi-token groups + markers."""
+    prof = tmp_path / ".omx" / "profile"
+    prof.mkdir(parents=True)
+    (prof / "metrics.yaml").write_text(
+        "metrics: [Reward/att_rp, entropy, Encoder/z_std]\n"
+        "output_root: experiments\n"
+        "groups:\n"
+        "  reward_decomp: [Reward/att_rp, Reward/lin_vel, Reward/yaw_vel, Reward/bias]\n"
+        "  encoder: [Encoder/z_std, Encoder/z_min, Encoder/z_max]\n"
+        "engine_markers: [DIAGNOSIS, plateau]\n"
+    )
+
+
+def test_report_coverage_cli_lenient_default_passes_one_token(tmp_path, capsys):
+    # one token per group + an engine marker -> lenient default passes (rc 0)
+    _write_coverage_profile(tmp_path)
+    report = tmp_path / "report.md"
+    report.write_text("Reward/att_rp ok. Encoder/z_std ok. [DIAGNOSIS] plateau.")
+    rc = main(["report-coverage", "--path", str(report), "--root", str(tmp_path)])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True
+    assert out["min_coverage"] is None
+    assert out["group_hits"]["reward_decomp"] == [1, 4]  # tuple serialized to list
+
+
+def test_report_coverage_cli_strict_flag_fails_shallow(tmp_path, capsys):
+    # same one-token report under --min-coverage 0.5 -> loud-fail. main() intercepts
+    # the string-coded SystemExit and maps it to rc 2 (loud-fail discipline), so the
+    # gate is observed by a non-zero return code, not a raised SystemExit.
+    _write_coverage_profile(tmp_path)
+    report = tmp_path / "report.md"
+    report.write_text("Reward/att_rp ok. Encoder/z_std ok. [DIAGNOSIS] plateau.")
+    rc = main(["report-coverage", "--path", str(report), "--root", str(tmp_path),
+               "--min-coverage", "0.5"])
+    assert rc == 2  # loud-fail
+    captured = capsys.readouterr()
+    # the JSON (with group_hits) is printed to stdout before the loud-fail
+    out = json.loads(captured.out)
+    assert out["ok"] is False
+    assert out["min_coverage"] == 0.5
+    assert "reward_decomp" in out["missing_groups"]  # 1/4 < ceil(4*0.5)=2
+    assert out["group_hits"]["reward_decomp"] == [1, 4]
+    # the FAILED reason is surfaced on stderr
+    assert "report coverage FAILED" in captured.err

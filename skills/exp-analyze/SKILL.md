@@ -148,6 +148,31 @@ Every finding is tagged:
 
 A finding with a numeric claim and `[CONFIDENCE: HIGH]` MUST cite a code-exec source, not a PNG.
 
+## Before drafting — the groups ARE the required table of contents (PRE-WRITE gate)
+
+Completeness is decided BEFORE a single sentence is written, not audited after.
+The dr-harder report failed THREE times the same way: the agent drafted what
+"looked important" by feel, then checked coverage afterward and found whole
+diagnostic groups missing. The `metrics.yaml` `groups` field exists to prevent
+exactly this — treat it as the report's required table of contents.
+
+Before drafting `report.md`:
+
+1. **Load the profile's `groups`** (`<root>/.omx/profile/metrics.yaml`, the `groups:`
+   mapping — e.g. tracking / reward_decomp / trpo / critic / encoder / constraint /
+   doraemon). These ARE the diagnostic families the report must cover.
+2. **Create one TodoWrite item PER GROUP** before writing prose. Each becomes a
+   report section you will satisfy with a code-exec number (not a hand-waved mention).
+   Do NOT pick metrics by feel — the groups are the coverage contract.
+3. **The metrics.yaml groups are the report's required table of contents, decided
+   before a single sentence is written — not an after-the-fact audit.** A group is
+   only droppable if it is genuinely N/A for this run, and only after the
+   "Verify the engine's output" cross-check below (an empty engine cell is NOT an
+   N/A — dump the raw TB tags first).
+
+This PRE-WRITE checklist is what actually prevents the skip; the `omx report-coverage`
+run in "When done" is the backstop that catches a checklist you didn't honor.
+
 ## Building the report (permanent tree, via the core — never hand-write paths)
 
 > **Grouped runs (purpose / experiment_name layer).** When a run lives under an extra
@@ -316,22 +341,33 @@ writes the spec → a later session reads it (see exp-design / the implement ste
 adapter is updated → the spec page is flipped to `[STATUS] implemented`. Do NOT edit the
 adapter yourself during analysis (exp-analyze never mutates code) — only record the spec.
 
-## Completeness gate — before you call the report done (GAP 4)
+## Completeness gate — the backstop (GAP 4); the PRE-WRITE checklist is the real fix
+
+The PRE-WRITE checklist ("Before drafting" above) is what prevents a skipped group.
+This lint is the BACKSTOP that catches a checklist you did not honor. Running it
+only AFTER writing — with no pre-write checklist — is the failure mode (dr-harder 3x):
+it caught nothing because the agent had already convinced itself the report was done.
 
 After writing `report.md`, run the coverage lint so a report that skipped a whole
-diagnostic group or never cited the engine cannot pass silently:
+diagnostic group or never cited the engine cannot pass silently. Run it in STRICT
+mode so a group named only once (when it has several metrics) is caught, not just a
+group skipped entirely:
 
-`omx report-coverage --path <output_root>/<group?>/<run_id>/analysis/<analysis_id>/report.md --root <root>`
+`omx report-coverage --path <output_root>/<group?>/<run_id>/analysis/<analysis_id>/report.md --root <root> --min-coverage 0.5`
 
 It reads the profile's optional `groups` (diagnostic-group → metrics) and
-`engine_markers`, and **loud-fails (non-zero exit)** if any declared diagnostic
-group has zero referenced metrics, or if no engine marker is cited (the report
-looks hand-extracted rather than engine-grounded). On failure: either add the
-missing group's analysis / run the engine and cite its output, OR — if a group is
-genuinely N/A for this run — state that explicitly in the report, then re-run the
-lint. Do not mark the report done while the lint fails without a stated reason.
-(If the profile declares neither field the lint is a vacuous pass — that is fine
-for a fresh workspace; consider proposing the fields as an engine-gap spec.)
+`engine_markers`, prints per-group `group_hits` (hit/total — so you see WHERE it is
+thin), and **loud-fails (non-zero exit)** if any declared diagnostic group is under-
+covered, or if no engine marker is cited (the report looks hand-extracted rather
+than engine-grounded). Without `--min-coverage` the lint is lenient (a group passes
+on a single referenced metric) — that lenient default is for back-compat, but for a
+real analysis use `--min-coverage 0.5` so shallow partial coverage fails. On failure:
+either fill the under-covered group with code-exec numbers / run the engine and cite
+its output, OR — if a group is genuinely N/A for this run — state that explicitly in
+the report, then re-run the lint. Do not mark the report done while the lint fails
+without a stated reason. (If the profile declares neither `groups` nor
+`engine_markers` the lint is a vacuous pass — that is fine for a fresh workspace;
+consider proposing the fields as an engine-gap spec.)
 
 A group is allowed to be "N/A for this run" ONLY after the cross-check above:
 "the engine reported it empty" is NOT a valid reason to skip a group. If the
@@ -344,6 +380,10 @@ cross-check rule stops "the engine said 0" from being used to wave the skip thro
 ## When done
 
 Tell the user where the report is (`<output_root>/<run_id>/analysis/<analysis_id>/report.md`),
-summarize the top findings (with their confidence), confirm the completeness gate
-passed (or the stated exceptions), and STOP. Do not propose or launch a next
-experiment — that is exp-design's job (#5).
+summarize the top findings (with their confidence), and **prove the completeness gate
+passed before declaring done** — show that `omx report-coverage ... --min-coverage 0.5`
+returned `ok: true` (or state the explicit, cross-checked N/A exceptions for any group
+it flagged). A report whose strict coverage lint fails is NOT done: fill the thin group
+and re-run. The PRE-WRITE per-group TodoWrite checklist ("Before drafting") is what
+should have prevented any failure here; this final lint is the backstop. Then STOP.
+Do not propose or launch a next experiment — that is exp-design's job (#5).

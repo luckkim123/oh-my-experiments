@@ -8,8 +8,10 @@ tokens yet cited ZERO engine DIAGNOSIS output — a count-only lint waves that
 through. So this checks TWO things, declared by the profile (the workspace owns
 the domain knowledge; the core owns the mechanism):
 
-- every diagnostic GROUP in profile['groups'] has >=1 of its metrics referenced
-  in the report (you touched each diagnostic family, not just the easy ones);
+- every diagnostic GROUP in profile['groups'] is covered: by default >=1 of its
+  metrics is referenced (you touched each diagnostic family, not just the easy
+  ones); under opt-in strict mode (min_coverage) a FRACTION of each group's tokens
+  must appear, catching a group named only once when it has several metrics;
 - if profile['engine_markers'] is declared, >=1 marker appears in the report
   (the analysis was grounded in the engine's output, not hand-extracted scalars).
 
@@ -53,21 +55,34 @@ def _referenced(token: str, haystack_lower: str) -> bool:
     return any(c in haystack_lower for c in candidates)
 
 
-def check_coverage(report_text: str, profile: dict) -> CoverageResult:
+def check_coverage(report_text: str, profile: dict,
+                   min_coverage: float | None = None) -> CoverageResult:
     """Lint a report.md's text against a profile's diagnostic groups + engine markers.
 
     profile['groups'] (optional): mapping {group_name: [metric, ...]} of non-empty
-    lists. Each group passes if ANY of its metrics is referenced in report_text.
-    profile['engine_markers'] (optional): list of marker strings (e.g. 'DIAGNOSIS',
-    'changepoint'); engine_cited is True iff >=1 appears in report_text. When a field
-    is absent its check is vacuously satisfied (back-compat). Loud-fails (OmxError) on
-    a malformed groups field — a typo in the profile must not silently disable the lint.
+    lists. profile['engine_markers'] (optional): list of marker strings (e.g.
+    'DIAGNOSIS', 'changepoint'); engine_cited is True iff >=1 appears in report_text.
+    When a field is absent its check is vacuously satisfied (back-compat). Loud-fails
+    (OmxError) on a malformed groups field — a typo in the profile must not silently
+    disable the lint.
+
+    min_coverage (optional, opt-in strict mode): None (default) keeps the lenient
+    back-compat rule — a group passes if ANY of its metrics is referenced (>=1 token),
+    so pre-existing workspaces are unaffected. A float in (0, 1] turns on strict mode:
+    a group passes only if at least ``max(1, ceil(total * min_coverage))`` of its
+    tokens are referenced, catching shallow partial coverage (a group with several
+    tokens but only one named). A value outside (0, 1] loud-fails (OmxError).
+    group_hits always reports per-group (hit, total) so the caller sees WHERE it is thin.
     """
+    if min_coverage is not None and not (0.0 < min_coverage <= 1.0):
+        raise OmxError(f"min_coverage must be in (0, 1], got {min_coverage!r}")
+
     text_lower = report_text.lower()
 
     groups = profile.get("groups")
     missing_groups: list[str] = []
     checked_groups: list[str] = []
+    group_hits: dict[str, tuple[int, int]] = {}
     if groups is not None:
         if not isinstance(groups, dict):
             raise OmxError(
@@ -78,7 +93,13 @@ def check_coverage(report_text: str, profile: dict) -> CoverageResult:
                 raise OmxError(
                     f"profile['groups'][{name!r}] must be a non-empty list of metrics")
             checked_groups.append(name)
-            if not any(_referenced(m, text_lower) for m in metrics):
+            total = len(metrics)
+            hits = sum(1 for m in metrics if _referenced(m, text_lower))
+            group_hits[name] = (hits, total)
+            # required hits: lenient (>=1) by default, ceil(total*frac) in strict mode.
+            # max(1, ...) so even a tiny frac never lets a group pass with zero hits.
+            required = 1 if min_coverage is None else max(1, math.ceil(total * min_coverage))
+            if hits < required:
                 missing_groups.append(name)
 
     markers = profile.get("engine_markers")
@@ -99,4 +120,5 @@ def check_coverage(report_text: str, profile: dict) -> CoverageResult:
         engine_cited=engine_cited,
         checked_groups=checked_groups,
         markers_declared=markers_declared,
+        group_hits=group_hits,
     )

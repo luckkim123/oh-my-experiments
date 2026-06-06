@@ -176,21 +176,39 @@ def test_min_coverage_none_is_lenient_default():
     assert res.ok is True  # one token per group is enough when not strict
 
 
+# groups shaped like the real workspace metrics.yaml (several tokens each) so the
+# strict-mode test reproduces the actual 3rd incident: a multi-token group named
+# only once. (The lenient _GROUPS above are 2-token, where ceil(2*0.5)=1 still
+# passes on one hit — that hides the very failure strict mode must catch.)
+_STRICT_GROUPS = {
+    "reward_decomp": ["Reward/att_rp", "Reward/lin_vel", "Reward/yaw_vel",
+                      "Reward/bias", "Reward/smoothness", "Reward/thruster", "Reward/torque"],
+    "trpo": ["entropy", "noise_std", "line_search_success", "kl",
+             "Policy/surrogate_loss", "Grad/actor_step", "Grad/sigma_step"],
+    "encoder": ["Encoder/z_std", "Encoder/z_min", "Encoder/z_max",
+                "Policy/encoder_grad_norm", "Grad/enc_step"],
+    "constraint": ["Constraint/margin/attitude"],  # single-token group
+}
+
+
 def test_strict_mode_fails_shallow_partial_coverage():
-    # THE 3rd incident: a report that names only one token in groups that have several.
-    # reward_decomp(7), trpo(7), critic(2), encoder(5) each get ONE token -> below 0.5.
+    # THE 3rd incident: a report that names only ONE token in groups that have several.
+    # reward_decomp(7), trpo(7), encoder(5) each get one token -> below 0.5 -> thin.
     report = (
-        "Reward/att_rp only. entropy only. cost_value only. Encoder/z_std only. "
-        "margin/attitude. doraemon_success_rate. [DIAGNOSIS] plateau."
+        "Reward/att_rp only. entropy only. Encoder/z_std only. "
+        "margin/attitude present. [DIAGNOSIS] plateau."
     )
-    res = check_coverage(report, _profile(groups=_GROUPS, markers=_MARKERS), min_coverage=0.5)
+    res = check_coverage(report, _profile(groups=_STRICT_GROUPS, markers=_MARKERS), min_coverage=0.5)
     assert res.ok is False
     # groups whose hit-fraction is below 0.5 are flagged as thin
-    assert "reward_decomp" in res.missing_groups
-    assert "trpo" in res.missing_groups
-    assert "encoder" in res.missing_groups
-    # single-token groups that ARE hit stay satisfied (1/1 >= any frac)
+    assert "reward_decomp" in res.missing_groups  # 1/7 < ceil(7*0.5)=4
+    assert "trpo" in res.missing_groups           # 1/7 < 4
+    assert "encoder" in res.missing_groups        # 1/5 < ceil(5*0.5)=3
+    # a single-token group that IS hit stays satisfied (1/1 >= max(1, ceil(1*0.5)))
     assert "constraint" not in res.missing_groups
+    # group_hits exposes exactly where it is thin
+    assert res.group_hits["reward_decomp"] == (1, 7)
+    assert res.group_hits["constraint"] == (1, 1)
 
 
 def test_strict_mode_passes_full_coverage():
@@ -203,9 +221,11 @@ def test_strict_mode_passes_full_coverage():
         "doraemon_success_rate, entropy_before, kl_step, ess_ratio. "
         "ss_error roll pitch vx vy vz yaw. [DIAGNOSIS] [TREND] changepoint plateau."
     )
-    res = check_coverage(report, _profile(groups=_GROUPS, markers=_MARKERS), min_coverage=0.5)
+    res = check_coverage(report, _profile(groups=_STRICT_GROUPS, markers=_MARKERS), min_coverage=0.5)
     assert res.ok is True
     assert res.missing_groups == []
+    assert res.group_hits["reward_decomp"] == (7, 7)  # full report names all tokens
+    assert res.group_hits["encoder"] == (5, 5)
 
 
 def test_strict_mode_single_token_group_needs_only_one():
