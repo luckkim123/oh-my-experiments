@@ -180,3 +180,65 @@ def test_merge_pages_absent_source_loud_fails(tmp_path):
     paths = OmxPaths(root=tmp_path)
     with pytest.raises(OmxError):
         gc.merge_pages(paths, into=into, from_slugs=["ghost.md"], now="2026-06-06T01:00:00")
+
+
+def _always_tracked(repo_root, file_path):
+    return True
+
+
+def _never_tracked(repo_root, file_path):
+    return False
+
+
+def test_apply_gc_deletes_and_merges_when_tracked(tmp_path):
+    paths = OmxPaths(root=tmp_path)
+    doomed = _seed_page(tmp_path, "Doomed")
+    into = _seed_page(tmp_path, "Keeper", content="keeper body")
+    src = _seed_page(tmp_path, "Dup", content="dup unique-xyz")
+    plan = gc.GcPlan(deletes=[doomed], merges=[{"into": into, "from": [src]}])
+    res = gc.apply_gc(paths, plan, now="2026-06-06T02:00:00",
+                      repo_root=tmp_path, git_check=_always_tracked)
+    assert res == {"deleted": [doomed], "merged": [{"into": into, "from": [src]}]}
+    assert not paths.wiki_page(doomed[:-3]).exists()
+    assert not paths.wiki_page(src[:-3]).exists()
+    assert "unique-xyz" in storage.read_page(paths, into).content
+
+
+def test_apply_gc_untracked_aborts_with_zero_changes(tmp_path):
+    paths = OmxPaths(root=tmp_path)
+    doomed = _seed_page(tmp_path, "Doomed Two")
+    plan = gc.GcPlan(deletes=[doomed])
+    with pytest.raises(OmxError):
+        gc.apply_gc(paths, plan, now="2026-06-06T02:00:00",
+                    repo_root=tmp_path, git_check=_never_tracked)
+    # the critical regression: nothing was deleted
+    assert paths.wiki_page(doomed[:-3]).exists()
+
+
+def test_apply_gc_missing_slug_aborts_with_zero_changes(tmp_path):
+    paths = OmxPaths(root=tmp_path)
+    keep = _seed_page(tmp_path, "Innocent")
+    plan = gc.GcPlan(deletes=["ghost.md", keep])
+    with pytest.raises(OmxError):
+        gc.apply_gc(paths, plan, now="2026-06-06T02:00:00",
+                    repo_root=tmp_path, git_check=_always_tracked)
+    # the innocent page that came AFTER the bad one must survive (validate-first)
+    assert paths.wiki_page(keep[:-3]).exists()
+
+
+def test_apply_gc_self_merge_aborts(tmp_path):
+    paths = OmxPaths(root=tmp_path)
+    s = _seed_page(tmp_path, "Selfish")
+    plan = gc.GcPlan(merges=[{"into": s, "from": [s]}])
+    with pytest.raises(OmxError):
+        gc.apply_gc(paths, plan, now="2026-06-06T02:00:00",
+                    repo_root=tmp_path, git_check=_always_tracked)
+    assert paths.wiki_page(s[:-3]).exists()
+
+
+def test_apply_gc_empty_plan_is_noop(tmp_path):
+    paths = OmxPaths(root=tmp_path)
+    _seed_page(tmp_path, "Untouched")
+    res = gc.apply_gc(paths, gc.GcPlan(), now="2026-06-06T02:00:00",
+                      repo_root=tmp_path, git_check=_never_tracked)
+    assert res == {"deleted": [], "merged": []}

@@ -162,3 +162,56 @@ def merge_pages(paths: OmxPaths, *, into: str, from_slugs: list, now: str) -> No
     storage.write_page(paths, merged, now=now)
     for fslug in froms:
         delete_page(paths, fslug)
+
+
+def apply_gc(paths: OmxPaths, plan: GcPlan, *, now: str, repo_root,
+             git_check=is_git_tracked) -> dict:
+    """Two-phase apply. Phase 1 validates the WHOLE plan (every slug exists and is
+    git-tracked; no self-merge) and mutates nothing on failure. Phase 2, under the
+    wiki lock, runs deletes then merges, then regenerates the index and logs. An
+    empty plan is a no-op (no lock). git_check is injected for testing; the CLI
+    passes is_git_tracked. The validate-first design makes a partial apply
+    impossible — the recovery guarantee plus atomicity of intent."""
+    if not plan.deletes and not plan.merges:
+        return {"deleted": [], "merged": []}
+
+    # ---- phase 1: validate everything, touch nothing ----
+    def _require(slug: str) -> None:
+        norm = _norm_slug(slug)
+        fp = paths.wiki_page(norm[:-3])
+        if not fp.exists():
+            raise WikiError(f"gc target {norm!r} does not exist")
+        if not git_check(repo_root, fp):
+            raise WikiError(
+                f"wiki gc-apply requires git tracking for recovery; {norm!r} is untracked")
+
+    for slug in plan.deletes:
+        _require(slug)
+    for merge in plan.merges:
+        into_norm = _norm_slug(merge["into"])
+        froms = [_norm_slug(s) for s in merge["from"]]
+        if into_norm in froms:
+            raise WikiError(f"self-merge: {into_norm!r} is both survivor and source")
+        _require(into_norm)
+        for f in froms:
+            _require(f)
+
+    # ---- phase 2: execute under the lock ----
+    def _do() -> dict:
+        for slug in plan.deletes:
+            delete_page(paths, slug)
+        for merge in plan.merges:
+            merge_pages(paths, into=merge["into"], from_slugs=merge["from"], now=now)
+        storage.update_index(paths, now=now)
+        n_del = len(plan.deletes)
+        n_merge = sum(len(m["from"]) for m in plan.merges)
+        storage.append_log(paths, now=now, operation="gc-apply",
+                           pages=[_norm_slug(s) for s in plan.deletes],
+                           summary=f"deleted {n_del}, merged {n_merge} source(s)")
+        return {
+            "deleted": [_norm_slug(s) for s in plan.deletes],
+            "merged": [{"into": _norm_slug(m["into"]),
+                        "from": [_norm_slug(s) for s in m["from"]]} for m in plan.merges],
+        }
+
+    return storage.with_wiki_lock(paths, _do)
