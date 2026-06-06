@@ -181,6 +181,11 @@ run in "When done" is the backstop that catches a checklist you didn't honor.
 > `omx promote-plots` AND as the keyword arg `group="<group>"` to every `OmxPaths` getter
 > (`report_md` / `report_ko_md` / `manifest_json` / `analysis_dir`), so the report lands
 > BESIDE the run instead of in a phantom flat dir. Omit it for flat layouts (the default).
+> **MUST: the group must contain ALL path segments between output_root and run_id.** For
+> RSL-RL runs the framework subdir is part of the group — pass `rsl_rl/<exp_name>/<purpose>`
+> (e.g. `rsl_rl/albc_trpo_teacher/dr_harder`), NOT just `<exp_name>/<purpose>`. Omitting
+> the framework segment silently drops the report into a sibling tree
+> (`experiments/albc_trpo_teacher/...` instead of `experiments/rsl_rl/albc_trpo_teacher/...`).
 > The group string is validated (alnum/_/- per segment, no traversal). The `omx wiki add
 > --from-report` path then becomes `<output_root>/<group>/<run_id>/analysis/<analysis_id>/report.md`.
 
