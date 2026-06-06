@@ -78,3 +78,21 @@ def parse_gc_proposal(raw: str) -> GcPlan:
                     and "into:" not in stripped and "reason:" not in stripped:
                 current["from"].append(_norm_slug(mf.group(1)))
     return GcPlan(deletes=deletes, merges=merges)
+
+import subprocess
+from pathlib import Path
+
+
+def is_git_tracked(repo_root, file_path) -> bool:
+    """True iff `file_path` is a git-tracked file under `repo_root`. No git, no
+    repo, or an untracked path all return False (never raises) — the caller turns
+    a False into the loud-fail. This is the recovery guarantee: gc-apply refuses
+    to delete anything git cannot restore."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files", "--error-unmatch", str(Path(file_path).resolve())],
+            capture_output=True, text=True, check=False,
+        )
+    except (FileNotFoundError, OSError):
+        return False
+    return proc.returncode == 0

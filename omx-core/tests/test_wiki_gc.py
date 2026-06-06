@@ -66,3 +66,35 @@ def test_parse_proposal_normalizes_bare_slugs():
     plan = gc.parse_gc_proposal(raw)
     assert plan.deletes == ["bare.md"]
     assert plan.merges == [{"into": "s.md", "from": ["f1.md"]}]
+
+
+import subprocess
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", *args], cwd=str(cwd), check=True,
+                   capture_output=True, text=True)
+
+
+def test_is_git_tracked_true_for_committed_file(tmp_path):
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "t@t")
+    _git(tmp_path, "config", "user.name", "t")
+    f = tmp_path / "a.txt"
+    f.write_text("hi", encoding="utf-8")
+    _git(tmp_path, "add", "a.txt")
+    _git(tmp_path, "commit", "-m", "x")
+    assert gc.is_git_tracked(tmp_path, f) is True
+
+
+def test_is_git_tracked_false_for_untracked_file(tmp_path):
+    _git(tmp_path, "init")
+    f = tmp_path / "b.txt"
+    f.write_text("hi", encoding="utf-8")
+    assert gc.is_git_tracked(tmp_path, f) is False
+
+
+def test_is_git_tracked_false_when_no_repo(tmp_path):
+    f = tmp_path / "c.txt"
+    f.write_text("hi", encoding="utf-8")
+    assert gc.is_git_tracked(tmp_path, f) is False
