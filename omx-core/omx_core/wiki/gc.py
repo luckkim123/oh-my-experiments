@@ -26,3 +26,55 @@ class GcPlan:
     """A parsed, not-yet-validated gc proposal."""
     deletes: list = field(default_factory=list)          # list[str] slug
     merges: list = field(default_factory=list)           # list[dict] {into:str, from:list[str]}
+
+import re
+
+_FM_RE = re.compile(r"\A---\n(.*?)\n---\n(.*)\Z", re.DOTALL)
+
+
+def parse_gc_proposal(raw: str) -> GcPlan:
+    """Parse a wiki-gc proposal markdown into a GcPlan. Loud-fail on a missing
+    '---' frontmatter block or a `kind` other than 'wiki-gc'. Structural only —
+    self-merge and missing-slug checks happen in apply_gc."""
+    normalized = raw.replace("\r\n", "\n")
+    m = _FM_RE.match(normalized)
+    if not m:
+        raise WikiError("gc proposal has no '---' frontmatter block")
+    fm, body = m.group(1), m.group(2)
+    kind = None
+    for line in fm.split("\n"):
+        if line.startswith("kind:"):
+            kind = line.split(":", 1)[1].strip()
+            break
+    if kind != "wiki-gc":
+        raise WikiError(f"gc proposal kind must be 'wiki-gc', got {kind!r}")
+
+    deletes: list = []
+    merges: list = []
+    section = None
+    current = None  # the in-progress merge dict
+    for line in body.split("\n"):
+        stripped = line.strip()
+        if stripped == "## DELETE":
+            section, current = "delete", None
+            continue
+        if stripped == "## MERGE":
+            section, current = "merge", None
+            continue
+        if section == "delete":
+            mm = re.match(r"-\s*slug:\s*(\S+)", stripped)
+            if mm:
+                deletes.append(_norm_slug(mm.group(1)))
+        elif section == "merge":
+            mi = re.match(r"-\s*into:\s*(\S+)", stripped)
+            if mi:
+                current = {"into": _norm_slug(mi.group(1)), "from": []}
+                merges.append(current)
+                continue
+            mf = re.match(r"-\s*(\S+)", stripped)
+            # an indented "- <slug>" under a "from:" belongs to the current merge;
+            # the literal "from:" line itself has no leading "-", so it's skipped
+            if current is not None and mf and not stripped.startswith("from:") \
+                    and "into:" not in stripped and "reason:" not in stripped:
+                current["from"].append(_norm_slug(mf.group(1)))
+    return GcPlan(deletes=deletes, merges=merges)
