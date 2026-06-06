@@ -43,8 +43,13 @@ def parse_findings(text: str) -> list[Finding]:
     """Parse all [FINDING]/[EVIDENCE]/[CONFIDENCE] triplets from report.md text.
 
     Non-tag lines between triplets are ignored (prose, headings, image refs).
-    Raises ReportParseError if a [FINDING] is not immediately followed (skipping
-    nothing) by a matching [EVIDENCE] then [CONFIDENCE], or if an orphan or
+    A [FINDING] claim may wrap across several prose lines (normal readable
+    report writing); the parser looks ahead to the next [EVIDENCE:] within the
+    block and joins the wrapped lines into one claim. Reaching another known tag
+    ([CONFIDENCE]/[FINDING]/a malformed [EVIDENCE]) or the end of the text
+    before any [EVIDENCE:] is a genuinely malformed block.
+    Raises ReportParseError if a [FINDING] has no following [EVIDENCE], if its
+    [EVIDENCE] is not followed by a valid [CONFIDENCE], or if an orphan or
     malformed [EVIDENCE]/[CONFIDENCE] appears with no open [FINDING].
     """
     findings: list[Finding] = []
@@ -65,18 +70,45 @@ def parse_findings(text: str) -> list[Finding]:
             # plain prose / heading / image ref between findings — skip
             i += 1
             continue
-        claim = m.group(1)
-        ev_line = lines[i + 1].strip() if i + 1 < n else ""
-        cf_line = lines[i + 2].strip() if i + 2 < n else ""
-        ev = _EVIDENCE.match(ev_line)
-        if not ev:
+        finding_line = i + 1  # 1-based line of the [FINDING], for error messages
+        claim_parts = [m.group(1)]
+        # Look ahead to the [EVIDENCE:] for this finding, joining wrapped claim
+        # lines. Any other known tag (or running off the end) before [EVIDENCE]
+        # means the block is malformed.
+        j = i + 1
+        ev = None
+        while j < n:
+            cand = lines[j].strip()
+            if not cand:
+                j += 1
+                continue
+            ev = _EVIDENCE.match(cand)
+            if ev:
+                break
+            if _ANY_TAG.match(cand):
+                # hit [FINDING]/[CONFIDENCE]/malformed [EVIDENCE] before evidence
+                raise ReportParseError(
+                    f"[FINDING] at line {finding_line} not followed by [EVIDENCE: ...] "
+                    f"(got {cand!r})")
+            # ordinary prose line: part of the wrapped claim
+            claim_parts.append(cand)
+            j += 1
+        if ev is None:
             raise ReportParseError(
-                f"[FINDING] at line {i + 1} not followed by [EVIDENCE: ...] (got {ev_line!r})")
+                f"[FINDING] at line {finding_line} not followed by [EVIDENCE: ...] "
+                f"(reached end of report)")
+        # j now indexes the [EVIDENCE:] line; [CONFIDENCE] must be the next
+        # non-empty line after it.
+        k = j + 1
+        while k < n and not lines[k].strip():
+            k += 1
+        cf_line = lines[k].strip() if k < n else ""
         cf = _CONFIDENCE.match(cf_line)
         if not cf:
             raise ReportParseError(
-                f"[FINDING] at line {i + 1} not followed by a valid "
+                f"[FINDING] at line {finding_line} not followed by a valid "
                 f"[CONFIDENCE: HIGH|MED|LOW] (got {cf_line!r})")
+        claim = " ".join(claim_parts)
         findings.append(Finding(claim=claim, evidence=ev.group(1), confidence=cf.group(1)))
-        i += 3
+        i = k + 1
     return findings

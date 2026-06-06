@@ -96,3 +96,106 @@ def test_valid_finding_after_a_first_triplet_still_parses():
     out = parse_findings(text)
     assert len(out) == 2
     assert out[1].claim == "second." and out[1].confidence == "LOW"
+
+
+# --- GAP 3: a [FINDING] whose claim wraps across multiple prose lines (normal
+# readable report writing) must still parse: lookahead to the next [EVIDENCE:]
+# within the block and join the wrapped claim lines, instead of requiring the
+# evidence on the very next line. Caught live: the dr-harder teacher report.md
+# had 6 multi-line [FINDING] blocks; --from-report printed 0 candidates + exit 2.
+
+
+def test_multiline_finding_claim_joins_and_parses():
+    text = (
+        "[FINDING] roll/pitch steady-state error grows sharply from none->hard while all\n"
+        "translational axes (vx/vy/vz/yaw) stay near-zero across every DR level.\n"
+        "[EVIDENCE: summary.json roll ss_error none 0.55 -> hard 1.10]\n"
+        "[CONFIDENCE: HIGH]\n"
+    )
+    out = parse_findings(text)
+    assert len(out) == 1
+    f = out[0]
+    # the two prose lines are joined into one claim (single space at the wrap)
+    assert f.claim == (
+        "roll/pitch steady-state error grows sharply from none->hard while all "
+        "translational axes (vx/vy/vz/yaw) stay near-zero across every DR level."
+    )
+    assert f.evidence == "summary.json roll ss_error none 0.55 -> hard 1.10"
+    assert f.confidence == "HIGH"
+
+
+def test_multiline_finding_three_wrap_lines():
+    text = (
+        "[FINDING] line one\n"
+        "line two\n"
+        "line three\n"
+        "[EVIDENCE: src]\n"
+        "[CONFIDENCE: MED]\n"
+    )
+    out = parse_findings(text)
+    assert len(out) == 1
+    assert out[0].claim == "line one line two line three"
+    assert out[0].confidence == "MED"
+
+
+def test_multiline_finding_among_other_findings():
+    text = (
+        "[FINDING] single line claim.\n"
+        "[EVIDENCE: a]\n[CONFIDENCE: HIGH]\n\n"
+        "[FINDING] a claim that wraps\n"
+        "onto a second line.\n"
+        "[EVIDENCE: b]\n[CONFIDENCE: LOW]\n"
+    )
+    out = parse_findings(text)
+    assert len(out) == 2
+    assert out[0].claim == "single line claim."
+    assert out[1].claim == "a claim that wraps onto a second line."
+    assert out[1].confidence == "LOW"
+
+
+def test_multiline_claim_with_blank_line_before_evidence_still_parses():
+    # a blank line inside the block (before the evidence) is tolerated, not joined
+    text = (
+        "[FINDING] claim first line\n"
+        "claim second line\n"
+        "\n"
+        "[EVIDENCE: src]\n"
+        "[CONFIDENCE: HIGH]\n"
+    )
+    out = parse_findings(text)
+    assert len(out) == 1
+    assert out[0].claim == "claim first line claim second line"
+
+
+def test_multiline_finding_hitting_confidence_before_evidence_loud_fails():
+    # if the lookahead reaches a [CONFIDENCE] (or another [FINDING]) before any
+    # [EVIDENCE], the block is genuinely malformed — must still loud-fail. This
+    # keeps test_finding_followed_by_prose_instead_of_evidence_loud_fails valid:
+    # wrapped prose that never reaches evidence is an error, not a claim.
+    text = (
+        "[FINDING] claim with wrapped prose\n"
+        "that never gets an evidence tag\n"
+        "[CONFIDENCE: HIGH]\n"
+    )
+    with pytest.raises(ReportParseError):
+        parse_findings(text)
+
+
+def test_multiline_finding_running_off_end_loud_fails():
+    text = (
+        "[FINDING] claim that wraps\n"
+        "and then the report just ends\n"
+    )
+    with pytest.raises(ReportParseError):
+        parse_findings(text)
+
+
+def test_multiline_finding_hitting_next_finding_before_evidence_loud_fails():
+    text = (
+        "[FINDING] first claim wraps\n"
+        "and never gets evidence\n"
+        "[FINDING] second claim.\n"
+        "[EVIDENCE: b]\n[CONFIDENCE: LOW]\n"
+    )
+    with pytest.raises(ReportParseError):
+        parse_findings(text)
