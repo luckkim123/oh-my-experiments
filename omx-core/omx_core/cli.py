@@ -106,6 +106,23 @@ def _cmd_reduce_summarize(args) -> int:
     return 0
 
 
+def _cmd_reduce_tb_final(args) -> int:
+    """Print named final-window means for the requested tags as JSON.
+
+    The general, raw-TB-no-hand-read home for citing per-term scalars (e.g. the
+    8 Reward/* decomposition terms). An absent tag loud-fails (lists available
+    tags) — never a silent 0 — so the caller cross-checks instead of asserting
+    'no data' (the engine-output-unverified trap this verb exists to prevent)."""
+    from omx_core.reduce.tb_final import final_window_means
+    res = _ingest(args.path, args.format)
+    try:
+        final = final_window_means(res.series, args.tag, window=args.window)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps({"window": args.window, "final": final}, allow_nan=False))
+    return 0
+
+
 def _cmd_session_id(args) -> int:
     sid = resolve_session_id(
         explicit=args.session_id,
@@ -452,6 +469,16 @@ def build_parser() -> argparse.ArgumentParser:
     prs.add_argument("--format", required=True)
     prs.add_argument("--cv-field", default="ss_error", dest="cv_field")
     prs.set_defaults(func=_cmd_reduce_summarize)
+
+    prt = rsub.add_parser(
+        "tb-final", help="named final-window means for a tag list (TB/series source)")
+    prt.add_argument("--path", required=True, help="series source (TB event file / npz / wandb)")
+    prt.add_argument("--format", required=True, help="ingest format (e.g. tensorboard)")
+    prt.add_argument("--tag", action="append", default=[], dest="tag",
+                     help="scalar tag to reduce (repeatable)")
+    prt.add_argument("--window", type=int, default=200,
+                     help="trailing samples to average (default 200)")
+    prt.set_defaults(func=_cmd_reduce_tb_final)
 
     ps = sub.add_parser("session-id", help="resolve session id (flag>env>autogen)")
     ps.add_argument("--session-id", default=None, dest="session_id")
