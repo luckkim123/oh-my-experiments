@@ -1,60 +1,60 @@
-# OMX 작업 핸드오프 (2026-05-30)
+# OMX Work Handoff (2026-05-30)
 
-> 다음 세션/compact 이후: 이 파일 + `docs/design/2026-05-30-omx-experiment-harness-design.md`(진실원)만
-> 읽으면 이어서 작업 가능. build-order별 실행 계획은 `docs/superpowers/plans/`.
+> Next session / after compact: reading just this file + `docs/design/2026-05-30-omx-experiment-harness-design.md` (source of truth)
+> is enough to continue. The per-build-order execution plans are in `docs/superpowers/plans/`.
 
-## 현재 상태 (요약)
+## Current State (summary)
 
-레포 `<repo>`. **OMX v0.1 = 전 build-order(#0~#8) DONE + #7 finalize/deploy + 배포 검증 완료 (2026-05-31).** working tree clean, origin/main synced (0 unpushed).
+Repo `<repo>`. **OMX v0.1 = all build-orders (#0~#8) DONE + #7 finalize/deploy + deployment verification complete (2026-05-31).** working tree clean, origin/main synced (0 unpushed).
 
 ### v0.1 SHIPPED (2026-05-31)
-- **#7 deploy DONE + 검증 PASS.** 등록 인프라(전부 push됨): omx repo PUBLIC · omha `cards/omx.json` + 라우팅(`8790bf9`) · claudebase settings.json(`oh-my-experiments@omx` + extraKnownMarketplaces `omx`) + install.sh OMX 블록(`d16e270`) + OMC v4.14.4 핀(`e7f6121`). OMX repo 39 커밋(#5/#6/#8+docs) push 완료(`fe3ee80..d37eb1e`, 유저 승인).
-- **배포 검증(end-to-end) PASS:** (a) anonymous clone from public origin OK; (b) fresh `pip install -e` cloned omx-core → `omx` console entry at `/usr/local/bin/omx`, 전 verb(core 10 + wiki) 노출; (c) **wiki 4-verb e2e smoke**(add→list→query→lint, 격리 root): latin+CJK(한국어 '롤') query 둘 다 hit, append-merge `{"action":"updated"}`(덮어쓰기 0·손실 0, disk에 원본+append 공존 `## Update` 섹션), lint broken-ref 정확 감지; (d) 4 skill SKILL.md frontmatter(name+description) 전부 valid=discover 가능; (e) leak-scan 0건(private 경로/repo명/domain 용어 없음 — `isaaclab`은 의도된 default profile-name/reference stub뿐). dev editable install source-of-truth로 복구, 366 passed/1 skipped 회귀 없음.
-- **OMX v0.1 COMPLETE.** 다음 작업 = post-v0.1(새 요청 대기). 후속 후보: §9 open items(score-formula 실프로필 elicit, 1-GPU vs tournament, MCP 승격 트리거), legacy results 마이그레이션.
+- **#7 deploy DONE + verification PASS.** Registration infra (all pushed): omx repo PUBLIC · omha `cards/omx.json` + routing (`8790bf9`) · claudebase settings.json (`oh-my-experiments@omx` + extraKnownMarketplaces `omx`) + install.sh OMX block (`d16e270`) + OMC v4.14.4 pin (`e7f6121`). OMX repo 39 commits (#5/#6/#8+docs) pushed (`fe3ee80..d37eb1e`, user-approved).
+- **Deployment verification (end-to-end) PASS:** (a) anonymous clone from public origin OK; (b) fresh `pip install -e` of cloned omx-core → `omx` console entry at `/usr/local/bin/omx`, all verbs (core 10 + wiki) exposed; (c) **wiki 4-verb e2e smoke** (add→list→query→lint, isolated root): both latin+CJK (Korean 'roll') queries hit, append-merge `{"action":"updated"}` (0 overwrites · 0 loss, original + append coexist on disk in a `## Update` section), lint correctly detects broken-ref; (d) all 4 skill SKILL.md frontmatters (name+description) valid = discoverable; (e) leak-scan 0 hits (no private paths / repo names / domain terms — `isaaclab` is only the intended default profile-name/reference stub). Restored dev editable install as source-of-truth, 366 passed / 1 skipped, no regression.
+- **OMX v0.1 COMPLETE.** Next work = post-v0.1 (awaiting new request). Follow-up candidates: §9 open items (score-formula real-profile elicit, 1-GPU vs tournament, MCP promotion trigger), legacy results migration.
 
-### (히스토리) 원래 이번 세션 범위
-레포 `<repo>`. **#2 작업 브랜치 `feat/omx-evaluator`** (main 미병합, 8 commit `bc07337..c681b52`). working tree clean.
-**이번 세션 범위 = #2 구현 + (이후) public 전환 + claudebase/marketplace 등록 + push.** push는 유저가 이번 세션에 명시 요청함(원래 "push 안 함" 철회됨) — 단 #2 검토 완료 후 배포 단계에서 묶어서.
+### (History) Original scope of this session
+Repo `<repo>`. **#2 work branch `feat/omx-evaluator`** (not merged into main, 8 commits `bc07337..c681b52`). working tree clean.
+**This session's scope = #2 implementation + (afterward) public transition + claudebase/marketplace registration + push.** Push was explicitly requested by the user this session (the original "don't push" was retracted) — but bundled in the deploy step after #2 review is complete.
 
-### 완료된 build-order
-- **#0 `omx_paths.py`** — path single-source-of-truth. 6 TDD task, merge됨 (`65fe813`).
-- **#1 omx-core skeleton** — ingest + reduce + CLI + state.json. 11 TDD task + 2단 리뷰 + opus 최종 리뷰 ✅ MERGE-READY. merge됨. **160 tests pass.**
-- **#2 evaluator-contract runner + Isaac Lab reference** — ✅ **MERGE-READY** (브랜치 `feat/omx-evaluator`, 미병합·미push). 7 TDD task, 각 spec+quality 2단 리뷰 통과(fix 0라운드) + opus 최종 cross-cutting 리뷰 라이브검증 MERGE-READY. **221 passed / 1 skipped.** 계획=`docs/superpowers/plans/2026-05-30-omx-evaluator-runner.md`(4-렌즈 적대리뷰 SOUND, 커밋 `c681b52`).
-  - 만든 것: `evaluator.py`(parse_evaluator_result loud-fail + run_evaluator subprocess LAST-line fault-recorded) / `decision.py`(parse_keep_policy + decide_outcome keep/discard/ambiguous/bootstrap, B5) / `ledger.py`(trio writers + seed_ledger 불변 baseline + record_iteration B6 pointer) / `reference/isaaclab/evaluator.sh`(pass_only stub) / `omx_paths.py`(+OmxError base, +reference_dir/reference_evaluator/checkpoint_pointer_json) / `cli.py`(+`omx eval`).
-  - **B6 LOCKED**: config→git SHA(baseline_commit 불변 anchor + last_kept_commit) / weights→last_kept_checkpoint 포인터(keep advance, 非keep leave, weight 파일에 git/rm 절대 없음). checkpoint-pointer.json mirror(ledger authoritative).
-  - opus가 남긴 **Minor 1건(미적용, defer 가능)**: `omx eval`이 non-finite score를 strict-JSON 위반 `NaN`으로 출력(형제 `_cmd_reduce_summarize`엔 `allow_nan=False` 가드 있음). pass_only 경로 안 닿고 크래시 없음 → #3(score formula)에서 `_is_number`에 `math.isfinite` + `_cmd_eval`에 allow_nan=False.
+### Completed build-orders
+- **#0 `omx_paths.py`** — path single-source-of-truth. 6 TDD tasks, merged (`65fe813`).
+- **#1 omx-core skeleton** — ingest + reduce + CLI + state.json. 11 TDD tasks + 2-stage review + opus final review ✅ MERGE-READY. merged. **160 tests pass.**
+- **#2 evaluator-contract runner + Isaac Lab reference** — ✅ **MERGE-READY** (branch `feat/omx-evaluator`, not merged · not pushed). 7 TDD tasks, each passed spec+quality 2-stage review (0 fix rounds) + opus final cross-cutting review live-verified MERGE-READY. **221 passed / 1 skipped.** plan = `docs/superpowers/plans/2026-05-30-omx-evaluator-runner.md` (4-lens adversarial review SOUND, commit `c681b52`).
+  - What it builds: `evaluator.py` (parse_evaluator_result loud-fail + run_evaluator subprocess LAST-line fault-recorded) / `decision.py` (parse_keep_policy + decide_outcome keep/discard/ambiguous/bootstrap, B5) / `ledger.py` (trio writers + seed_ledger immutable baseline + record_iteration B6 pointer) / `reference/isaaclab/evaluator.sh` (pass_only stub) / `omx_paths.py` (+OmxError base, +reference_dir/reference_evaluator/checkpoint_pointer_json) / `cli.py` (+`omx eval`).
+  - **B6 LOCKED**: config→git SHA (baseline_commit immutable anchor + last_kept_commit) / weights→last_kept_checkpoint pointer (keep advances, non-keep leaves, never any git/rm on weight files). checkpoint-pointer.json mirror (ledger authoritative).
+  - **One Minor left by opus (not applied, can defer)**: `omx eval` outputs a non-finite score as the strict-JSON-violating `NaN` (the sibling `_cmd_reduce_summarize` has an `allow_nan=False` guard). Doesn't touch the pass_only path and doesn't crash → in #3 (score formula) add `math.isfinite` to `_is_number` + `allow_nan=False` to `_cmd_eval`.
 
-### #1이 만든 것 (omx-core/omx_core/)
-- `omx_paths.py` (#0) — cache 확장자만 `.parquet`→`.npz`로 수정 (pyarrow 부재).
-- `state.py` — `.omx/state.json` 스키마 + atomic load/save (loop #6이 필드 채움).
-- `ingest/` — `IngestResult`/`SummaryRecord`(long-form) + `IngestAdapter` ABC; `EvalSummaryAdapter`(eval_dr summary.json), `LongFormCsvAdapter`(flat CSV), `WandbAdapter`(offline `.wandb` datastore parse) / `TensorboardAdapter`(EventAccumulator) — real adapters as of build #4, heavy imports deferred.
-- `reduce/` — `summarize`(to_dataframe + add_cv=std/mean, 03-analysis-quality 룰), `series`(load_npz + downsample axis-0 stride), `plot`(headless Agg PNG, width cap), `cache`(atomic npz, np.savez file-object form).
-- `cli.py` — `omx` CLI: `ingest` / `reduce summarize` / `session-id`(flag>env>autogen B2). console script 등록됨.
+### What #1 builds (omx-core/omx_core/)
+- `omx_paths.py` (#0) — only the cache extension changed `.parquet`→`.npz` (pyarrow absent).
+- `state.py` — `.omx/state.json` schema + atomic load/save (loop #6 fills the fields).
+- `ingest/` — `IngestResult`/`SummaryRecord` (long-form) + `IngestAdapter` ABC; `EvalSummaryAdapter` (eval_dr summary.json), `LongFormCsvAdapter` (flat CSV), `WandbAdapter` (offline `.wandb` datastore parse) / `TensorboardAdapter` (EventAccumulator) — real adapters as of build #4, heavy imports deferred.
+- `reduce/` — `summarize` (to_dataframe + add_cv=std/mean, 03-analysis-quality rule), `series` (load_npz + downsample axis-0 stride), `plot` (headless Agg PNG, width cap), `cache` (atomic npz, np.savez file-object form).
+- `cli.py` — `omx` CLI: `ingest` / `reduce summarize` / `session-id` (flag>env>autogen B2). console script registered.
 
-**검증:** `cd omx-core && python3 -m pytest tests/ -q` → **160 passed**. 순수 stdlib + numpy/pandas/matplotlib/pyyaml. Claude/Isaac/network 0 의존. opus 최종: 0 Critical/Important, coherence/path-SSOT/loud-fail 감사 전부 PASS.
+**Verification:** `cd omx-core && python3 -m pytest tests/ -q` → **160 passed**. Pure stdlib + numpy/pandas/matplotlib/pyyaml. 0 dependency on Claude/Isaac/network. opus final: 0 Critical/Important, coherence/path-SSOT/loud-fail audits all PASS.
 
-### 실제 데이터 ground-truth (검증됨 — #4에서 재사용)
-- eval_dr `summary.json` = `{dr_level: {axis: {field: float}}}`. dr_level∈{none,soft,medium,hard}, axis∈{roll,pitch,vx,vy,vz,yaw,att_norm(4필드만), survival_pct(스칼라)}, full axis=15필드.
+### Real-data ground-truth (verified — reused in #4)
+- eval_dr `summary.json` = `{dr_level: {axis: {field: float}}}`. dr_level∈{none,soft,medium,hard}, axis∈{roll,pitch,vx,vy,vz,yaw,att_norm (4 fields only), survival_pct (scalar)}, full axis = 15 fields.
 - `data_*.npz` = trajectory (7750,4)=(timesteps,n_envs) + target (7750,) + time_to_failure (4,).
-- pyarrow 미설치 → cache는 `.npz`.
+- pyarrow not installed → cache is `.npz`.
 
-### 다음에 할 일 (이번 세션 — compact 후 즉시 재개)
-**배포 단계 (유저 요청, #2 검토 완료 후 묶어서):** 순서 = (a) `feat/omx-evaluator` → main 병합(finishing-a-development-branch, merge-local) → (b) omx repo public 전환 → (c) claudebase + marketplace 등록 → (d) push 3곳. **전부 outward-facing/비가역이라 실행 직전 1줄 confirm.**
+### What to do next (this session — resume immediately after compact)
+**Deploy step (user request, bundled after #2 review is complete):** order = (a) `feat/omx-evaluator` → merge into main (finishing-a-development-branch, merge-local) → (b) transition omx repo to public → (c) claudebase + marketplace registration → (d) push to 3 places. **All outward-facing / irreversible, so a 1-line confirm right before execution.**
 
-**등록 메커니즘 (recon 완료 — 정확한 파일·명령):**
-- omx repo: `github.com/luckkim123/oh-my-experiments` 현재 **PRIVATE** → `gh repo edit luckkim123/oh-my-experiments --visibility public`.
-- omha 카드: `<plugins>/marketplaces/heroacademia/cards/omx.json` 신규작성(design §6 내용 그대로) — glob 발견이라 index 편집 불필요. heroacademia는 **shallow clone**(push는 됨), remote=`luckkim123/oh-my-heroacademia`. 추가로 그 repo `.claude-plugin/marketplace.json`에 oh-my-experiments entry.
-- OMX manifest: `<repo>/.claude-plugin/{plugin.json,marketplace.json}` 신규(skills 배열 `[]` — #3~#6 전). plugin.json: name=oh-my-experiments, version 0.1.0.
-- claudebase(`<claudebase>`, remote=`luckkim123/claudebase`): `config/settings.json`(enabledPlugins `"oh-my-experiments@omx": true` + extraKnownMarketplaces `omx`) + `installer/install.sh`(OMX marketplace block + OMC 버전핀 `pin_omc_version()`; 현재 OMC 4.14.1 설치/4.14.4 캐시 — **핀 버전 유저확인 필요**, sync_plugins는 version 미추적이라 installed_plugins.json 직접 읽는 별도 함수).
-- push 3곳: oh-my-experiments(full clone) + oh-my-heroacademia(shallow) + claudebase.
+**Registration mechanism (recon complete — exact files · commands):**
+- omx repo: `github.com/luckkim123/oh-my-experiments` currently **PRIVATE** → `gh repo edit luckkim123/oh-my-experiments --visibility public`.
+- omha card: `<plugins>/marketplaces/heroacademia/cards/omx.json` newly authored (design §6 content verbatim) — glob discovery, so no index edit needed. heroacademia is a **shallow clone** (push works), remote=`luckkim123/oh-my-heroacademia`. Additionally add an oh-my-experiments entry to that repo's `.claude-plugin/marketplace.json`.
+- OMX manifest: `<repo>/.claude-plugin/{plugin.json,marketplace.json}` new (skills array `[]` — before #3~#6). plugin.json: name=oh-my-experiments, version 0.1.0.
+- claudebase (`<claudebase>`, remote=`luckkim123/claudebase`): `config/settings.json` (enabledPlugins `"oh-my-experiments@omx": true` + extraKnownMarketplaces `omx`) + `installer/install.sh` (OMX marketplace block + OMC version pin `pin_omc_version()`; currently OMC 4.14.1 installed / 4.14.4 cached — **pin version needs user confirmation**, sync_plugins doesn't track version so this is a separate function that reads installed_plugins.json directly).
+- push to 3 places: oh-my-experiments (full clone) + oh-my-heroacademia (shallow) + claudebase.
 
-**이후 (다음 세션 — design §8 DAG):** #3~#8 전부 DONE → **#7 마무리**(cards/omx.json + omha 등록 + claudebase installer + OMC 버전핀; design §8 #7). #8 workspace-specialization wiki DONE (omx_core/wiki/ + omx wiki verbs, 365 passed/1 skipped).
+**Afterward (next session — design §8 DAG):** #3~#8 all DONE → **#7 finalize** (cards/omx.json + omha registration + claudebase installer + OMC version pin; design §8 #7). #8 workspace-specialization wiki DONE (omx_core/wiki/ + omx wiki verbs, 365 passed / 1 skipped).
 
-- **#4 exp-analyze — DONE + MERGED + PUSHED** (merged to `main` via no-ff `43963f9`, pushed to origin/main; branch `feat/omx-exp-analyze` deleted). 만든 것: `TensorboardAdapter`(EventAccumulator 실구현) + `WandbAdapter`(offline `.wandb` datastore parse) — stub→real, heavy imports deferred, both emit a `_step/<key>` x-axis companion (one adapter contract; FINAL-review fix `a3020b6`); `load_profile`(metrics.yaml→Profile, B1 vocabulary tier 활성화); B3 plot promotion 코어(`reduce/promote.py`) + `omx plot` / `omx promote-plots` CLI verbs; `analyze` optional-deps extra + import-safety guard 테스트; `skills/exp-analyze/SKILL.md`(§5 hybrid router: code-exec 정확수치/PNG-vision shape/overlay/eval JSON, evidence tags [FINDING]/[EVIDENCE]/[CONFIDENCE], atomic_path 경유 report.md/manifest.json 영구트리 기록). **278 passed / 1 skipped.** plugin.json 에 2개 skills 등록(exp-init + exp-analyze); FINAL opus review = MERGE_READY. NEXT = #5 exp-design.
+- **#4 exp-analyze — DONE + MERGED + PUSHED** (merged to `main` via no-ff `43963f9`, pushed to origin/main; branch `feat/omx-exp-analyze` deleted). What it builds: `TensorboardAdapter` (EventAccumulator real implementation) + `WandbAdapter` (offline `.wandb` datastore parse) — stub→real, heavy imports deferred, both emit a `_step/<key>` x-axis companion (one adapter contract; FINAL-review fix `a3020b6`); `load_profile` (metrics.yaml→Profile, activates B1 vocabulary tier); B3 plot-promotion core (`reduce/promote.py`) + `omx plot` / `omx promote-plots` CLI verbs; `analyze` optional-deps extra + import-safety guard tests; `skills/exp-analyze/SKILL.md` (§5 hybrid router: code-exec for exact numbers / PNG-vision for shape/overlay/eval JSON, evidence tags [FINDING]/[EVIDENCE]/[CONFIDENCE], persistent-tree records report.md/manifest.json via atomic_path). **278 passed / 1 skipped.** 2 skills registered in plugin.json (exp-init + exp-analyze); FINAL opus review = MERGE_READY. NEXT = #5 exp-design.
 
-- **#5 exp-design — DONE** (branch `feat/omx-exp-design`, 미병합·미push). 만든 것: 코어 `omx_core/report.py`(`Finding` 데이터클래스 + `parse_findings(text)->list[Finding]` — exp-analyze report.md의 `[FINDING]`/`[EVIDENCE]`/`[CONFIDENCE]` triplet 파서; orphan·malformed·bad-keyword 태그 런은 `ReportParseError` loud-fail, `_ANY_TAG` 가드로 silent-drop 차단) + `omx report-parse` CLI verb(Claude-free, rc 0 + `{n_findings, findings:[]}` / rc 2 loud-fail) + `Finding`/`parse_findings`/`ReportParseError` export. `skills/exp-design/SKILL.md`(3-lane 차별 진단: code-path / config-DR-hyperparam / measurement-artifact — OMC trace 패턴 재구현 → evidence FOR/AGAINST + critical unknown per lane → 가장 싼 discriminating probe = 다음 실험; report는 `omx report-parse`로만 읽고 hand-parse 금지; proposal은 기존 `proposal_md` getter + `atomic_path`로 `proposals/<TS>-next.md` 영구트리에 pending-approval로 기록; hard gate = 훈련/eval 자동발사 금지·one-variable·모든 숫자 finding 추적). **새 코어 path 코드 0**(proposal_md/atomic_path 재사용). **292 passed / 1 skipped.** 각 task spec+quality 2단 리뷰 통과(T2 orphan bad-keyword fix + T3 with-open/zero-findings polish). plugin.json skills = [exp-init, exp-analyze, exp-design] 3개. NEXT = **#6 exp-loop**(여기서 #2 Minor NaN 가드도 처리).
+- **#5 exp-design — DONE** (branch `feat/omx-exp-design`, not merged · not pushed). What it builds: core `omx_core/report.py` (`Finding` dataclass + `parse_findings(text)->list[Finding]` — parser for exp-analyze report.md's `[FINDING]`/`[EVIDENCE]`/`[CONFIDENCE]` triplets; orphan · malformed · bad-keyword tag runs loud-fail with `ReportParseError`, the `_ANY_TAG` guard blocks silent-drop) + `omx report-parse` CLI verb (Claude-free, rc 0 + `{n_findings, findings:[]}` / rc 2 loud-fail) + `Finding`/`parse_findings`/`ReportParseError` export. `skills/exp-design/SKILL.md` (3-lane differential diagnosis: code-path / config-DR-hyperparam / measurement-artifact — re-implements the OMC trace pattern → evidence FOR/AGAINST + critical unknown per lane → cheapest discriminating probe = next experiment; report is read only via `omx report-parse`, hand-parse forbidden; proposal recorded via the existing `proposal_md` getter + `atomic_path` to `proposals/<TS>-next.md` in the persistent tree as pending-approval; hard gate = no auto-fire of training/eval · one-variable · track every numeric finding). **0 new core path code** (reuses proposal_md/atomic_path). **292 passed / 1 skipped.** Each task passed spec+quality 2-stage review (T2 orphan bad-keyword fix + T3 with-open/zero-findings polish). plugin.json skills = [exp-init, exp-analyze, exp-design], 3 total. NEXT = **#6 exp-loop** (also handles the #2 Minor NaN guard here).
 
-- **#6 exp-loop — DONE + on local main (미push)** (이 세션들은 main 직접 커밋 패턴; 별도 feature branch 없음, origin/main 대비 21 ahead). 만든 것: 코어 `omx_core/loop.py`(`compute_deadline`/`deadline_passed` — pure·time-injected deadline ceiling, caller가 ISO now 주입해 wall-clock 없이 테스트 가능; `queue_pending_launch`/`read_pending_launch` — `runs/<id>/pending-launch.json` atomic write, status='pending approval', corrupt-JSON loud-fail) + `omx_paths.pending_launch_json(run_id)` getter(유일한 새 path) + `omx queue-launch`(real-clock 주입 후 큐잉, **절대 launch 안 함**)/`omx loop-status`(`--max-runtime`로 compute_deadline 호출해 deadline_passed + pending_launch JSON 보고; explicit `--deadline` 우선) CLI verbs + `omx_core` export. `skills/exp-loop/SKILL.md`(analyze[exp-analyze]→design[exp-design]→eval[omx eval]→keep/discard[decision]→log[ledger]→queue-launch→stop/repeat 오케스트레이터; "퇴근 토글" deadline은 analyze/design/eval만 게이트; 훈련 launch는 `omx queue-launch`로 pending-approval 큐잉만, **자동발사 절대 금지** D4/B8; keep/discard target = config git-revert 명령 surface(자동실행 금지)+checkpoint 포인터 B6; no-max-runtime이면 단일패스 안전기본). **새 훈련 launch 0, NaN 가드는 #3에서 이미 처리됨(여기 작업 아님).** **314 passed / 1 skipped.** 각 task spec+quality 2단 리뷰 통과(T3 corrupt-JSON 테스트, T5 loud-fail try-block, T6 deadline-compute 갭 = 리뷰가 잡은 실결함 fix). plugin.json skills = [exp-init, exp-analyze, exp-design, exp-loop] **4개 완성**. NEXT = **#7 마무리**(omha card + claudebase 등록; **claudebase 등록 전 `git pull` 필수** — 유저 지시, memory `claudebase-pull-before-register`).
+- **#6 exp-loop — DONE + on local main (unpushed)** (these sessions follow a commit-directly-to-main pattern; no separate feature branch, 21 ahead of origin/main). What it builds: core `omx_core/loop.py` (`compute_deadline`/`deadline_passed` — pure · time-injected deadline ceiling, caller injects ISO now so it's testable without a wall-clock; `queue_pending_launch`/`read_pending_launch` — `runs/<id>/pending-launch.json` atomic write, status='pending approval', corrupt-JSON loud-fail) + `omx_paths.pending_launch_json(run_id)` getter (the only new path) + `omx queue-launch` (queues after injecting a real clock, **never launches**) / `omx loop-status` (calls compute_deadline via `--max-runtime` to report deadline_passed + pending_launch JSON; explicit `--deadline` takes priority) CLI verbs + `omx_core` export. `skills/exp-loop/SKILL.md` (analyze[exp-analyze]→design[exp-design]→eval[omx eval]→keep/discard[decision]→log[ledger]→queue-launch→stop/repeat orchestrator; the "leave-work toggle" deadline gates only analyze/design/eval; training launch is only queued as pending-approval via `omx queue-launch`, **auto-fire absolutely forbidden** D4/B8; keep/discard target = surface the config git-revert command (no auto-exec) + checkpoint pointer B6; no-max-runtime defaults safely to a single pass). **0 new training launches, the NaN guard was already handled in #3 (not work here).** **314 passed / 1 skipped.** Each task passed spec+quality 2-stage review (T3 corrupt-JSON test, T5 loud-fail try-block, T6 deadline-compute gap = a real defect the review caught, fixed). plugin.json skills = [exp-init, exp-analyze, exp-design, exp-loop] **4 complete**. NEXT = **#7 finalize** (omha card + claudebase registration; **`git pull` required before claudebase registration** — user instruction, memory `claudebase-pull-before-register`).
 
 - **#8 workspace-wiki — DONE + on local main (unpushed)** (2026-05-31). Core
   `omx_core/wiki/{types,storage,ingest,query,lint}.py` (OMC wiki re-implemented in
@@ -67,25 +67,25 @@
   plan `docs/superpowers/plans/2026-05-31-omx-workspace-wiki.md`. Suite 365 passed,
   1 skipped. NEXT = #7 finalize (deploy; claudebase pull-first).
 
-- **#3 exp-init — DONE** (branch `feat/omx-exp-init`, 미병합·미push). 만든 것: `omx_core/profile.py`(`validate_metrics_schema` loud-fail 검증 + `bootstrap_profile` atomic 4-file write + `default_metrics`) + `omx init` CLI verb(profile.bootstrap의 thin entry, rc 0/2) + `skills/exp-init/SKILL.md`(deep-interview 3-dim 게이트 재구현: Goal 0.40/Criteria 0.30/Constraints 0.30, threshold 0.2; 5 토픽→3 dim 매핑 §4.1; AskUserQuestion 대신 prose 번호옵션; `omx init` 핸드오프 + pending-approval hard gate) + plugin.json 등록. **부수 수정**: `main()`이 string-coded SystemExit 메시지를 stderr로 surface(이전엔 rc=2에 메시지 손실 — loud-fail 위반이었음, build #3 리뷰에서 발견). **252 passed / 1 skipped.** 각 task spec+quality 2단 리뷰 통과. NEXT = #4 exp-analyze(PNG-vision, WandB/TB 어댑터 실구현; profile의 vocabulary tier 활성화).
-  - 참고: line 17의 "#3에서 `_cmd_eval` allow_nan=False 처리" Minor는 이미 해결됨(`2191736`에서 `_cmd_eval`에 `allow_nan=False` 들어감). 그 항목은 stale.
+- **#3 exp-init — DONE** (branch `feat/omx-exp-init`, not merged · not pushed). What it builds: `omx_core/profile.py` (`validate_metrics_schema` loud-fail validation + `bootstrap_profile` atomic 4-file write + `default_metrics`) + `omx init` CLI verb (thin entry to profile.bootstrap, rc 0/2) + `skills/exp-init/SKILL.md` (re-implements the deep-interview 3-dim gate: Goal 0.40/Criteria 0.30/Constraints 0.30, threshold 0.2; 5-topic→3-dim mapping §4.1; prose numbered options instead of AskUserQuestion; `omx init` handoff + pending-approval hard gate) + plugin.json registration. **Side fix**: `main()` surfaces string-coded SystemExit messages to stderr (previously rc=2 lost the message — a loud-fail violation, found in the build #3 review). **252 passed / 1 skipped.** Each task passed spec+quality 2-stage review. NEXT = #4 exp-analyze (PNG-vision, real WandB/TB adapters; activates the profile's vocabulary tier).
+  - Note: the line 17 "handle `_cmd_eval` allow_nan=False in #3" Minor is already resolved (`allow_nan=False` went into `_cmd_eval` in `2191736`). That item is stale.
 
-### opus가 남긴 #1 Minor (전부 polish, 미적용 — 의도)
-M1 csv/eval float() 에러에 row/file 컨텍스트 없음(이미 loud-fail) · M2 session-id 초단위(pid로 충분) · M3 plot docstring "cap"이 tight-bbox에선 근사 · M4 dep 상한 없음(research tool엔 정상). 모두 future-hardening, 차단 아님.
+### #1 Minors left by opus (all polish, not applied — intentional)
+M1 csv/eval float() errors lack row/file context (already loud-fail) · M2 session-id second-granularity (pid is enough) · M3 plot docstring "cap" is approximate under tight-bbox · M4 no dep upper bound (normal for a research tool). All future-hardening, not blockers.
 
-## 환경 함정 (이미 데인 것들)
-- `python` = Isaac Sim 래퍼. **반드시 `python3`** (3.12.3 + pytest 9.0.2).
-- `pip install -e .`는 PEP 668 → `--break-system-packages` 필요 (root Docker, 안전).
-- Pyright `reportMissingImports` (omx_core.*) + summarize.py `.rename` ndarray 경고 = editable/pandas-stub false positive — 무시.
-- 배포 dir = `omx-core/`(하이픈), import 패키지 = `omx_core/`(언더스코어). cache = `.npz`(parquet 아님).
-- tool 출력이 종종 1턴 늦게/한꺼번에 렌더됨(transport 지연, state 손상 아님). cwd가 `cd omx-core` 후 상대경로 재진입에서 오염되니 절대경로 또는 repo-root cd 사용.
-- `AskUserQuestion`이 이 환경에서 guard 훅 누락으로 실패 → 결정은 prose 권장안+진행으로 대체.
+## Environment Pitfalls (already got burned by these)
+- `python` = the Isaac Sim wrapper. **Always use `python3`** (3.12.3 + pytest 9.0.2).
+- `pip install -e .` hits PEP 668 → needs `--break-system-packages` (root Docker, safe).
+- Pyright `reportMissingImports` (omx_core.*) + summarize.py `.rename` ndarray warning = editable/pandas-stub false positives — ignore.
+- Deploy dir = `omx-core/` (hyphen), import package = `omx_core/` (underscore). cache = `.npz` (not parquet).
+- Tool output often renders one turn late / all at once (transport delay, not state corruption). cwd gets polluted by relative-path re-entry after `cd omx-core`, so use absolute paths or cd to repo-root.
+- `AskUserQuestion` fails in this environment due to a missing guard hook → decisions are replaced with a prose recommendation + proceed.
 
-## subagent-driven 실행 패턴 (검증됨, #0·#1 재사용)
-task별 fresh implementer(sonnet) → spec 리뷰(haiku) → quality 리뷰(sonnet) → 통과 시 다음 → 전체 끝나면 opus 최종 리뷰 → finishing-a-development-branch (merge-local, push 안 함).
-**교훈 (#1에서 데임):** implementer와 리뷰어를 동시 디스패치하며 리뷰어 프롬프트에 **추측 SHA**를 박지 말 것 — 실제 SHA는 commit 후에야 정해짐(대부분 리뷰어가 git log로 복구했지만 1건 오진). implementer 완료 후 실제 SHA 확인하고 리뷰어 디스패치. quality 리뷰엔 "테스트가 실제 코드 분기를 밟는가" 명시 지시(죽은 width-cap 테스트 거기서 잡힘).
+## subagent-driven execution pattern (verified, reused in #0 · #1)
+Per task: fresh implementer (sonnet) → spec review (haiku) → quality review (sonnet) → on pass move to next → when all done, opus final review → finishing-a-development-branch (merge-local, no push).
+**Lesson (burned in #1):** when dispatching implementer and reviewer concurrently, don't embed a **guessed SHA** in the reviewer prompt — the real SHA isn't fixed until after the commit (most reviewers recovered it via git log, but 1 misdiagnosed). Confirm the real SHA after the implementer finishes, then dispatch the reviewer. Give the quality review an explicit instruction to check "does the test actually exercise the real code branch" (that's where the dead width-cap test was caught).
 
-## 잠긴 설계 결정 (재논의 금지 — design §0.1)
-B1 2-tier 검증 / B2 session_id(flag→env→autogen) / B3 report.md 영구트리 단일홈+plot promotion /
-B4 DAG(exp-init #3, evaluator #2=reference profile) / B5 score pass_only선택·score_improvement필수 /
-B6 revert=config git+checkpoint 포인터 / B7 card url 선언적 / B8 훈련 launch 자동발사 금지(큐잉) / D3 MCP 서버 없음.
+## Locked Design Decisions (do not re-litigate — design §0.1)
+B1 2-tier validation / B2 session_id (flag→env→autogen) / B3 report.md single persistent-tree home + plot promotion /
+B4 DAG (exp-init #3, evaluator #2 = reference profile) / B5 score pass_only-selectable · score_improvement required /
+B6 revert = config git + checkpoint pointer / B7 card url declarative / B8 no auto-fire of training launch (queue) / D3 no MCP server.

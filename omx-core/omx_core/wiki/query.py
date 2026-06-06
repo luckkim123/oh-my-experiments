@@ -63,11 +63,12 @@ def query_wiki(paths: OmxPaths, *, now: str, text: str, tags: list | None = None
         score = 0
         snippet = ""
 
+        page_tags_lower = {pt.lower() for pt in page.tags}
         if tags:
-            overlap = [t for t in tags if any(pt.lower() == t.lower() for pt in page.tags)]
+            overlap = [t for t in tags if t.lower() in page_tags_lower]
             score += len(overlap) * 3
         for term in terms:
-            if any(term in pt.lower() for pt in page.tags):
+            if any(term in pt for pt in page_tags_lower):
                 score += 2
 
         title_lower = page.title.lower()

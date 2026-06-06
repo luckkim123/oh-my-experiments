@@ -166,7 +166,7 @@ Once approved, run exp-analyze on your runs.
 **Hard gate (mirrors deep-interview's approval gate):** until the user explicitly approves
 (edits `pending_approval` to false, or says so), `exp-init` MUST NOT invoke exp-analyze,
 exp-design, exp-loop, or any mutation/execution skill, and MUST NOT run training or eval. The
-profile is a *proposal*. This honors the repo rule "훈련 종료/시작은 유저가 직접" with no
+profile is a *proposal*. This honors the repo rule "the user starts/stops training themselves" with no
 override path in v0.1.
 
 ## Seed the workspace wiki (one page from the interview)

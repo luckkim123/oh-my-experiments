@@ -4,8 +4,11 @@ A **self-contained** Claude Code harness for (a) analyzing research / RL experim
 (b) designing the next experiment. OMX is a first-class [omha](https://github.com/luckkim123/oh-my-heroacademia)
 **tier-1 lane** alongside `oh-my-claudecode` and `superpowers`.
 
-> Status: **DESIGN — pre-implementation.** No runtime code yet. See [`docs/design/`](docs/design/) for the
-> locked design. The next session reviews the plan **before** implementing.
+> Status: **v0.1.0 — implemented.** 4 skills + `omx-core` Python package (13 modules: paths/ingest/reduce/
+> evaluator/decision/loop/ledger/report/state/profile/wiki/cli) + `omx` CLI + test suite. Heavy-dep-free
+> tests pass (135 passed); the analysis/plot/reduce paths need `numpy`/`pandas`/`matplotlib` (declared in
+> `omx-core/pyproject.toml`). Runtime end-to-end through the Claude skills needs a plugin-loaded session to
+> exercise. See [`docs/design/`](docs/design/) for the design of record.
 
 ## What it is
 
@@ -13,7 +16,8 @@ A **self-contained** Claude Code harness for (a) analyzing research / RL experim
   a harness. OMX re-implements the useful patterns in its own code, reads its own `.omx/` namespace, and is
   immune to OMC version changes.
 - **Python core (`omx-core`) + thin Claude skills.** The analysis/loop logic is a framework-agnostic Python
-  package runnable Claude-free via an `omx` CLI; the skills are thin orchestrators on top.
+  package runnable Claude-free via an `omx` CLI (`pip install -e omx-core/`; the analysis paths pull in
+  `numpy`/`pandas`/`matplotlib`); the skills are thin orchestrators on top.
 - **Lightweight runtime.** Skills + `omx` CLI + `.omx/` JSON state. No custom MCP server (the most
   version-resilient interface: Bash + file IO).
 - **Discipline-first directory & naming.** A single path module (`omx_paths.py`) is the only way to construct any
@@ -28,17 +32,19 @@ A **self-contained** Claude Code harness for (a) analyzing research / RL experim
 | `exp-design` | Propose the next experiment — trace-style 3-lane diagnosis → discriminating probe = next config. |
 | `exp-loop` | Semi-autonomous propose→eval→keep/discard→log loop, with a "leaving-work" unattended toggle. |
 
-## Layout (planned)
+## Layout
 
 ```
 oh-my-experiments/
-├── .claude-plugin/        # plugin.json — skills + (no MCP), omha-registered lane
+├── .claude-plugin/        # plugin.json (v0.1.0) — 4 skills, no MCP
 ├── skills/                # exp-init / exp-analyze / exp-design / exp-loop
-├── omx-core/              # pure-Python package: omx_paths, ingest, reduce, analyze, evaluator, loop
-├── cards/                 # omx.json (the omha tier-1 lane card)
-├── docs/
-│   └── design/            # the locked design doc (source of truth)
-└── tests/                 # Claude-free unit tests for omx-core
+├── omx-core/              # pure-Python package + pyproject.toml (omx-core, v0.1.0)
+│   ├── omx_core/          #   omx_paths · ingest/ · reduce/ · evaluator · decision · loop
+│   │                      #   · ledger · report · state · profile · wiki/ · cli
+│   └── tests/             #   Claude-free unit tests (pytest)
+├── cards/                 # omha tier-1 lane card (placeholder)
+└── docs/
+    └── design/            # design doc (source of truth)
 ```
 
 ## Links

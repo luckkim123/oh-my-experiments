@@ -19,8 +19,8 @@ analyze (exp-analyze) -> design (exp-design) -> evaluate candidate (omx eval)
 It NEVER launches training (design D4/B8). The "leaving-work" deadline is a
 ceiling on the AUTONOMOUS phases (analyze/design/eval). The next training run is
 always written to `runs/<run_id>/pending-launch.json` as `pending approval` for
-the human to fire by hand. This honors the repo rule "훈련 종료/시작은 유저가
-직접" with no override path.
+the human to fire by hand. This honors the repo rule "training stop/start is done
+by the user directly" with no override path.
 
 **Announce at start:** "Using exp-loop to run the analyze→design→eval loop; training launch will be queued for your approval, never fired."
 
@@ -44,7 +44,7 @@ Resolve a session id once: `omx session-id` (it applies `--session-id` flag →
 ## The deadline ceiling (the "leaving-work" toggle)
 
 If the user gives `--max-runtime <seconds>` (or says "퇴근할 거니까"), the loop
-runs autonomously until that ceiling. You do NOT compute the deadline yourself —
+runs autonomously until that ceiling (e.g. the user says "I'm leaving work, so analyze on your own and queue up to the next experiment"). You do NOT compute the deadline yourself —
 the core does it. BEFORE each iteration, ask the CLI for the loop status, passing
 the run's `--max-runtime` (the CLI computes `deadline = now + max-runtime` and
 reports whether it has passed):
@@ -140,11 +140,11 @@ fresh candidate to analyze next, repeat from step 1. Otherwise STOP.
   trigger.
 - NEVER auto-fix, edit, or delete a wiki page from a lint result. lint is
   report-only; the human decides any change (review-gated).
-- Respond to the user in Korean (repo rule); keep skill/code/markdown in English.
+- Respond to the user in the user's language / the machine's locale language (repo rule); keep skill/code/markdown in English.
 
 ## When done
 
-Report, in Korean to the user:
+Report, in the user's language, to the user:
 - where the analysis report and proposal are (permanent tree paths),
 - the keep/discard decision(s) and the reason (from the decision-log),
 - that the next launch is QUEUED at `runs/<run_id>/pending-launch.json` as

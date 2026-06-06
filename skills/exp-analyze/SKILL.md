@@ -65,7 +65,7 @@ put raw CSV/tables in context — that is the failure mode this router prevents.
 
 Pipeline discipline: **summary-stat-first → PNG only if it's a shape question →
 code-exec to verify any precise claim.** A claim about a number must trace to a
-code-exec output, never to eyeballing a PNG (repo rule: 추측 금지, 코드/데이터로 증명).
+code-exec output, never to eyeballing a PNG (repo rule: no guessing — prove it with code/data).
 
 ## Evidence tags (mandatory in report.md — design §1, sciomc pattern)
 
@@ -141,7 +141,7 @@ A finding with a numeric claim and `[CONFIDENCE: HIGH]` MUST cite a code-exec so
 - NEVER write a path by hand; every `.omx/`/output path comes from an `omx` verb or `omx_paths` getter, and every permanent-tree write goes through `atomic_path`/`atomic_dir`.
 - NEVER claim a number you did not get from code-exec. PNG vision is for SHAPE, not digits.
 - Candidate plots that the report doesn't reference are LEFT in scratch (omx clean sweeps them) — do not delete them yourself.
-- Respond to the user in Korean (repo rule); keep report.md/code/markdown in English.
+- Respond to the user in the user's language (the machine's locale language); keep report.md/code/markdown in English.
 
 ## Capture reusable findings into the wiki (auto-capture — the write half of the loop)
 

@@ -212,7 +212,7 @@ setup, IS the proposed next experiment. It is a PROPOSAL — never run it.
   no finding supporting a lane, say that lane is unsupported — do not manufacture one.
 - The probe changes ONE variable (repo minimum-change rule) so the next run is not
   confounded.
-- Respond to the user in Korean (repo rule); keep the proposal markdown / code in English.
+- Respond to the user in the machine's locale language / the user's language (repo rule); keep the proposal markdown / code in English.
 
 ## When done
 
