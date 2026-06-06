@@ -161,6 +161,45 @@ def _cmd_eval(args) -> int:
     return 0 if rec["status"] in ("pass", "fail") else 1
 
 
+def _cmd_plot_summary_bar(args, res) -> int:
+    """Render a per-axis bar chart from eval_summary SummaryRecords (GAP B).
+
+    Called from _cmd_plot when --format eval_summary and --view per_axis_bar.
+    --series is the field name (e.g. ss_error); one bar per axis, one chart per
+    dr_level if multiple levels are present (default: first dr_level found).
+    Schema-driven: works for any {dr_level:{axis:{field:value}}} summary.json.
+    """
+    from omx_core.reduce.plot import bar_plot
+    field = args.series
+    available_fields = sorted({r.field for r in res.summary if r.field is not None})
+    if not available_fields:
+        raise SystemExit(
+            f"series {field!r} not in source; available: {available_fields}")
+    if field not in available_fields:
+        raise SystemExit(
+            f"series {field!r} not in source; available: {available_fields}")
+    try:
+        metric = validate_token(args.metric, "metric")
+        view = validate_token(args.view, "view")
+    except OmxError as e:
+        raise SystemExit(str(e))
+    # Collect (axis, value) pairs for this field; use first dr_level when multiple exist
+    recs_for_field = [r for r in res.summary if r.field == field and r.axis is not None]
+    dr_levels = sorted({r.dr_level for r in recs_for_field})
+    if not dr_levels:
+        raise SystemExit(
+            f"no records with field {field!r} and a named axis; available: {available_fields}")
+    dr = dr_levels[0]  # default: first level alphabetically
+    pairs = sorted((r.axis, r.value) for r in recs_for_field if r.dr_level == dr)
+    labels = [p[0] for p in pairs]
+    values = [p[1] for p in pairs]
+    out = OmxPaths(root=args.root).scratch_plots(session_id=args.session_id) / f"{metric}__{view}.png"
+    bar_plot(labels, values, out, title=f"{metric} ({view}, dr={dr})")
+    print(json.dumps({"plot": str(out), "metric": metric, "view": view,
+                      "dr_level": dr, "n_axes": len(labels)}))
+    return 0
+
+
 def _cmd_plot(args) -> int:
     """Render ONE candidate curve from a series source into scratch/<sid>/plots/.
 
@@ -168,6 +207,9 @@ def _cmd_plot(args) -> int:
     matplotlib + scratch-path IO (design D8). Output filename = <metric>__<view>.png.
     """
     res = _ingest(args.path, args.format)
+    # GAP B: eval_summary is tabular (series={}); intercept for summary-based bar charts
+    if res.meta.get("format") == "eval_summary":
+        return _cmd_plot_summary_bar(args, res)
     if args.series not in res.series:
         skipped = res.meta.get("skipped_nd", [])
         hint = (f" (NOTE: {args.series!r} is in the file but is N-D; only 1-D arrays are plottable)"
