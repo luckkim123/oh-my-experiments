@@ -242,3 +242,107 @@ def test_min_coverage_out_of_range_loud_fails():
         check_coverage("x", _profile(groups=_GROUPS), min_coverage=1.5)
     with pytest.raises(OmxError):
         check_coverage("x", _profile(groups=_GROUPS), min_coverage=0.0)
+
+
+# --- GAP E: partial_groups surfacing in lenient default mode ---
+# A report that passes lenient mode (>=1 token per group) but leaves some group
+# tokens unreferenced should surface those groups in partial_groups, so the
+# analyst cannot silently skip sub-group fields without any warning.
+
+_MULTI_TOKEN_GROUPS = {
+    "constraint": [
+        "barrier_penalty",
+        "Constraint/margin/attitude",
+        "Constraint/margin/cumul_yaw",
+        "Constraint/margin/yaw_rate",
+        "Constraint/margin/thruster_util",
+        "Constraint/viol/attitude",
+        "Constraint/viol/cumul_yaw",
+        "Constraint/viol/yaw_rate",
+        "Constraint/viol/thruster_util",
+    ],
+    "reward_decomp": ["Reward/att_rp", "Reward/lin_vel", "Reward/yaw_vel"],
+}
+
+
+def test_partial_groups_populated_when_group_hit_lt_total():
+    # lenient: ok=True (>=1 token per group), but partial_groups lists groups
+    # where hits < total so the analyst sees which fields are missing.
+    report = (
+        # constraint: only barrier + margin/attitude referenced (2/9)
+        "barrier_penalty present. margin/attitude ok. "
+        # reward_decomp: all 3 tokens referenced
+        "Reward/att_rp, lin_vel, yaw_vel all logged. "
+        "[DIAGNOSIS] engine run."
+    )
+    res = check_coverage(report, _profile(groups=_MULTI_TOKEN_GROUPS, markers=_MARKERS))
+    assert res.ok is True  # lenient mode: ok stays true (>=1 per group)
+    assert res.missing_groups == []  # not a full missing group
+    assert "constraint" in res.partial_groups  # 2/9 < 9 -> partial
+    assert "reward_decomp" not in res.partial_groups  # 3/3 -> fully covered
+
+
+def test_partial_groups_empty_when_all_fully_covered():
+    report = (
+        "barrier_penalty, margin/attitude, margin/cumul_yaw, margin/yaw_rate, "
+        "margin/thruster_util, viol/attitude, viol/cumul_yaw, viol/yaw_rate, "
+        "viol/thruster_util all referenced. "
+        "Reward/att_rp, lin_vel, yaw_vel all logged. [DIAGNOSIS] fine."
+    )
+    res = check_coverage(report, _profile(groups=_MULTI_TOKEN_GROUPS, markers=_MARKERS))
+    assert res.ok is True
+    assert res.partial_groups == []
+
+
+def test_partial_groups_empty_when_no_groups_declared():
+    # a profile without groups -> partial_groups is empty (back-compat)
+    res = check_coverage("anything", _profile())
+    assert res.partial_groups == []
+
+
+def test_partial_groups_not_overlap_with_missing_groups():
+    # a group that is in missing_groups (0 hits) should NOT also be in partial_groups.
+    # partial_groups = hits >= required (lenient: >=1) AND hits < total.
+    # missing_groups = hits < required.
+    report = (
+        # reward_decomp: 1/3 referenced (att_rp only) -> lenient ok (>=1), partial (1<3)
+        "Reward/att_rp only. "
+        # constraint: 0 hits -> missing_groups, not partial
+        "[DIAGNOSIS]."
+    )
+    res = check_coverage(report, _profile(groups=_MULTI_TOKEN_GROUPS, markers=_MARKERS))
+    assert "constraint" in res.missing_groups
+    assert "constraint" not in res.partial_groups  # missing -> not partial
+    assert "reward_decomp" not in res.missing_groups
+    assert "reward_decomp" in res.partial_groups  # 1/3 hits, lenient ok, partial
+
+
+def test_partial_groups_single_token_group_never_partial():
+    # a single-token group that is referenced is fully covered (hits == total == 1)
+    groups = {"solo": ["only_metric"]}
+    report = "only_metric present. [DIAGNOSIS]."
+    res = check_coverage(report, _profile(groups=groups, markers=_MARKERS))
+    assert res.ok is True
+    assert res.partial_groups == []
+
+
+def test_partial_groups_in_strict_mode_only_for_passing_thin_groups():
+    # in strict mode, a group below threshold goes to missing_groups, not partial_groups.
+    # partial_groups in strict mode = groups that meet strict threshold but are below total.
+    # reward_decomp has 7 tokens. strict=0.5 requires ceil(7*0.5)=4.
+    # referencing 4/7 -> passes strict, but 4 < 7 -> partial.
+    report = (
+        "Reward/att_rp, lin_vel, yaw_vel, bias logged. "  # 4/7 reward_decomp
+        "entropy only. "                                   # 1/7 trpo -> fails strict
+        "Encoder/z_std only. "                            # 1/5 encoder -> fails strict
+        "margin/attitude ok. [DIAGNOSIS]."                 # constraint: 1/1 -> ok
+    )
+    res = check_coverage(report, _profile(groups=_STRICT_GROUPS, markers=_MARKERS),
+                         min_coverage=0.5)
+    # trpo (1/7 < 4) and encoder (1/5 < 3) fail strict -> missing_groups
+    assert "trpo" in res.missing_groups
+    assert "encoder" in res.missing_groups
+    # reward_decomp (4/7 >= 4) passes strict but 4 < 7 -> partial
+    assert "reward_decomp" in res.partial_groups
+    # constraint (1/1) fully covered -> not partial
+    assert "constraint" not in res.partial_groups

@@ -281,8 +281,21 @@ def _cmd_report_coverage(args) -> int:
         # per-group hit/total so the agent sees WHERE coverage is thin (GAP 4b)
         "group_hits": {g: list(ht) for g, ht in res.group_hits.items()},
         "min_coverage": args.min_coverage,
+        # GAP E: groups that pass the threshold but have unreferenced tokens — field-level
+        # omissions within a passing group that lenient mode would otherwise silently accept.
+        "partial_groups": res.partial_groups,
     }
     print(json.dumps(out))
+    if res.partial_groups:
+        # Warn loudly to stderr so the analyst cannot silently miss sub-group fields.
+        # ok remains True (lenient semantics unchanged); this is advisory, not a gate.
+        for grp in res.partial_groups:
+            hits, total = res.group_hits[grp]
+            print(
+                f"WARNING: group '{grp}': {hits}/{total} tokens referenced "
+                f"— some fields may be missing from the report",
+                file=sys.stderr,
+            )
     if not res.ok:
         # loud-fail so the skill's coverage gate can detect it by exit code
         reasons = []
