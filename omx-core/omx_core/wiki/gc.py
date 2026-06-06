@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from omx_core.omx_paths import OmxPaths, OmxError
+from omx_core.omx_paths import OmxPaths
 from omx_core.wiki import storage
-from omx_core.wiki.types import WikiError, WikiPage, WIKI_SCHEMA_VERSION, RESERVED_FILES
+from omx_core.wiki.types import WikiError, WikiPage, RESERVED_FILES
 
 
 def _norm_slug(slug: str) -> str:
