@@ -20,6 +20,7 @@ the goal is to catch a whole group/engine being skipped, not to police wording.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from omx_core.omx_paths import OmxError
@@ -34,6 +35,8 @@ class CoverageResult:
     # groups that were declared and checked (for transparency in the CLI output)
     checked_groups: list[str] = field(default_factory=list)
     markers_declared: list[str] = field(default_factory=list)
+    # per-group (hit, total) token counts so the caller sees WHERE coverage is thin
+    group_hits: dict[str, tuple[int, int]] = field(default_factory=dict)
 
 
 def _leaf(token: str) -> str:

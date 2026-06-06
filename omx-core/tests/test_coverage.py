@@ -151,3 +151,74 @@ def test_groups_must_be_a_mapping_of_lists():
 def test_empty_group_list_loud_fails():
     with pytest.raises(OmxError):
         check_coverage("x", {"metrics": ["a"], "output_root": "e", "groups": {"g": []}})
+
+
+# --- min_coverage strict mode (GAP 4b: ">=1 token" is too weak; a 4/7-groups-with-
+#     one-token-each report passes the lenient gate. strict mode requires a FRACTION
+#     of each group's tokens to be referenced, catching shallow partial coverage.) ---
+
+def test_group_hits_reported_per_group():
+    # CoverageResult must expose per-group hit/total so the agent sees WHERE it is thin
+    report = "Reward/att_rp and lin_vel. entropy. cost_value. z_std. margin/attitude. doraemon_success_rate. [DIAGNOSIS]"
+    res = check_coverage(report, _profile(groups=_GROUPS, markers=_MARKERS))
+    assert res.group_hits["reward_decomp"] == (2, 2)  # both tokens referenced
+    assert res.group_hits["critic"] == (1, 2)         # only cost_value, not value_function
+    assert res.group_hits["constraint"] == (1, 1)     # single-token group fully hit
+
+
+def test_min_coverage_none_is_lenient_default():
+    # default (min_coverage=None) keeps the back-compat ">=1 token per group" behaviour
+    report = (
+        "Reward/att_rp ok. entropy ok. cost_value ok. Encoder/z_std ok. "
+        "margin/attitude ok. doraemon_success_rate ok. [DIAGNOSIS] fine."
+    )
+    res = check_coverage(report, _profile(groups=_GROUPS, markers=_MARKERS))
+    assert res.ok is True  # one token per group is enough when not strict
+
+
+def test_strict_mode_fails_shallow_partial_coverage():
+    # THE 3rd incident: a report that names only one token in groups that have several.
+    # reward_decomp(7), trpo(7), critic(2), encoder(5) each get ONE token -> below 0.5.
+    report = (
+        "Reward/att_rp only. entropy only. cost_value only. Encoder/z_std only. "
+        "margin/attitude. doraemon_success_rate. [DIAGNOSIS] plateau."
+    )
+    res = check_coverage(report, _profile(groups=_GROUPS, markers=_MARKERS), min_coverage=0.5)
+    assert res.ok is False
+    # groups whose hit-fraction is below 0.5 are flagged as thin
+    assert "reward_decomp" in res.missing_groups
+    assert "trpo" in res.missing_groups
+    assert "encoder" in res.missing_groups
+    # single-token groups that ARE hit stay satisfied (1/1 >= any frac)
+    assert "constraint" not in res.missing_groups
+
+
+def test_strict_mode_passes_full_coverage():
+    report = (
+        "Reward/att_rp, lin_vel, yaw_vel, bias, smoothness, thruster, torque all logged. "
+        "entropy, noise_std, line_search_success, kl, surrogate_loss, actor_step, sigma_step. "
+        "Loss/value_function and cost_value. Encoder/z_std, z_min, z_max, encoder_grad_norm, enc_step. "
+        "barrier_penalty, margin/attitude, margin/cumul_yaw, margin/yaw_rate, margin/thruster_util, "
+        "viol/attitude, viol/cumul_yaw, viol/yaw_rate, viol/thruster_util. "
+        "doraemon_success_rate, entropy_before, kl_step, ess_ratio. "
+        "ss_error roll pitch vx vy vz yaw. [DIAGNOSIS] [TREND] changepoint plateau."
+    )
+    res = check_coverage(report, _profile(groups=_GROUPS, markers=_MARKERS), min_coverage=0.5)
+    assert res.ok is True
+    assert res.missing_groups == []
+
+
+def test_strict_mode_single_token_group_needs_only_one():
+    # a group with a single token can never be asked for >1; 1/1 satisfies any frac
+    report = "margin/attitude present. [DIAGNOSIS]"
+    res = check_coverage(report, _profile(groups={"constraint": ["Constraint/margin/attitude"]},
+                                          markers=_MARKERS), min_coverage=1.0)
+    assert res.ok is True
+    assert res.missing_groups == []
+
+
+def test_min_coverage_out_of_range_loud_fails():
+    with pytest.raises(OmxError):
+        check_coverage("x", _profile(groups=_GROUPS), min_coverage=1.5)
+    with pytest.raises(OmxError):
+        check_coverage("x", _profile(groups=_GROUPS), min_coverage=0.0)
