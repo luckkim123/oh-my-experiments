@@ -133,3 +133,50 @@ def test_delete_page_reserved_loud_fails(tmp_path):
     paths.wiki_dir().mkdir(parents=True, exist_ok=True)
     with pytest.raises(OmxError):
         gc.delete_page(paths, "index.md")
+
+
+from omx_core.wiki import storage
+
+
+def test_merge_pages_survivor_gains_content_and_deletes_sources(tmp_path):
+    into = _seed_page(tmp_path, "Survivor", content="survivor body")
+    src = _seed_page(tmp_path, "Source One", content="source body unique-marker")
+    paths = OmxPaths(root=tmp_path)
+    gc.merge_pages(paths, into=into, from_slugs=[src], now="2026-06-06T01:00:00")
+    # source gone
+    assert not paths.wiki_page(src[:-3]).exists()
+    # survivor still there and now contains the source's body
+    page = storage.read_page(paths, into)
+    assert "unique-marker" in page.content
+    assert "Merged from" in page.content
+
+
+def test_merge_pages_unions_tags_and_takes_max_confidence(tmp_path):
+    from omx_core.wiki import ingest
+    paths = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(paths, now="2026-06-06T00:00:00", title="Into Page",
+                            content="x", tags=["a"], category="reference",
+                            confidence="low", sources=["s1"])
+    ingest.ingest_knowledge(paths, now="2026-06-06T00:00:00", title="From Page",
+                            content="y", tags=["b"], category="reference",
+                            confidence="high", sources=["s2"])
+    gc.merge_pages(paths, into="into_page.md", from_slugs=["from_page.md"],
+                   now="2026-06-06T01:00:00")
+    page = storage.read_page(paths, "into_page.md")
+    assert set(page.tags) == {"a", "b"}
+    assert page.confidence == "high"           # max(low, high)
+    assert set(page.sources) == {"s1", "s2"}
+
+
+def test_merge_pages_self_merge_loud_fails(tmp_path):
+    into = _seed_page(tmp_path, "Selfie")
+    paths = OmxPaths(root=tmp_path)
+    with pytest.raises(OmxError):
+        gc.merge_pages(paths, into=into, from_slugs=[into], now="2026-06-06T01:00:00")
+
+
+def test_merge_pages_absent_source_loud_fails(tmp_path):
+    into = _seed_page(tmp_path, "Survivor Two")
+    paths = OmxPaths(root=tmp_path)
+    with pytest.raises(OmxError):
+        gc.merge_pages(paths, into=into, from_slugs=["ghost.md"], now="2026-06-06T01:00:00")

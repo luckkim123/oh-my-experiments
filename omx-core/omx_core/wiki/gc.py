@@ -110,3 +110,55 @@ def delete_page(paths: OmxPaths, slug: str) -> None:
     if not fp.exists():
         raise WikiError(f"cannot delete absent page {norm!r}")
     fp.unlink()
+
+
+_CONF_RANK = {"high": 3, "medium": 2, "low": 1}
+
+
+def merge_pages(paths: OmxPaths, *, into: str, from_slugs: list, now: str) -> None:
+    """Fold each `from` page into the `into` survivor (lossless), then delete the
+    `from` pages. Tags union, sources append, links union, confidence max; each
+    source body is appended as a '## Merged from <slug> (<now>)' section. Caller
+    holds the lock and does update_index/append_log. Loud-fail on self-merge or an
+    absent page."""
+    into_norm = _norm_slug(into)
+    froms = [_norm_slug(s) for s in from_slugs]
+    if into_norm in froms:
+        raise WikiError(f"self-merge: {into_norm!r} is both survivor and source")
+
+    survivor = storage.read_page(paths, into_norm)
+    if survivor is None:
+        raise WikiError(f"merge survivor {into_norm!r} does not exist")
+
+    tags = list(survivor.tags)
+    sources = list(survivor.sources)
+    links = list(survivor.links)
+    confidence = survivor.confidence
+    content = survivor.content.rstrip()
+
+    for fslug in froms:
+        src = storage.read_page(paths, fslug)
+        if src is None:
+            raise WikiError(f"merge source {fslug!r} does not exist")
+        for t in src.tags:
+            if t not in tags:
+                tags.append(t)
+        for s in src.sources:
+            if s not in sources:
+                sources.append(s)
+        for l in src.links:
+            if l not in links:
+                links.append(l)
+        if _CONF_RANK.get(src.confidence, 2) > _CONF_RANK.get(confidence, 2):
+            confidence = src.confidence
+        content += f"\n\n---\n\n## Merged from {fslug} ({now})\n\n{src.content.strip()}\n"
+
+    merged = WikiPage(
+        slug=into_norm, title=survivor.title, tags=tags,
+        created=survivor.created, updated=now, sources=sources, links=links,
+        category=survivor.category, confidence=confidence,
+        schema_version=survivor.schema_version, content=content,
+    )
+    storage.write_page(paths, merged, now=now)
+    for fslug in froms:
+        delete_page(paths, fslug)
