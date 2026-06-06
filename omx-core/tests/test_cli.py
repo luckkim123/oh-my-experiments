@@ -94,6 +94,43 @@ def test_reduce_summarize_nan_becomes_null(tmp_path, capsys):
     assert out["cv"][0]["cv"] is None            # nan -> null
 
 
+def test_reduce_summarize_wrong_cv_field_loud_fails(fixtures_dir, capsys):
+    """GAP A: --cv-field with a value that is an axis name (not a field name)
+    must loud-fail (rc 2) with a message listing available fields, NOT silently
+    return {"cv": []} at rc 0."""
+    rc = main(["reduce", "summarize", "--path", str(fixtures_dir / "summary.json"),
+               "--format", "eval_summary", "--cv-field", "roll"])
+    assert rc == 2  # must be nonzero
+    err = capsys.readouterr().err
+    assert "not found" in err
+    assert "available" in err
+    assert "ss_error" in err  # at least one real field must appear in the hint
+
+
+def test_reduce_summarize_unknown_cv_field_loud_fails(fixtures_dir, capsys):
+    """GAP A: completely unknown cv-field also loud-fails with available hint."""
+    rc = main(["reduce", "summarize", "--path", str(fixtures_dir / "summary.json"),
+               "--format", "eval_summary", "--cv-field", "no_such_field"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "not found" in err
+    assert "available" in err
+
+
+def test_reduce_summarize_empty_records_no_crash(tmp_path, capsys):
+    """GAP A regression guard: empty summary (0 records) with correct field name
+    must return empty cv quietly (rc 0) — data absence is not a bad field."""
+    import json as _json
+    # csv_longform with ss_error declared but 0 rows (header only)
+    csv = tmp_path / "empty.csv"
+    csv.write_text("dr_level,axis,field,value\n")
+    rc = main(["reduce", "summarize", "--path", str(csv),
+               "--format", "csv_longform", "--cv-field", "ss_error"])
+    assert rc == 0
+    out = _json.loads(capsys.readouterr().out)
+    assert out["cv"] == []
+
+
 def test_eval_reference_prints_contract_json(capsys):
     rc = main(["eval", "--command", "echo '{\"pass\": true, \"score\": 0.8}'"])
     assert rc == 0
