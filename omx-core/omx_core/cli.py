@@ -30,7 +30,7 @@ from omx_core.profile import bootstrap_profile, default_metrics
 from omx_core.report import parse_findings
 from omx_core.coverage import check_coverage
 from omx_core.profile import load_profile_metrics
-from omx_core.wiki import ingest as _wiki_ingest, query as _wiki_query, lint as _wiki_lint, storage as _wiki_storage
+from omx_core.wiki import ingest as _wiki_ingest, query as _wiki_query, lint as _wiki_lint, storage as _wiki_storage, gc as _wiki_gc
 
 
 def _finite_or_none(x):
@@ -456,6 +456,49 @@ def _cmd_wiki_read(args) -> int:
     return 0
 
 
+def _cmd_wiki_gc(args) -> int:
+    """Read-only gc diagnosis: lint result + page metadata, as one JSON object for
+    the skill to read. Touches nothing (the skill judges, gc-apply executes)."""
+    paths = OmxPaths(root=args.root)
+    try:
+        lint_res = _wiki_lint.lint_wiki(paths, now=_now_iso(),
+                                        stale_days=args.stale_days,
+                                        max_page_size=args.max_page_size)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    pages = []
+    for slug in _wiki_storage.list_pages(paths):
+        try:
+            page = _wiki_storage.read_page(paths, slug)
+        except OmxError:
+            continue
+        if page is None:
+            continue
+        pages.append({
+            "slug": slug, "title": page.title, "category": page.category,
+            "updated": page.updated,
+            "bytes": len(page.content.encode("utf-8")),
+        })
+    print(json.dumps({"lint": lint_res, "pages": pages}))
+    return 0
+
+
+def _cmd_wiki_gc_apply(args) -> int:
+    """Parse an approved proposal and two-phase apply it (validate-all, then execute
+    under the lock). git tracking is enforced by apply_gc as the recovery path."""
+    proposal = Path(args.proposal)
+    if not proposal.exists():
+        raise SystemExit(f"proposal not found: {proposal}")
+    paths = OmxPaths(root=args.root)
+    try:
+        plan = _wiki_gc.parse_gc_proposal(proposal.read_text(encoding="utf-8"))
+        res = _wiki_gc.apply_gc(paths, plan, now=_now_iso(), repo_root=args.root)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(res))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="omx", description="OMX experiment-analysis core")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -606,6 +649,18 @@ def build_parser() -> argparse.ArgumentParser:
     pwr.add_argument("--no-frontmatter", action="store_true", dest="no_frontmatter",
                      help="emit only the body, omitting the '---' frontmatter block")
     pwr.set_defaults(func=_cmd_wiki_read)
+
+    pwg = wsub.add_parser("gc", help="read-only gc diagnosis (lint + page metadata as JSON)")
+    pwg.add_argument("--root", required=True)
+    pwg.add_argument("--stale-days", type=int, default=30, dest="stale_days")
+    pwg.add_argument("--max-page-size", type=int, default=10240, dest="max_page_size")
+    pwg.set_defaults(func=_cmd_wiki_gc)
+
+    pwga = wsub.add_parser("gc-apply",
+                           help="apply an approved wiki-gc proposal (two-phase, git-guarded)")
+    pwga.add_argument("--root", required=True)
+    pwga.add_argument("--proposal", required=True, help="path to the approved wiki-gc proposal .md")
+    pwga.set_defaults(func=_cmd_wiki_gc_apply)
 
     return p
 

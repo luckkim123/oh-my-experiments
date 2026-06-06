@@ -566,3 +566,63 @@ def test_report_coverage_cli_strict_flag_fails_shallow(tmp_path, capsys):
     assert out["group_hits"]["reward_decomp"] == [1, 4]
     # the FAILED reason is surfaced on stderr
     assert "report coverage FAILED" in captured.err
+
+
+def test_wiki_gc_readonly_emits_lint_and_pages(tmp_path, capsys):
+    from omx_core.cli import main
+    from omx_core.wiki import ingest
+    from omx_core.omx_paths import OmxPaths
+    ingest.ingest_knowledge(OmxPaths(root=tmp_path), now="2026-06-06T00:00:00",
+                            title="Page A", content="aaa", tags=["t"],
+                            category="reference", confidence="medium", sources=[])
+    rc = main(["wiki", "gc", "--root", str(tmp_path)])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert "lint" in out and "pages" in out
+    assert out["pages"][0]["slug"] == "page_a.md"
+    assert "bytes" in out["pages"][0]
+
+
+def test_wiki_gc_apply_deletes_via_proposal(tmp_path, capsys):
+    import subprocess
+    from omx_core.cli import main
+    from omx_core.wiki import ingest
+    from omx_core.omx_paths import OmxPaths
+    paths = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(paths, now="2026-06-06T00:00:00", title="Trash Me",
+                            content="junk", tags=["t"], category="reference",
+                            confidence="medium", sources=[])
+    # make it git-tracked so the recovery guard passes
+    for args in (["init"], ["config", "user.email", "t@t"], ["config", "user.name", "t"],
+                 ["add", "-A"], ["commit", "-m", "seed"]):
+        subprocess.run(["git", *args], cwd=str(tmp_path), check=True, capture_output=True, text=True)
+    proposal = tmp_path / "p.md"
+    proposal.write_text(
+        "---\nkind: wiki-gc\n---\n\n## DELETE\n\n- slug: trash_me.md\n  reason: junk\n\n## MERGE\n",
+        encoding="utf-8")
+    rc = main(["wiki", "gc-apply", "--proposal", str(proposal), "--root", str(tmp_path)])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["deleted"] == ["trash_me.md"]
+    assert not paths.wiki_page("trash_me").exists()
+
+
+def test_wiki_gc_apply_untracked_loud_fails(tmp_path, capsys):
+    import pytest
+    from omx_core.cli import build_parser
+    from omx_core.wiki import ingest
+    from omx_core.omx_paths import OmxPaths
+    paths = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(paths, now="2026-06-06T00:00:00", title="Untracked",
+                            content="x", tags=["t"], category="reference",
+                            confidence="medium", sources=[])
+    proposal = tmp_path / "p.md"
+    proposal.write_text("---\nkind: wiki-gc\n---\n## DELETE\n- slug: untracked.md\n", encoding="utf-8")
+    # no git init -> untracked -> the handler must loud-fail (SystemExit) and NOT delete.
+    # Call the handler directly: main() intercepts SystemExit (maps to rc 2), so the
+    # established loud-fail test pattern in this file invokes args.func(args), not main().
+    args = build_parser().parse_args(
+        ["wiki", "gc-apply", "--proposal", str(proposal), "--root", str(tmp_path)])
+    with pytest.raises(SystemExit):
+        args.func(args)
+    assert paths.wiki_page("untracked").exists()
