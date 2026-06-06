@@ -34,12 +34,47 @@ answer is yes and this skill is how — verify by reading this file, not by scan
    (eval_dr summary.json, TB event files, wandb run dirs, data_*.npz). Resolve them;
    if a path is missing, say so and STOP — never fabricate data.
 
-## Ground in prior workspace knowledge (query the wiki first)
+## Run the profile's diagnostic engine — MUST, not MAY (the engine-skip anti-pattern)
 
-Before analyzing, pull any accumulated knowledge about this run's topic so you do
-not re-derive what the workspace already learned:
+If the profile points at a training-log diagnostic engine — a `.omx/profile/*.py`
+script recorded as a reference adapter (find it: `ls .omx/profile/*.py` and the wiki
+page tagged `engine`/`adapter`, e.g. `training_log_analysis_engine_reference_adapter`)
+— you **MUST run it on each training run** and ground the report in its output
+(its `[DIAGNOSIS]` / `[TREND]` / changepoint / plateau / regime lines), not just in
+final scalars you read off the curve. Run it, e.g.:
 
-`omx wiki query --root <root> "<the run's main metric or symptom>"`
+`ALBC_LOGS_ROOT=<logs/rsl_rl> python3 .omx/profile/analyze_training.py <run-path> --tier 3 --deep`
+
+Hand-extracting FINAL SCALARS from raw TB/wandb **instead of** running the engine is
+the exact anti-pattern this skill forbids (it is what produced a count-looks-fine but
+diagnosis-empty report; cf the `omx-route-must-invoke` discipline — declaring the omx
+lane is a commitment to invoke the engine, not to hand-read curves). The engine's
+time-series diagnosis (phase/plateau onset, PELT changepoints, HMM regime, lead-lag)
+CANNOT be reconstructed from end-of-run values. If you deliberately choose not to run
+it for a given run, the report MUST state why, per run. The completeness gate in
+"When done" enforces this (`omx report-coverage`).
+
+This is about USING the engine, not editing it: growing/specializing the adapter is a
+separate, optional activity (see "Record engine-gap specs"); running it during analysis
+is mandatory.
+
+## Ground in prior workspace knowledge (query the wiki — TWO passes)
+
+Before analyzing, pull accumulated knowledge so you do not re-derive what the
+workspace already learned. Query in TWO passes, because a conclusion-only search
+hides the workspace's own TOOLING — the dr-harder incident skipped the diagnostic
+engine precisely because a single symptom query (`"SS error attitude DR"`) never
+surfaced the engine's how-to page (its tags are `adapter`/`analyze`/`engine`, which
+share no vocabulary with a symptom query).
+
+- **Pass A — discover the analysis TOOLING this workspace owns.** Query for the
+  tools/engines first:
+  `omx wiki query --root <root> "analysis engine reference adapter how to analyze"`
+  Read what diagnostic engine / post-processing the workspace already has, so you
+  run it (see the MUST above) instead of re-deriving it by hand.
+- **Pass B — discover prior CONCLUSIONS about this run's topic.** Then query by the
+  run's metric/symptom:
+  `omx wiki query --root <root> "<the run's main metric or symptom>"`
 
 Read the returned `matches` (snippets + confidence) as CONTEXT, not as findings to
 copy. If `corrupt_pages` is non-empty, mention it (lint will flag them). An empty
@@ -244,8 +279,26 @@ writes the spec → a later session reads it (see exp-design / the implement ste
 adapter is updated → the spec page is flipped to `[STATUS] implemented`. Do NOT edit the
 adapter yourself during analysis (exp-analyze never mutates code) — only record the spec.
 
+## Completeness gate — before you call the report done (GAP 4)
+
+After writing `report.md`, run the coverage lint so a report that skipped a whole
+diagnostic group or never cited the engine cannot pass silently:
+
+`omx report-coverage --path <output_root>/<group?>/<run_id>/analysis/<analysis_id>/report.md --root <root>`
+
+It reads the profile's optional `groups` (diagnostic-group → metrics) and
+`engine_markers`, and **loud-fails (non-zero exit)** if any declared diagnostic
+group has zero referenced metrics, or if no engine marker is cited (the report
+looks hand-extracted rather than engine-grounded). On failure: either add the
+missing group's analysis / run the engine and cite its output, OR — if a group is
+genuinely N/A for this run — state that explicitly in the report, then re-run the
+lint. Do not mark the report done while the lint fails without a stated reason.
+(If the profile declares neither field the lint is a vacuous pass — that is fine
+for a fresh workspace; consider proposing the fields as an engine-gap spec.)
+
 ## When done
 
 Tell the user where the report is (`<output_root>/<run_id>/analysis/<analysis_id>/report.md`),
-summarize the top findings (with their confidence), and STOP. Do not propose or
-launch a next experiment — that is exp-design's job (#5).
+summarize the top findings (with their confidence), confirm the completeness gate
+passed (or the stated exceptions), and STOP. Do not propose or launch a next
+experiment — that is exp-design's job (#5).
