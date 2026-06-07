@@ -195,6 +195,16 @@ Before drafting `report.md`:
    only droppable if it is genuinely N/A for this run, and only after the
    "Verify the engine's output" cross-check below (an empty engine cell is NOT an
    N/A — dump the raw TB tags first).
+4. **Bookend the group sections with a TL;DR (top) and a closing verdict (bottom).**
+   The group sections are the *evidence body*; a reader must not have to synthesize it
+   themselves. So the report opens with a `## TL;DR` (3–6 bullets: the healthy baseline
+   state + the ONE real weakness + the headline metric that exposes it) and CLOSES with a
+   `## verdict` / `## bottom line` section that answers, in 2–4 sentences grounded in the
+   sections above: what is this run's single most important takeaway, and what does it
+   imply for the next experiment. A report that ends on the last diagnostic group (no
+   closing synthesis) is incomplete — the per-group findings are inputs to the verdict,
+   not a substitute for it. (Symptom this fixes: the dr-harder teacher report had a TL;DR
+   but trailed off after the `doraemon` group with no closing synthesis.)
 
 This PRE-WRITE checklist is what actually prevents the skip; the `omx report-coverage`
 run in "When done" is the backstop that catches a checklist you didn't honor.
@@ -449,6 +459,9 @@ summarize the top findings (with their confidence), and **prove the completeness
 passed before declaring done** — show that `omx report-coverage ... --min-coverage 0.5`
 returned `ok: true` (or state the explicit, cross-checked N/A exceptions for any group
 it flagged). A report whose strict coverage lint fails is NOT done: fill the thin group
-and re-run. The PRE-WRITE per-group TodoWrite checklist ("Before drafting") is what
-should have prevented any failure here; this final lint is the backstop. Then STOP.
+and re-run. Also confirm the report is **bookended** — a `## TL;DR` at the top and a
+closing `## verdict` / `## bottom line` at the bottom (PRE-WRITE step 4); a report that
+ends on its last diagnostic group with no closing synthesis is not done. The PRE-WRITE
+per-group TodoWrite checklist ("Before drafting") is what should have prevented any
+failure here; this final lint is the backstop. Then STOP.
 Do not propose or launch a next experiment — that is exp-design's job (#5).

@@ -4,6 +4,24 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.1.9] - 2026-06-07
+
+exp-analyze report-format fix: the report must be **bookended**. The PRE-WRITE
+gate already forced the diagnostic groups to be the required table of contents,
+but nothing forced a top TL;DR or a closing synthesis — so a report could open
+with findings and simply trail off on its last diagnostic group, leaving the
+reader to synthesize the takeaway themselves. Surfaced reviewing the dr-harder
+teacher report (had a TL;DR, no closing verdict). No engine/CLI change.
+
+### Changed
+
+- **exp-analyze PRE-WRITE gate gains step 4 — bookend the group sections.** The
+  report now MUST open with a `## TL;DR` (baseline state + the one real weakness +
+  the headline metric) and CLOSE with a `## verdict` / `## bottom line` (2–4
+  sentences: the single most important takeaway + implication for the next
+  experiment). The per-group sections are the evidence body, not a substitute for
+  the synthesis. The "When done" backstop now also confirms the bookends.
+
 ## [0.1.8] - 2026-06-06
 
 Round-4 CLI honesty fixes: five gaps where the tooling silently swallowed
