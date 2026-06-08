@@ -4,6 +4,47 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.1.10] - 2026-06-08
+
+Two exp-analyze report-quality gates from the dr_harder 2026-06-08 incidents,
+built as a stack on `report-coverage`. They guard ORTHOGONAL failure modes: a
+re-analysis that shrinks (depth), and a carried-forward cross-run reference value
+that goes stale (value freshness) — a report can pass one and fail the other.
+Both are generic: no domain tokens in core, all sections/refs caller-supplied.
+
+### Added
+
+- **Depth-regression gate — `report-coverage --baseline` + `required_sections`.**
+  A re-analysis (re-run because plots/numbers changed) was rewritten from scratch
+  off the data pack instead of from the OLD report, coming out 25-39% shorter, with
+  the whole `## generalization (OOD)` section deleted — yet it passed the token
+  lint because each group token still appeared once. The gate now (a) fails if a
+  declared `required_sections` heading is absent (a deleted section the token lint
+  cannot see), and (b) with `--baseline <old report | auto>`, fails on a depth
+  regression (fewer `[FINDING]`s, fewer data-table rows, or words down past
+  tolerance) vs the report it replaces. `--baseline auto` picks the latest sibling
+  analysis. exp-analyze SKILL gains the "RE-analysis uses the OLD report as BASE,
+  never start short" rule and makes the gate part of When-done.
+- **Cross-run reference-value gate — `report-coverage --cross-run-refs`.** The E4
+  report carried a `teacher hard` reference column whose value was copied from a
+  prior report and went STALE — it no longer matched the canonical teacher eval,
+  so "roll/yaw beat the teacher" was a lie the depth gate could not catch (the
+  report had GROWN). `check_cross_run_refs(report, refs)` verifies, for each
+  caller-supplied `{label, summary_path, field, reported_value}`, BOTH provenance
+  (the source eval id — the summary.json parent-dir name — is cited in the report)
+  AND value (matches `summary.json[field]` within rounding tolerance). A stale value
+  OR an uncited source loud-fails (exit 2). The fragile table-parsing that builds
+  the refs is the caller's job; the core only verifies. exp-analyze SKILL gains
+  RE-analysis rule 6: carry forward the PROSE, never the cross-run reference VALUES
+  — re-extract every cross-run number fresh and cite its source eval id.
+
+### Verification
+
+- 489 pass / 1 skip (16 new tests: 11 unit + 5 CLI for the cross-run gate, plus the
+  depth-gate tests), ruff clean. Validated on the real dr_harder E4 report: correct
+  teacher value -> pass; injected stale 1.06 (vs file 1.2834) -> STALE fail; E1
+  report (teacher column, eval id uncited) -> UNCITED fail.
+
 ## [0.1.9] - 2026-06-07
 
 exp-analyze report-format fix: the report must be **bookended**. The PRE-WRITE
