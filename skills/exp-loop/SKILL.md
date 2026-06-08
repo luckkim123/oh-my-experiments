@@ -119,8 +119,16 @@ knowledge surfaces (it is review-gated - you report, the human decides):
 
 `omx wiki lint --root <root>`
 
-Report any `stale` / `broken-ref` / `broken-frontmatter` issues to the user in your
-summary. Do NOT auto-edit or delete any page (minimum-change / review-gated rule).
+Report any `stale` / `broken-ref` / `broken-frontmatter` / `orphan` /
+`contradiction-candidate` issues to the user in your summary. Do NOT auto-edit or
+delete any page (minimum-change / review-gated rule).
+
+If `lint`'s `stats.by_type` shows several `info`+ issues (orphan / stale /
+contradiction-candidate accumulating), add a one-line cleanup reminder to the
+summary: "wiki cleanup review suggested — run `omx wiki gc --root <root>` to see
+delete candidates (orphans) and a ready-to-edit proposal skeleton." This only
+SURFACES the suggestion; the human reviews and approves any `gc-apply` (the
+git-guarded executor). NEVER run gc-apply automatically.
 
 ### 7. Loop or stop
 If a deadline is set and `omx loop-status` says it has NOT passed AND there is a
