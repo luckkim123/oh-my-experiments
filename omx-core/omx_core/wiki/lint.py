@@ -1,10 +1,12 @@
 """omx_core.wiki.lint -- audit the wiki (report-only, NEVER auto-fix; W5).
 
-Detects orphan (no inbound/outbound links), stale (updated older than
-stale_days), broken-ref (a [[link]] target slug that does not exist),
-oversized (content over max_page_size), and broken-frontmatter (unparseable).
-Consumed by `omx wiki lint`, which exp-loop calls at iteration end. The `now`
-ISO is injected (no wall clock) so stale detection is deterministic.
+Detects orphan (inbound==0, with fresh-page exemption), stale (updated older
+than stale_days), broken-ref (a [[link]] target slug that does not exist),
+oversized (content over max_page_size), broken-frontmatter (unparseable),
+low-confidence (confidence is 'low'), and contradiction-candidate (a structural
+SIGNAL for review, never a verdict -- INV-1). Consumed by `omx wiki lint`, which
+exp-loop calls at iteration end. The `now` ISO is injected (no wall clock) so
+stale/fresh detection is deterministic.
 """
 from __future__ import annotations
 
@@ -121,6 +123,9 @@ def lint_wiki(paths: OmxPaths, *, now: str, stale_days: int = 30,
         if len(page.content.encode("utf-8")) > max_page_size:
             issues.append({"slug": slug, "severity": "warning", "type": "oversized",
                            "message": f"content exceeds {max_page_size} bytes"})
+        if page.confidence == "low":
+            issues.append({"slug": slug, "severity": "info", "type": "low-confidence",
+                           "message": "confidence is 'low'; review and strengthen or remove"})
 
     issues.extend(_contradiction_candidates(pages))
 

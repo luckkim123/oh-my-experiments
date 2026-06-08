@@ -158,3 +158,27 @@ def test_lint_survives_aware_timestamp_in_updated(tmp_path):
     # now is naive, ~150 days later -> must compute without TypeError and flag stale
     res = lint.lint_wiki(p, now="2026-05-31T10:00:00", stale_days=30, max_page_size=10240)
     assert any(i["type"] == "stale" and i["slug"] == "aware.md" for i in res["issues"])
+
+
+def test_lint_flags_low_confidence(tmp_path):
+    # A confidence='low' page is flagged as low-confidence (info) for review/strengthening.
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Shaky",
+                            content="unverified hunch", tags=[], category="pattern",
+                            confidence="low", sources=[])
+    res = lint.lint_wiki(p, now="2026-05-31T10:01:00", stale_days=30, max_page_size=10240)
+    lows = [i for i in res["issues"] if i["type"] == "low-confidence"]
+    assert len(lows) == 1
+    assert lows[0]["slug"] == "shaky.md"
+    assert lows[0]["severity"] == "info"
+
+
+def test_lint_high_and_medium_not_low_confidence(tmp_path):
+    # high and medium confidence pages are NOT flagged low-confidence.
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Solid", content="x",
+                            tags=[], category="pattern", confidence="high", sources=[])
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="OK", content="y",
+                            tags=[], category="pattern", confidence="medium", sources=[])
+    res = lint.lint_wiki(p, now="2026-05-31T10:01:00", stale_days=30, max_page_size=10240)
+    assert not any(i["type"] == "low-confidence" for i in res["issues"])

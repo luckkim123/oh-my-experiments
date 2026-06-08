@@ -4,6 +4,30 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.1.12] - 2026-06-08
+
+The last OMC lint check that omx was missing (from the same wiki source
+comparison): a `low-confidence` signal. Closes the lint-parity gap; all other
+OMC wiki features are either deliberately not ported (session hooks — omx is a
+CLI, no lifecycle to fire on) or already matched/surpassed (omx's git-guarded gc,
+loud-fail, injected-now). `wiki_add` (reject-on-duplicate) is intentionally not
+ported — it conflicts with omx's always-append-merge compounding model.
+
+### Added
+
+- **Low-confidence lint.** `wiki lint` now emits `low-confidence` (info) for any
+  page whose `confidence` is `'low'`, flagging it for review/strengthening. Same
+  signal-only, candidate-not-verdict shape as `contradiction-candidate` (INV-1).
+  exp-loop §6's report list includes it; the lint module docstring is corrected
+  (orphan definition updated to `inbound==0`, the full current type list enumerated).
+
+### Verification
+
+- omx-core full pytest suite green (498 passed / 1 skipped); +2 wiki test
+  functions (one positive, one high/medium negative). ruff clean on lint.py.
+- Separate-lane code review (feature-dev:code-reviewer) confirmed INV-1 intact
+  and no invariant regression, verdict APPROVE.
+
 ## [0.1.11] - 2026-06-08
 
 Four wiki-lint enhancements from an OMC-vs-OMX wiki source comparison, each
