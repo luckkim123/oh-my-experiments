@@ -663,3 +663,106 @@ def test_wiki_gc_apply_untracked_loud_fails(tmp_path, capsys):
     with pytest.raises(SystemExit):
         args.func(args)
     assert paths.wiki_page("untracked").exists()
+
+
+# --- report-coverage CLI: --cross-run-refs gate (E4 stale-column incident) ---
+# A report can carry a cross-run reference column (e.g. 'teacher hard') whose
+# values were carried forward from a prior report and went stale. --cross-run-refs
+# points at a JSON file of refs; each is verified for provenance (the source eval
+# id is cited) AND value (matches the source summary.json). A stale value -> rc 2.
+
+def _write_eval_summary_for_cli(tmp_path, eval_id, payload):
+    import json as _j
+    d = tmp_path / eval_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "summary.json").write_text(_j.dumps(payload))
+    return str(d / "summary.json")
+
+
+def test_report_coverage_cli_cross_run_refs_pass(tmp_path, capsys):
+    _write_coverage_profile(tmp_path)
+    spath = _write_eval_summary_for_cli(
+        tmp_path, "static_260607_182214",
+        {"hard": {"att_norm": {"ss_error": 1.2833663946366705}}})
+    report = tmp_path / "report.md"
+    report.write_text(
+        "Reward/att_rp ok. Encoder/z_std ok. [DIAGNOSIS] plateau. "
+        "Against teacher eval `static_260607_182214`, teacher hard att_norm 1.283.")
+    refs = tmp_path / "refs.json"
+    refs.write_text(json.dumps([
+        {"label": "teacher hard att_norm", "summary_path": spath,
+         "field": "hard/att_norm/ss_error", "reported_value": 1.283}]))
+    rc = main(["report-coverage", "--path", str(report), "--root", str(tmp_path),
+               "--cross-run-refs", str(refs)])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True
+    assert out["cross_run_refs"]["ok"] is True
+
+
+def test_report_coverage_cli_cross_run_refs_stale_value_fails(tmp_path, capsys):
+    # the report's teacher-hard column says 1.06 but the eval says 1.283 -> rc 2
+    _write_coverage_profile(tmp_path)
+    spath = _write_eval_summary_for_cli(
+        tmp_path, "static_260607_182214",
+        {"hard": {"att_norm": {"ss_error": 1.2833663946366705}}})
+    report = tmp_path / "report.md"
+    report.write_text(
+        "Reward/att_rp ok. Encoder/z_std ok. [DIAGNOSIS] plateau. "
+        "Against teacher eval `static_260607_182214`, teacher hard att_norm 1.06.")
+    refs = tmp_path / "refs.json"
+    refs.write_text(json.dumps([
+        {"label": "teacher hard att_norm", "summary_path": spath,
+         "field": "hard/att_norm/ss_error", "reported_value": 1.06}]))
+    rc = main(["report-coverage", "--path", str(report), "--root", str(tmp_path),
+               "--cross-run-refs", str(refs)])
+    assert rc == 2  # loud-fail
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    assert out["ok"] is False
+    assert out["cross_run_refs"]["ok"] is False
+    assert "teacher hard att_norm" in [m["label"] for m in out["cross_run_refs"]["mismatched"]]
+    assert "STALE" in captured.err or "stale" in captured.err
+
+
+def test_report_coverage_cli_cross_run_refs_uncited_fails(tmp_path, capsys):
+    # value matches but the eval id is never cited -> provenance failure -> rc 2
+    _write_coverage_profile(tmp_path)
+    spath = _write_eval_summary_for_cli(
+        tmp_path, "static_260607_182214",
+        {"hard": {"att_norm": {"ss_error": 1.2833663946366705}}})
+    report = tmp_path / "report.md"
+    report.write_text(
+        "Reward/att_rp ok. Encoder/z_std ok. [DIAGNOSIS] plateau. "
+        "teacher hard att_norm 1.283 (no eval id cited).")
+    refs = tmp_path / "refs.json"
+    refs.write_text(json.dumps([
+        {"label": "teacher hard att_norm", "summary_path": spath,
+         "field": "hard/att_norm/ss_error", "reported_value": 1.283}]))
+    rc = main(["report-coverage", "--path", str(report), "--root", str(tmp_path),
+               "--cross-run-refs", str(refs)])
+    assert rc == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["cross_run_refs"]["ok"] is False
+    assert [u["label"] for u in out["cross_run_refs"]["uncited"]] == ["teacher hard att_norm"]
+
+
+def test_report_coverage_cli_no_cross_run_refs_is_noop(tmp_path, capsys):
+    # back-compat: without --cross-run-refs the gate is absent, key is null
+    _write_coverage_profile(tmp_path)
+    report = tmp_path / "report.md"
+    report.write_text("Reward/att_rp ok. Encoder/z_std ok. [DIAGNOSIS] plateau.")
+    rc = main(["report-coverage", "--path", str(report), "--root", str(tmp_path)])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["cross_run_refs"] is None
+
+
+def test_report_coverage_cli_cross_run_refs_missing_file_rc2(tmp_path, capsys):
+    _write_coverage_profile(tmp_path)
+    report = tmp_path / "report.md"
+    report.write_text("Reward/att_rp ok. Encoder/z_std ok. [DIAGNOSIS] plateau.")
+    rc = main(["report-coverage", "--path", str(report), "--root", str(tmp_path),
+               "--cross-run-refs", str(tmp_path / "nope.json")])
+    assert rc == 2
+    assert "not found" in capsys.readouterr().err.lower()

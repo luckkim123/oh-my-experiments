@@ -22,7 +22,9 @@ the goal is to catch a whole group/engine being skipped, not to police wording.
 """
 from __future__ import annotations
 
+import json
 import math
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -244,4 +246,117 @@ def check_coverage(report_text: str, profile: dict,
         regression=regression,
         group_hits=group_hits,
         partial_groups=partial_groups,
+    )
+
+
+@dataclass(frozen=True)
+class CrossRefResult:
+    """Outcome of the cross-run reference-value gate (E4 stale-column incident).
+
+    A report's cross-run reference column (e.g. a 'teacher hard' column inside an
+    experiment's tracking table) was carried forward from a prior report and went
+    STALE — the value no longer matched the canonical eval it claimed to come from,
+    flipping the narrative ("beat the teacher" was a lie). This gate verifies, for
+    each caller-supplied ref, BOTH that the source eval id is CITED in the report
+    (provenance) AND that the reported value MATCHES the eval's summary.json (no
+    stale value). ok is True iff nothing is uncited and nothing is mismatched.
+    """
+    ok: bool
+    # refs whose source eval id (static_<ts>) is NOT cited anywhere in the report
+    # text — a carried-over column that cannot be audited back to its source.
+    uncited: list[dict] = field(default_factory=list)
+    # refs whose reported value disagrees with the actual summary.json value past
+    # tolerance — the stale-value failure itself. Each entry carries label/reported/
+    # actual/eval_id/field so the caller can report exactly what is wrong.
+    mismatched: list[dict] = field(default_factory=list)
+
+
+_REQUIRED_REF_KEYS = ("label", "summary_path", "field", "reported_value")
+
+
+def _dig(payload: dict, field_path: str, summary_path: str):
+    """Walk a 'a/b/c' slash path into a nested dict; loud-fail on a missing key.
+
+    A typo'd field path must NOT silently skip the value check (that would re-open
+    the exact gap this gate closes), so an absent segment raises OmxError naming the
+    path and file.
+    """
+    node = payload
+    for seg in field_path.split("/"):
+        if not isinstance(node, dict) or seg not in node:
+            raise OmxError(
+                f"cross-run ref field {field_path!r} not found in {summary_path} "
+                f"(missing segment {seg!r})")
+        node = node[seg]
+    if not isinstance(node, (int, float)):
+        raise OmxError(
+            f"cross-run ref field {field_path!r} in {summary_path} is not a number "
+            f"(got {type(node).__name__})")
+    return float(node)
+
+
+def _eval_id_from_summary_path(summary_path: str) -> str:
+    """The eval-dir name (static_<ts>) that owns a summary.json — its parent dir."""
+    return os.path.basename(os.path.dirname(os.path.abspath(summary_path)))
+
+
+def check_cross_run_refs(report_text: str, refs: list[dict],
+                         rel_tol: float = 0.02, abs_tol: float = 5e-4) -> CrossRefResult:
+    """Verify a report's carried-over cross-run reference values (E4 incident).
+
+    Each ref is a dict with keys: 'label' (human name for the column/cell),
+    'summary_path' (path to the source eval's summary.json), 'field' (slash path
+    into that JSON, e.g. 'hard/att_norm/ss_error'), and 'reported_value' (the number
+    the report actually printed for that cell). A missing key loud-fails (OmxError) —
+    a malformed ref must not silently disable the gate.
+
+    Two independent checks per ref (the user decision "둘 다" — both):
+    - provenance: the eval id that owns summary_path (static_<ts>, the parent-dir
+      name) must appear in report_text. A carried-over column with no citation cannot
+      be audited and goes to ``uncited``.
+    - value match: the actual value at ``field`` in summary.json must equal
+      reported_value within tolerance ``max(abs_tol, rel_tol * |actual|)``. The report
+      rounds (1.283 vs a file's 1.2833663...), so this is a tolerance compare, not
+      exact equality. A drop past tolerance goes to ``mismatched``.
+
+    ok is True iff both lists are empty. An empty refs list is a vacuous pass
+    (back-compat: callers that cannot extract refs do not trigger the gate).
+    Loud-fails (OmxError) on a missing summary.json or a missing field path — the
+    source of truth must exist and be readable, else the gate is meaningless.
+    """
+    text_lower = report_text.lower()
+    uncited: list[dict] = []
+    mismatched: list[dict] = []
+
+    for ref in refs:
+        missing = [k for k in _REQUIRED_REF_KEYS if k not in ref]
+        if missing:
+            raise OmxError(
+                f"cross-run ref missing required keys {missing}: {ref!r} "
+                f"(each ref needs {list(_REQUIRED_REF_KEYS)})")
+        label = ref["label"]
+        summary_path = ref["summary_path"]
+        field_path = ref["field"]
+        reported = float(ref["reported_value"])
+
+        if not os.path.isfile(summary_path):
+            raise OmxError(f"cross-run ref summary.json not found: {summary_path}")
+        with open(summary_path, encoding="utf-8") as fh:
+            payload = json.load(fh)
+        actual = _dig(payload, field_path, summary_path)
+        eval_id = _eval_id_from_summary_path(summary_path)
+
+        if eval_id.lower() not in text_lower:
+            uncited.append({"label": label, "eval_id": eval_id, "field": field_path})
+
+        tol = max(abs_tol, rel_tol * abs(actual))
+        if abs(actual - reported) > tol:
+            mismatched.append({
+                "label": label, "eval_id": eval_id, "field": field_path,
+                "reported": reported, "actual": actual, "tol": tol})
+
+    return CrossRefResult(
+        ok=(not uncited and not mismatched),
+        uncited=uncited,
+        mismatched=mismatched,
     )

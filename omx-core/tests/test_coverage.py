@@ -8,9 +8,11 @@ DIAGNOSIS output — a count-only lint would wave it through. So coverage checks
 (a) every declared diagnostic group has >=1 referenced metric, and (b) >=1 engine
 marker is cited (the report was grounded in the engine, not hand-extracted scalars).
 """
+import json
+
 import pytest
 
-from omx_core.coverage import CoverageResult, check_coverage
+from omx_core.coverage import CoverageResult, CrossRefResult, check_coverage, check_cross_run_refs
 from omx_core.omx_paths import OmxError
 
 
@@ -508,3 +510,173 @@ def test_regression_and_coverage_independent():
     # but it shrank massively -> regression -> ok False
     assert res.regression["is_regression"] is True
     assert res.ok is False
+
+
+# =====================================================================
+# cross-run reference-value gate (E4 stale-teacher-column incident,
+# 2026-06-08). A report often carries a cross-run reference column
+# (e.g. a 'teacher hard' column in an experiment's tracking table).
+# The values in that column were CARRIED FORWARD from a prior report
+# and went STALE — the narrative "roll/yaw beat the teacher" was a lie
+# because the teacher column no longer matched the canonical teacher
+# eval. The depth/regression gate could not see this (the report grew,
+# not shrank). So we add a gate over caller-supplied refs that checks
+# BOTH (per the user decision "둘 다"):
+#   (1) provenance: the eval id that a reference value came from
+#       (static_<ts>) must be CITED in the report text — a carried-over
+#       column with no citation cannot be audited;
+#   (2) value match: the reported value must match the ACTUAL value in
+#       that eval's summary.json (within rounding tolerance) — a stale
+#       value is a hard fail.
+# The fragile part (parsing the table to BUILD the refs) is the
+# caller's job; this function is the pure verification engine.
+# =====================================================================
+def _write_summary(tmp_path, eval_id, payload):
+    """Write a minimal eval summary.json under <tmp>/<eval_id>/summary.json."""
+    d = tmp_path / eval_id
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / "summary.json"
+    p.write_text(json.dumps(payload))
+    return str(p)
+
+
+def _teacher_payload():
+    # the real teacher summary.json shape: level -> axis -> {ss_error, ...}
+    return {
+        "none": {"att_norm": {"ss_error": 0.5920890680847108}},
+        "hard": {"att_norm": {"ss_error": 1.2833663946366705},
+                 "roll": {"ss_error": 1.101}},
+    }
+
+
+def test_no_refs_is_a_noop_pass():
+    # back-compat: no cross-run refs -> nothing to verify, vacuous pass
+    res = check_cross_run_refs("any report text", [])
+    assert isinstance(res, CrossRefResult)
+    assert res.ok is True
+    assert res.uncited == []
+    assert res.mismatched == []
+
+
+def test_matching_value_and_cited_eval_passes(tmp_path):
+    spath = _write_summary(tmp_path, "static_260607_182214", _teacher_payload())
+    report = (
+        "Against the canonical teacher (eval `static_260607_182214`), att_norm hard "
+        "is 1.283 for the teacher column."
+    )
+    refs = [{"label": "teacher hard att_norm", "summary_path": spath,
+             "field": "hard/att_norm/ss_error", "reported_value": 1.283}]
+    res = check_cross_run_refs(report, refs)
+    assert res.ok is True
+    assert res.uncited == []
+    assert res.mismatched == []
+
+
+def test_stale_value_is_caught(tmp_path):
+    # THE incident: the report's teacher-hard column says 1.06 (a stale carried-over
+    # value) but the canonical teacher eval says 1.283 -> hard fail.
+    spath = _write_summary(tmp_path, "static_260607_182214", _teacher_payload())
+    report = "teacher eval `static_260607_182214`; teacher hard att_norm reported 1.06."
+    refs = [{"label": "teacher hard att_norm", "summary_path": spath,
+             "field": "hard/att_norm/ss_error", "reported_value": 1.06}]
+    res = check_cross_run_refs(report, refs)
+    assert res.ok is False
+    assert len(res.mismatched) == 1
+    m = res.mismatched[0]
+    assert m["label"] == "teacher hard att_norm"
+    assert abs(m["actual"] - 1.2833663946366705) < 1e-9
+    assert m["reported"] == 1.06
+
+
+def test_uncited_eval_is_caught(tmp_path):
+    # the reference value matches the file, BUT the report never cites the eval id
+    # it came from -> provenance failure (E1/E2/E3 had teacher columns with no
+    # static_<ts> citation). Must fail even though the number is correct.
+    spath = _write_summary(tmp_path, "static_260607_182214", _teacher_payload())
+    report = "teacher hard att_norm 1.283 (no eval id cited anywhere)."
+    refs = [{"label": "teacher hard att_norm", "summary_path": spath,
+             "field": "hard/att_norm/ss_error", "reported_value": 1.283}]
+    res = check_cross_run_refs(report, refs)
+    assert res.ok is False
+    assert "teacher hard att_norm" in [u["label"] for u in res.uncited]
+    # value itself matched, so it is NOT in mismatched
+    assert res.mismatched == []
+
+
+def test_rounding_tolerance_allows_reported_precision(tmp_path):
+    # the report rounds to 3 sig figs (1.283); the file is 1.2833663...
+    # this must PASS — we compare within tolerance, not exact equality.
+    spath = _write_summary(tmp_path, "static_260607_182214", _teacher_payload())
+    report = "eval `static_260607_182214`; teacher hard att_norm 1.283."
+    refs = [{"label": "teacher hard att_norm", "summary_path": spath,
+             "field": "hard/att_norm/ss_error", "reported_value": 1.283}]
+    res = check_cross_run_refs(report, refs)
+    assert res.ok is True
+    assert res.mismatched == []
+
+
+def test_small_value_uses_abs_tolerance(tmp_path):
+    # yaw ss_error ~ 0.0035: a relative tolerance alone would be too strict on a
+    # rounded 0.0035 vs 0.00351; abs_tol covers small magnitudes.
+    payload = {"hard": {"yaw": {"ss_error": 0.00351}}}
+    spath = _write_summary(tmp_path, "static_260607_182214", payload)
+    report = "eval `static_260607_182214`; teacher hard yaw 0.0035."
+    refs = [{"label": "teacher hard yaw", "summary_path": spath,
+             "field": "hard/yaw/ss_error", "reported_value": 0.0035}]
+    res = check_cross_run_refs(report, refs)
+    assert res.ok is True
+
+
+def test_missing_summary_file_loud_fails(tmp_path):
+    report = "eval `static_260607_182214`."
+    refs = [{"label": "x", "summary_path": str(tmp_path / "nope/summary.json"),
+             "field": "hard/att_norm/ss_error", "reported_value": 1.0}]
+    with pytest.raises(OmxError):
+        check_cross_run_refs(report, refs)
+
+
+def test_missing_field_path_loud_fails(tmp_path):
+    # a typo'd field path must loud-fail, not silently skip the check
+    spath = _write_summary(tmp_path, "static_260607_182214", _teacher_payload())
+    report = "eval `static_260607_182214`."
+    refs = [{"label": "x", "summary_path": spath,
+             "field": "hard/att_norm/NOPE", "reported_value": 1.0}]
+    with pytest.raises(OmxError):
+        check_cross_run_refs(report, refs)
+
+
+def test_malformed_ref_loud_fails(tmp_path):
+    # a ref missing a required key must loud-fail (a typo must not disable the gate)
+    spath = _write_summary(tmp_path, "static_260607_182214", _teacher_payload())
+    report = "eval `static_260607_182214`."
+    with pytest.raises(OmxError):
+        check_cross_run_refs(report, [{"label": "x", "summary_path": spath}])
+
+
+def test_eval_id_derived_from_summary_path(tmp_path):
+    # the cited token is the eval-dir name (static_<ts>), derived from summary_path's
+    # parent dir — so the report citing that dir name counts as provenance.
+    spath = _write_summary(tmp_path, "static_260607_093844", _teacher_payload())
+    report = "eval `static_260607_093844`; teacher hard att_norm 1.283."
+    refs = [{"label": "teacher hard", "summary_path": spath,
+             "field": "hard/att_norm/ss_error", "reported_value": 1.283}]
+    res = check_cross_run_refs(report, refs)
+    assert res.ok is True
+
+
+def test_multiple_refs_partial_failure(tmp_path):
+    # one ref stale, one ref fine -> ok False, only the stale one in mismatched
+    spath = _write_summary(tmp_path, "static_260607_182214", _teacher_payload())
+    report = (
+        "eval `static_260607_182214`; teacher hard att_norm 1.283; "
+        "teacher hard roll 9.99 (stale)."
+    )
+    refs = [
+        {"label": "att_norm", "summary_path": spath,
+         "field": "hard/att_norm/ss_error", "reported_value": 1.283},
+        {"label": "roll", "summary_path": spath,
+         "field": "hard/roll/ss_error", "reported_value": 9.99},  # file says 1.101
+    ]
+    res = check_cross_run_refs(report, refs)
+    assert res.ok is False
+    assert [m["label"] for m in res.mismatched] == ["roll"]
