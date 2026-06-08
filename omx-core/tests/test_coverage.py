@@ -8,9 +8,11 @@ DIAGNOSIS output — a count-only lint would wave it through. So coverage checks
 (a) every declared diagnostic group has >=1 referenced metric, and (b) >=1 engine
 marker is cited (the report was grounded in the engine, not hand-extracted scalars).
 """
+import json
+
 import pytest
 
-from omx_core.coverage import CoverageResult, check_coverage
+from omx_core.coverage import CoverageResult, CrossRefResult, check_coverage, check_cross_run_refs
 from omx_core.omx_paths import OmxError
 
 
@@ -346,3 +348,335 @@ def test_partial_groups_in_strict_mode_only_for_passing_thin_groups():
     assert "reward_decomp" in res.partial_groups
     # constraint (1/1) fully covered -> not partial
     assert "constraint" not in res.partial_groups
+
+
+# =====================================================================
+# required_sections — declared report sections (NOT metric tokens) must
+# exist as headings. Catches a whole '## generalization' section being
+# dropped, which the metric-token groups cannot see (the dr_harder
+# 2026-06-08 incident: OOD/generalization section deleted, lint passed).
+# =====================================================================
+_SECTIONS = ["tracking", "generalization", "constraint", "doraemon", "verdict"]
+
+
+def test_required_sections_absent_field_is_noop():
+    # back-compat: a profile without required_sections cannot fail on it.
+    # (no groups/markers either -> isolate the required_sections check)
+    res = check_coverage("## tracking\nstuff", _profile())
+    assert res.missing_sections == []
+    assert res.ok is True
+
+
+def test_required_sections_all_present_passes():
+    report = (
+        "## tracking error\nroll ss_error.\n"
+        "## generalization (in-dist hard vs OOD)\nood gap.\n"
+        "## constraint\nmargin/attitude.\n"
+        "## doraemon\nsuccess_rate.\n"
+        "## verdict\nbottom line.\n"
+        "Reward/att_rp lin_vel entropy line_search_success Loss/value_function "
+        "cost_value Encoder/z_std encoder_grad_norm margin/attitude "
+        "doraemon_success_rate ess_ratio [DIAGNOSIS] changepoint"
+    )
+    p = _profile(groups=_GROUPS, markers=_MARKERS)
+    p["required_sections"] = _SECTIONS
+    res = check_coverage(report, p)
+    assert res.missing_sections == []
+    assert res.ok is True
+
+
+def test_required_section_missing_fails():
+    # generalization section dropped -> must be caught (the exact incident)
+    report = (
+        "## tracking error\nroll ss_error.\n"
+        "## constraint\nmargin/attitude.\n"
+        "## doraemon\nsuccess_rate.\n"
+        "## verdict\nbottom line.\n"
+        "Reward/att_rp lin_vel entropy line_search_success Loss/value_function "
+        "cost_value Encoder/z_std encoder_grad_norm margin/attitude "
+        "doraemon_success_rate ess_ratio [DIAGNOSIS] changepoint"
+    )
+    p = _profile(groups=_GROUPS, markers=_MARKERS)
+    p["required_sections"] = _SECTIONS
+    res = check_coverage(report, p)
+    assert "generalization" in res.missing_sections
+    assert res.ok is False  # a missing required section is a hard fail
+
+
+def test_required_sections_match_is_substring_in_heading_only():
+    # a section token must appear in a markdown HEADING line, not anywhere in prose.
+    # Mentioning the word 'generalization' inside a paragraph must NOT satisfy it.
+    report = (
+        "## tracking error\nThe generalization to OOD is discussed below in prose only.\n"
+        "## constraint\nx\n## doraemon\nx\n## verdict\nx\n"
+        "Reward/att_rp lin_vel entropy line_search_success Loss/value_function "
+        "cost_value Encoder/z_std encoder_grad_norm margin/attitude "
+        "doraemon_success_rate ess_ratio [DIAGNOSIS]"
+    )
+    p = _profile(groups=_GROUPS, markers=_MARKERS)
+    p["required_sections"] = _SECTIONS
+    res = check_coverage(report, p)
+    assert "generalization" in res.missing_sections  # prose mention does NOT count
+
+
+def test_required_sections_must_be_list_of_str():
+    p = _profile(groups=_GROUPS)
+    p["required_sections"] = "generalization"  # not a list
+    with pytest.raises(OmxError):
+        check_coverage("## x", p)
+
+
+# =====================================================================
+# baseline regression gate — a RE-analysis must not be shallower than
+# the prior report it replaces. Compares word / [FINDING] / data-table-row
+# counts; a drop past tolerance is a regression (the dr_harder 2026-06-08
+# incident: reports shrank 25-39% in words, 40-91% in table rows, lint
+# still passed). Opt-in: only active when baseline_text is provided.
+# =====================================================================
+def _rich_report(n_find=10, n_rows=20, pad_words=400):
+    finds = "\n".join(f"[FINDING] claim {i} [EVIDENCE: x] [CONFIDENCE: HIGH]" for i in range(n_find))
+    rows = "\n".join(f"| axis{i} | {i}.0 | {i}.1 | {i}.2 |" for i in range(n_rows))
+    pad = " ".join(["word"] * pad_words)
+    return f"## tracking\n{finds}\n{rows}\n{pad}\n"
+
+
+def test_no_baseline_text_means_no_regression_check():
+    # back-compat: without a baseline, the regression gate is inert
+    res = check_coverage(_rich_report(n_find=1, n_rows=1, pad_words=10),
+                         _profile(groups=_GROUPS, markers=_MARKERS))
+    assert res.regression is None  # not evaluated
+
+
+def test_regression_flagged_when_report_shrinks():
+    old = _rich_report(n_find=16, n_rows=30, pad_words=2000)
+    new = _rich_report(n_find=10, n_rows=12, pad_words=1300)  # the dr_harder shrink shape
+    res = check_coverage(new, _profile(groups=_GROUPS, markers=_MARKERS),
+                         baseline_text=old)
+    assert res.regression is not None
+    assert res.regression["is_regression"] is True
+    # all three axes regressed
+    assert res.regression["words"]["new"] < res.regression["words"]["old"]
+    assert res.regression["findings"]["new"] < res.regression["findings"]["old"]
+    assert res.regression["tables"]["new"] < res.regression["tables"]["old"]
+    assert res.ok is False  # regression is a hard fail
+
+
+def test_no_regression_when_report_grows_or_matches():
+    # isolate the regression gate: no groups/markers, so only the baseline drives ok
+    old = _rich_report(n_find=10, n_rows=20, pad_words=1000)
+    new = _rich_report(n_find=12, n_rows=22, pad_words=1100)  # richer rewrite
+    res = check_coverage(new, _profile(), baseline_text=old)
+    assert res.regression["is_regression"] is False
+    assert res.ok is True
+
+
+def test_regression_tolerance_allows_small_shrink():
+    # default tolerance: a tiny shrink (e.g. tighter prose, same findings/tables)
+    # is allowed; only a meaningful drop trips it. findings/tables held equal,
+    # words down ~3% -> within tolerance. (no groups/markers -> isolate gate)
+    old = _rich_report(n_find=10, n_rows=20, pad_words=1000)
+    new = _rich_report(n_find=10, n_rows=20, pad_words=970)
+    res = check_coverage(new, _profile(), baseline_text=old)
+    assert res.regression["is_regression"] is False
+    assert res.ok is True
+
+
+def test_dropping_findings_is_a_regression_even_if_words_held():
+    # findings/tables are stronger signals than raw words: dropping analysis units
+    # is a regression even if word count is padded back up.
+    old = _rich_report(n_find=16, n_rows=30, pad_words=1000)
+    new = _rich_report(n_find=8, n_rows=30, pad_words=1400)  # words UP, findings HALVED
+    res = check_coverage(new, _profile(groups=_GROUPS, markers=_MARKERS),
+                         baseline_text=old)
+    assert res.regression["is_regression"] is True
+    assert res.ok is False
+
+
+def test_regression_and_coverage_independent():
+    # a report can pass coverage (all groups + engine) yet fail the regression gate
+    old = _rich_report(n_find=16, n_rows=30, pad_words=2000)
+    new_text = (
+        "## tracking\n[FINDING] one [EVIDENCE: x] [CONFIDENCE: HIGH]\n"
+        "| a | 1 |\n"
+        "Reward/att_rp lin_vel entropy line_search_success Loss/value_function "
+        "cost_value Encoder/z_std encoder_grad_norm margin/attitude "
+        "doraemon_success_rate ess_ratio [DIAGNOSIS]"
+    )
+    res = check_coverage(new_text, _profile(groups=_GROUPS, markers=_MARKERS),
+                         baseline_text=old)
+    # coverage groups all referenced + engine cited -> groups/engine fine
+    assert res.missing_groups == []
+    assert res.engine_cited is True
+    # but it shrank massively -> regression -> ok False
+    assert res.regression["is_regression"] is True
+    assert res.ok is False
+
+
+# =====================================================================
+# cross-run reference-value gate (E4 stale-teacher-column incident,
+# 2026-06-08). A report often carries a cross-run reference column
+# (e.g. a 'teacher hard' column in an experiment's tracking table).
+# The values in that column were CARRIED FORWARD from a prior report
+# and went STALE — the narrative "roll/yaw beat the teacher" was a lie
+# because the teacher column no longer matched the canonical teacher
+# eval. The depth/regression gate could not see this (the report grew,
+# not shrank). So we add a gate over caller-supplied refs that checks
+# BOTH (per the user decision "둘 다"):
+#   (1) provenance: the eval id that a reference value came from
+#       (static_<ts>) must be CITED in the report text — a carried-over
+#       column with no citation cannot be audited;
+#   (2) value match: the reported value must match the ACTUAL value in
+#       that eval's summary.json (within rounding tolerance) — a stale
+#       value is a hard fail.
+# The fragile part (parsing the table to BUILD the refs) is the
+# caller's job; this function is the pure verification engine.
+# =====================================================================
+def _write_summary(tmp_path, eval_id, payload):
+    """Write a minimal eval summary.json under <tmp>/<eval_id>/summary.json."""
+    d = tmp_path / eval_id
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / "summary.json"
+    p.write_text(json.dumps(payload))
+    return str(p)
+
+
+def _teacher_payload():
+    # the real teacher summary.json shape: level -> axis -> {ss_error, ...}
+    return {
+        "none": {"att_norm": {"ss_error": 0.5920890680847108}},
+        "hard": {"att_norm": {"ss_error": 1.2833663946366705},
+                 "roll": {"ss_error": 1.101}},
+    }
+
+
+def test_no_refs_is_a_noop_pass():
+    # back-compat: no cross-run refs -> nothing to verify, vacuous pass
+    res = check_cross_run_refs("any report text", [])
+    assert isinstance(res, CrossRefResult)
+    assert res.ok is True
+    assert res.uncited == []
+    assert res.mismatched == []
+
+
+def test_matching_value_and_cited_eval_passes(tmp_path):
+    spath = _write_summary(tmp_path, "static_260607_182214", _teacher_payload())
+    report = (
+        "Against the canonical teacher (eval `static_260607_182214`), att_norm hard "
+        "is 1.283 for the teacher column."
+    )
+    refs = [{"label": "teacher hard att_norm", "summary_path": spath,
+             "field": "hard/att_norm/ss_error", "reported_value": 1.283}]
+    res = check_cross_run_refs(report, refs)
+    assert res.ok is True
+    assert res.uncited == []
+    assert res.mismatched == []
+
+
+def test_stale_value_is_caught(tmp_path):
+    # THE incident: the report's teacher-hard column says 1.06 (a stale carried-over
+    # value) but the canonical teacher eval says 1.283 -> hard fail.
+    spath = _write_summary(tmp_path, "static_260607_182214", _teacher_payload())
+    report = "teacher eval `static_260607_182214`; teacher hard att_norm reported 1.06."
+    refs = [{"label": "teacher hard att_norm", "summary_path": spath,
+             "field": "hard/att_norm/ss_error", "reported_value": 1.06}]
+    res = check_cross_run_refs(report, refs)
+    assert res.ok is False
+    assert len(res.mismatched) == 1
+    m = res.mismatched[0]
+    assert m["label"] == "teacher hard att_norm"
+    assert abs(m["actual"] - 1.2833663946366705) < 1e-9
+    assert m["reported"] == 1.06
+
+
+def test_uncited_eval_is_caught(tmp_path):
+    # the reference value matches the file, BUT the report never cites the eval id
+    # it came from -> provenance failure (E1/E2/E3 had teacher columns with no
+    # static_<ts> citation). Must fail even though the number is correct.
+    spath = _write_summary(tmp_path, "static_260607_182214", _teacher_payload())
+    report = "teacher hard att_norm 1.283 (no eval id cited anywhere)."
+    refs = [{"label": "teacher hard att_norm", "summary_path": spath,
+             "field": "hard/att_norm/ss_error", "reported_value": 1.283}]
+    res = check_cross_run_refs(report, refs)
+    assert res.ok is False
+    assert "teacher hard att_norm" in [u["label"] for u in res.uncited]
+    # value itself matched, so it is NOT in mismatched
+    assert res.mismatched == []
+
+
+def test_rounding_tolerance_allows_reported_precision(tmp_path):
+    # the report rounds to 3 sig figs (1.283); the file is 1.2833663...
+    # this must PASS — we compare within tolerance, not exact equality.
+    spath = _write_summary(tmp_path, "static_260607_182214", _teacher_payload())
+    report = "eval `static_260607_182214`; teacher hard att_norm 1.283."
+    refs = [{"label": "teacher hard att_norm", "summary_path": spath,
+             "field": "hard/att_norm/ss_error", "reported_value": 1.283}]
+    res = check_cross_run_refs(report, refs)
+    assert res.ok is True
+    assert res.mismatched == []
+
+
+def test_small_value_uses_abs_tolerance(tmp_path):
+    # yaw ss_error ~ 0.0035: a relative tolerance alone would be too strict on a
+    # rounded 0.0035 vs 0.00351; abs_tol covers small magnitudes.
+    payload = {"hard": {"yaw": {"ss_error": 0.00351}}}
+    spath = _write_summary(tmp_path, "static_260607_182214", payload)
+    report = "eval `static_260607_182214`; teacher hard yaw 0.0035."
+    refs = [{"label": "teacher hard yaw", "summary_path": spath,
+             "field": "hard/yaw/ss_error", "reported_value": 0.0035}]
+    res = check_cross_run_refs(report, refs)
+    assert res.ok is True
+
+
+def test_missing_summary_file_loud_fails(tmp_path):
+    report = "eval `static_260607_182214`."
+    refs = [{"label": "x", "summary_path": str(tmp_path / "nope/summary.json"),
+             "field": "hard/att_norm/ss_error", "reported_value": 1.0}]
+    with pytest.raises(OmxError):
+        check_cross_run_refs(report, refs)
+
+
+def test_missing_field_path_loud_fails(tmp_path):
+    # a typo'd field path must loud-fail, not silently skip the check
+    spath = _write_summary(tmp_path, "static_260607_182214", _teacher_payload())
+    report = "eval `static_260607_182214`."
+    refs = [{"label": "x", "summary_path": spath,
+             "field": "hard/att_norm/NOPE", "reported_value": 1.0}]
+    with pytest.raises(OmxError):
+        check_cross_run_refs(report, refs)
+
+
+def test_malformed_ref_loud_fails(tmp_path):
+    # a ref missing a required key must loud-fail (a typo must not disable the gate)
+    spath = _write_summary(tmp_path, "static_260607_182214", _teacher_payload())
+    report = "eval `static_260607_182214`."
+    with pytest.raises(OmxError):
+        check_cross_run_refs(report, [{"label": "x", "summary_path": spath}])
+
+
+def test_eval_id_derived_from_summary_path(tmp_path):
+    # the cited token is the eval-dir name (static_<ts>), derived from summary_path's
+    # parent dir — so the report citing that dir name counts as provenance.
+    spath = _write_summary(tmp_path, "static_260607_093844", _teacher_payload())
+    report = "eval `static_260607_093844`; teacher hard att_norm 1.283."
+    refs = [{"label": "teacher hard", "summary_path": spath,
+             "field": "hard/att_norm/ss_error", "reported_value": 1.283}]
+    res = check_cross_run_refs(report, refs)
+    assert res.ok is True
+
+
+def test_multiple_refs_partial_failure(tmp_path):
+    # one ref stale, one ref fine -> ok False, only the stale one in mismatched
+    spath = _write_summary(tmp_path, "static_260607_182214", _teacher_payload())
+    report = (
+        "eval `static_260607_182214`; teacher hard att_norm 1.283; "
+        "teacher hard roll 9.99 (stale)."
+    )
+    refs = [
+        {"label": "att_norm", "summary_path": spath,
+         "field": "hard/att_norm/ss_error", "reported_value": 1.283},
+        {"label": "roll", "summary_path": spath,
+         "field": "hard/roll/ss_error", "reported_value": 9.99},  # file says 1.101
+    ]
+    res = check_cross_run_refs(report, refs)
+    assert res.ok is False
+    assert [m["label"] for m in res.mismatched] == ["roll"]

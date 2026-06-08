@@ -209,6 +209,71 @@ Before drafting `report.md`:
 This PRE-WRITE checklist is what actually prevents the skip; the `omx report-coverage`
 run in "When done" is the backstop that catches a checklist you didn't honor.
 
+## RE-analyzing a run that already has a report — the OLD report is your BASE, never start short (the report-shrink incident)
+
+When the run you are analyzing **already has a prior `report.md`** (a re-run because
+the eval/plot code changed, a correction pass, an updated analysis), you are NOT
+writing a fresh report — you are **revising the existing one**. The dr_harder
+2026-06-08 incident is the cautionary tale: a re-analysis (only the plots had changed —
+yaw rad/s→deg/s, OOD level, error bars; the summary.json NUMBERS were identical) was
+rewritten from scratch off the data pack instead of from the OLD report, and it came
+out **25–39% shorter in words, 40–91% fewer data-table rows, the whole
+`## generalization (OOD)` section deleted, the encoder z-sweep ranking gone** — yet it
+passed the token-coverage lint, because every group token still appeared once. The
+analysis depth was destroyed while the headings survived.
+
+The rule, non-negotiable:
+
+1. **Read the prior report FIRST and use it as the literal BASE.** Open the latest
+   existing `<run>/analysis/<diagnose-*>/report.md`. Your new report STARTS as a copy of
+   it. You then update ONLY what actually changed — corrected plot references, corrected
+   numbers — on top of it. You do not re-derive the prose from the data pack and hope it
+   matches; that is what loses sections.
+2. **A re-analysis may NEVER be shallower than the report it replaces.** It must keep
+   every `## section`, every `[FINDING]`, and every data table the OLD report had. If a
+   finding is genuinely obsolete you may REPLACE it with the corrected one, but the count
+   does not drop. New evidence ADDS; corrections SUBSTITUTE; nothing silently vanishes.
+3. **If your draft is shorter than the OLD report, STOP — that is the regression, not a
+   tighter rewrite.** Measure it: `wc -w` and count `[FINDING]` / table rows (`^|`) in
+   both. Fewer words past ~10%, OR any drop in findings, OR any drop in table rows = you
+   deleted analysis. Go back to the OLD report and carry the missing parts forward.
+4. **Run the regression gate as part of When-done** (not optional for a re-analysis):
+   `omx report-coverage --path <new report.md> --root <root> --min-coverage 0.5 --baseline auto`
+   `--baseline auto` picks the latest sibling analysis as the comparison; it loud-fails
+   (exit 2) if the new report dropped sections, findings, or tables. A re-analysis is not
+   done until this passes.
+5. **coverage `ok:true` is NOT a quality gate — it is a floor.** The token lint only
+   checks each group's metric token appears once; it cannot see depth, a deleted section
+   (until `required_sections` names it), or a gutted table. Passing the lint means you did
+   not skip a whole family — it does NOT mean you analyzed thoroughly. The depth bar is
+   rule 03 (per-axis × ALL 4 DR levels, heavy-tail vs DC-bias separated, encoder z-sweep,
+   a dedicated generalization/OOD section, all 10 per-constraint rows) + "≥ the OLD
+   report", not "the lint went green".
+6. **Carry forward the PROSE, never the cross-run reference VALUES — re-extract every
+   number from its source eval each analysis (the E4 stale-column incident).** Rule 1
+   says copy the OLD report as your base; that is for structure and depth. But a report
+   often carries a column of values from ANOTHER run — a `teacher hard` reference column
+   in an experiment's tracking/reward/constraint tables, the canonical-baseline numbers a
+   comparison narrative leans on. Those values go STALE the moment the source run is
+   re-evaluated, and a carried-over stale value flips the story silently: in the E4
+   2026-06-08 incident the carried `teacher` column no longer matched the canonical
+   teacher eval, so "roll/yaw beat the teacher" was a lie the depth gate could not see
+   (the report had GROWN, not shrunk). So, for every cross-run reference cell:
+   - **Re-open the source run's CURRENT canonical `summary.json` and read the value
+     fresh.** Never copy a cross-run number from the prior report's text.
+   - **Cite the source eval id (`static_<ts>`) in the report** next to the value, so the
+     column is auditable back to the file it came from. A teacher column with no eval id
+     cited is unverifiable and the gate rejects it.
+   - **Verify it as part of When-done** with `--cross-run-refs` (below): build a small
+     `refs.json` of `{label, summary_path, field, reported_value}` for each cross-run cell;
+     the gate loud-fails on a stale value OR an uncited source. The asymmetry is the point:
+     prose/findings/tables must NOT shrink (rule 1–4), cross-run reference values must NOT
+     be carried over at all (rule 6) — they are re-derived every time.
+
+This applies to FIRST-time reports too in spirit (rule 03 is the depth bar regardless),
+but it BINDS hardest on re-analysis, where a prior report exists to measure against and
+"the numbers didn't change, I'll just regenerate" is the exact trap.
+
 ## Building the report (permanent tree, via the core — never hand-write paths)
 
 > **Grouped runs (purpose / experiment_name layer).** When a run lives under an extra
@@ -459,9 +524,20 @@ summarize the top findings (with their confidence), and **prove the completeness
 passed before declaring done** — show that `omx report-coverage ... --min-coverage 0.5`
 returned `ok: true` (or state the explicit, cross-checked N/A exceptions for any group
 it flagged). A report whose strict coverage lint fails is NOT done: fill the thin group
-and re-run. Also confirm the report is **bookended** — a `## TL;DR` at the top and a
-closing `## verdict` / `## bottom line` at the bottom (PRE-WRITE step 4); a report that
-ends on its last diagnostic group with no closing synthesis is not done. The PRE-WRITE
-per-group TodoWrite checklist ("Before drafting") is what should have prevented any
-failure here; this final lint is the backstop. Then STOP.
+and re-run. **If this run already had a prior report (a re-analysis), add `--baseline auto`
+to that command — the depth-regression gate must pass too**, proving the new report did not
+drop sections/findings/tables vs the one it replaces (the report-shrink incident).
+**If the report carries any cross-run reference value (a `teacher`/baseline column from
+ANOTHER run — see RE-analysis rule 6), also add `--cross-run-refs <refs.json>`** where
+`refs.json` is a JSON list of `{label, summary_path, field, reported_value}`, one per
+cross-run cell, with `summary_path` pointing at the source run's CURRENT canonical
+`summary.json`. The gate loud-fails (exit 2) on a STALE value (the cell disagrees with the
+source eval) or an UNCITED source (the source eval id is not named in the report) — the
+E4 stale-teacher-column guard. A report with carried-over reference values is not done
+until this passes; a report with none can omit the flag. Also
+confirm the report is **bookended** — a `## TL;DR` at the top and a closing `## verdict` /
+`## bottom line` at the bottom (PRE-WRITE step 4); a report that ends on its last diagnostic
+group with no closing synthesis is not done. The PRE-WRITE per-group TodoWrite checklist
+("Before drafting") is what should have prevented any failure here; this final lint is the
+backstop. Then STOP.
 Do not propose or launch a next experiment — that is exp-design's job (#5).

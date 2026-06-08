@@ -22,7 +22,10 @@ the goal is to catch a whole group/engine being skipped, not to police wording.
 """
 from __future__ import annotations
 
+import json
 import math
+import os
+import re
 from dataclasses import dataclass, field
 
 from omx_core.omx_paths import OmxError
@@ -43,6 +46,17 @@ class CoverageResult:
     # but have hits < total — field-level omissions within a passing group.
     # Surfaced as a warning so the analyst cannot silently skip sub-group fields.
     partial_groups: list[str] = field(default_factory=list)
+    # dr_harder 2026-06-08 incident: required SECTIONS (markdown headings, NOT metric
+    # tokens) that the report must contain as headings. A whole '## generalization'
+    # section was dropped and the token-group lint could not see it (OOD maps to no
+    # group). Declared sections absent as headings -> hard fail. Empty when the
+    # profile declares none (back-compat).
+    missing_sections: list[str] = field(default_factory=list)
+    # dr_harder 2026-06-08 incident: a RE-analysis shrank 25-39% in words and 40-91%
+    # in data-table rows vs the report it replaced, and the lint still passed. When a
+    # baseline_text is provided, compare word / [FINDING] / data-table-row counts; a
+    # drop past tolerance is a regression and a hard fail. None when no baseline given.
+    regression: dict | None = None
 
 
 def _leaf(token: str) -> str:
@@ -59,8 +73,74 @@ def _referenced(token: str, haystack_lower: str) -> bool:
     return any(c in haystack_lower for c in candidates)
 
 
+# markdown heading line: one or more '#' then text. We match a section token against
+# the heading TEXT only (not body prose), so a passing mention buried in a paragraph
+# does not satisfy a required section (the generalization-section-dropped incident).
+_HEADING_RE = re.compile(r"(?m)^\s{0,3}#{1,6}\s+(.*)$")
+
+
+def _heading_texts(report_text: str) -> list[str]:
+    """Lowercased text of every markdown heading line in the report."""
+    return [m.group(1).strip().lower() for m in _HEADING_RE.finditer(report_text)]
+
+
+def _section_present(token: str, headings_lower: list[str]) -> bool:
+    """True if the section token appears inside ANY heading's text (substring)."""
+    t = token.strip().lower()
+    return len(t) > 0 and any(t in h for h in headings_lower)
+
+
+# a data row = a line that is a markdown table data/separator row (starts with '|').
+# This is the depth signal the dr_harder rewrite gutted (per-axis x DR-level tables,
+# the 10-row per-constraint table, the z-sweep ranking) while keeping the headings.
+_TABLE_ROW_RE = re.compile(r"(?m)^\s*\|.*\|\s*$")
+_FINDING_RE = re.compile(r"\[FINDING\]")
+_WORD_RE = re.compile(r"\S+")
+
+
+def _depth_counts(text: str) -> dict[str, int]:
+    """Word / [FINDING] / markdown-table-row counts — the three depth signals."""
+    return {
+        "words": len(_WORD_RE.findall(text)),
+        "findings": len(_FINDING_RE.findall(text)),
+        "tables": len(_TABLE_ROW_RE.findall(text)),
+    }
+
+
+def _check_regression(new_text: str, baseline_text: str,
+                      word_tol: float = 0.10) -> dict:
+    """Compare a re-analysis against the report it replaces (dr_harder incident).
+
+    A re-analysis must not be SHALLOWER than its predecessor. Three signals:
+    - words: raw length; a soft signal (tighter prose is fine) -> word_tol slack
+      (default 10%: words may drop up to 10% before counting as a regression).
+    - findings: [FINDING] count = analysis units; ANY drop is a regression (dropping
+      a finding means an analysis was removed, even if words were padded back).
+    - tables: markdown data-row count = the per-axis/per-constraint/z-sweep tables;
+      ANY drop is a regression (this is what actually got gutted, 40-91%).
+
+    is_regression is True if findings dropped, OR tables dropped, OR words dropped past
+    word_tol. Returns the per-signal old/new counts so the caller can report WHERE.
+    """
+    old = _depth_counts(baseline_text)
+    new = _depth_counts(new_text)
+    words_regressed = new["words"] < old["words"] * (1.0 - word_tol)
+    findings_regressed = new["findings"] < old["findings"]
+    tables_regressed = new["tables"] < old["tables"]
+    is_regression = words_regressed or findings_regressed or tables_regressed
+    return {
+        "is_regression": is_regression,
+        "words": {"old": old["words"], "new": new["words"], "regressed": words_regressed},
+        "findings": {"old": old["findings"], "new": new["findings"],
+                     "regressed": findings_regressed},
+        "tables": {"old": old["tables"], "new": new["tables"], "regressed": tables_regressed},
+        "word_tol": word_tol,
+    }
+
+
 def check_coverage(report_text: str, profile: dict,
-                   min_coverage: float | None = None) -> CoverageResult:
+                   min_coverage: float | None = None,
+                   baseline_text: str | None = None) -> CoverageResult:
     """Lint a report.md's text against a profile's diagnostic groups + engine markers.
 
     profile['groups'] (optional): mapping {group_name: [metric, ...]} of non-empty
@@ -77,6 +157,18 @@ def check_coverage(report_text: str, profile: dict,
     tokens are referenced, catching shallow partial coverage (a group with several
     tokens but only one named). A value outside (0, 1] loud-fails (OmxError).
     group_hits always reports per-group (hit, total) so the caller sees WHERE it is thin.
+
+    profile['required_sections'] (optional, dr_harder 2026-06-08 incident): list of
+    section tokens that MUST appear as markdown HEADINGS (not just prose). The token
+    is matched against heading TEXT only, so the OOD/generalization section being
+    deleted is caught even though it maps to no metric group. A declared section
+    absent as a heading -> missing_sections + hard fail. Must be a list of strings.
+
+    baseline_text (optional, dr_harder 2026-06-08 incident): the prior report this
+    one replaces. When given, the report is compared on word / [FINDING] / table-row
+    counts; a regression (fewer findings, fewer tables, or words down past tolerance)
+    is a hard fail, so a re-analysis can never silently shrink past its predecessor.
+    None -> regression gate inert (back-compat).
     """
     if min_coverage is not None and not (0.0 < min_coverage <= 1.0):
         raise OmxError(f"min_coverage must be in (0, 1], got {min_coverage!r}")
@@ -122,13 +214,149 @@ def check_coverage(report_text: str, profile: dict,
     else:
         engine_cited = True  # no markers declared -> engine citation not required
 
-    ok = (not missing_groups) and engine_cited
+    # required_sections (dr_harder incident): declared sections must appear as headings
+    required_sections = profile.get("required_sections")
+    missing_sections: list[str] = []
+    if required_sections is not None:
+        if not isinstance(required_sections, list) or not all(
+                isinstance(s, str) for s in required_sections):
+            raise OmxError(
+                "profile['required_sections'] must be a list of section-token strings")
+        headings_lower = _heading_texts(report_text)
+        missing_sections = [
+            s for s in required_sections if not _section_present(s, headings_lower)]
+
+    # baseline regression gate (dr_harder incident): a re-analysis must not shrink
+    regression = (
+        _check_regression(report_text, baseline_text)
+        if baseline_text is not None else None)
+
+    ok = (
+        (not missing_groups)
+        and engine_cited
+        and (not missing_sections)
+        and not (regression is not None and regression["is_regression"]))
     return CoverageResult(
         ok=ok,
         missing_groups=missing_groups,
         engine_cited=engine_cited,
         checked_groups=checked_groups,
         markers_declared=markers_declared,
+        missing_sections=missing_sections,
+        regression=regression,
         group_hits=group_hits,
         partial_groups=partial_groups,
+    )
+
+
+@dataclass(frozen=True)
+class CrossRefResult:
+    """Outcome of the cross-run reference-value gate (E4 stale-column incident).
+
+    A report's cross-run reference column (e.g. a 'teacher hard' column inside an
+    experiment's tracking table) was carried forward from a prior report and went
+    STALE — the value no longer matched the canonical eval it claimed to come from,
+    flipping the narrative ("beat the teacher" was a lie). This gate verifies, for
+    each caller-supplied ref, BOTH that the source eval id is CITED in the report
+    (provenance) AND that the reported value MATCHES the eval's summary.json (no
+    stale value). ok is True iff nothing is uncited and nothing is mismatched.
+    """
+    ok: bool
+    # refs whose source eval id (static_<ts>) is NOT cited anywhere in the report
+    # text — a carried-over column that cannot be audited back to its source.
+    uncited: list[dict] = field(default_factory=list)
+    # refs whose reported value disagrees with the actual summary.json value past
+    # tolerance — the stale-value failure itself. Each entry carries label/reported/
+    # actual/eval_id/field so the caller can report exactly what is wrong.
+    mismatched: list[dict] = field(default_factory=list)
+
+
+_REQUIRED_REF_KEYS = ("label", "summary_path", "field", "reported_value")
+
+
+def _dig(payload: dict, field_path: str, summary_path: str):
+    """Walk a 'a/b/c' slash path into a nested dict; loud-fail on a missing key.
+
+    A typo'd field path must NOT silently skip the value check (that would re-open
+    the exact gap this gate closes), so an absent segment raises OmxError naming the
+    path and file.
+    """
+    node = payload
+    for seg in field_path.split("/"):
+        if not isinstance(node, dict) or seg not in node:
+            raise OmxError(
+                f"cross-run ref field {field_path!r} not found in {summary_path} "
+                f"(missing segment {seg!r})")
+        node = node[seg]
+    if not isinstance(node, (int, float)):
+        raise OmxError(
+            f"cross-run ref field {field_path!r} in {summary_path} is not a number "
+            f"(got {type(node).__name__})")
+    return float(node)
+
+
+def _eval_id_from_summary_path(summary_path: str) -> str:
+    """The eval-dir name (static_<ts>) that owns a summary.json — its parent dir."""
+    return os.path.basename(os.path.dirname(os.path.abspath(summary_path)))
+
+
+def check_cross_run_refs(report_text: str, refs: list[dict],
+                         rel_tol: float = 0.02, abs_tol: float = 5e-4) -> CrossRefResult:
+    """Verify a report's carried-over cross-run reference values (E4 incident).
+
+    Each ref is a dict with keys: 'label' (human name for the column/cell),
+    'summary_path' (path to the source eval's summary.json), 'field' (slash path
+    into that JSON, e.g. 'hard/att_norm/ss_error'), and 'reported_value' (the number
+    the report actually printed for that cell). A missing key loud-fails (OmxError) —
+    a malformed ref must not silently disable the gate.
+
+    Two independent checks per ref (the user decision "둘 다" — both):
+    - provenance: the eval id that owns summary_path (static_<ts>, the parent-dir
+      name) must appear in report_text. A carried-over column with no citation cannot
+      be audited and goes to ``uncited``.
+    - value match: the actual value at ``field`` in summary.json must equal
+      reported_value within tolerance ``max(abs_tol, rel_tol * |actual|)``. The report
+      rounds (1.283 vs a file's 1.2833663...), so this is a tolerance compare, not
+      exact equality. A drop past tolerance goes to ``mismatched``.
+
+    ok is True iff both lists are empty. An empty refs list is a vacuous pass
+    (back-compat: callers that cannot extract refs do not trigger the gate).
+    Loud-fails (OmxError) on a missing summary.json or a missing field path — the
+    source of truth must exist and be readable, else the gate is meaningless.
+    """
+    text_lower = report_text.lower()
+    uncited: list[dict] = []
+    mismatched: list[dict] = []
+
+    for ref in refs:
+        missing = [k for k in _REQUIRED_REF_KEYS if k not in ref]
+        if missing:
+            raise OmxError(
+                f"cross-run ref missing required keys {missing}: {ref!r} "
+                f"(each ref needs {list(_REQUIRED_REF_KEYS)})")
+        label = ref["label"]
+        summary_path = ref["summary_path"]
+        field_path = ref["field"]
+        reported = float(ref["reported_value"])
+
+        if not os.path.isfile(summary_path):
+            raise OmxError(f"cross-run ref summary.json not found: {summary_path}")
+        with open(summary_path, encoding="utf-8") as fh:
+            payload = json.load(fh)
+        actual = _dig(payload, field_path, summary_path)
+        eval_id = _eval_id_from_summary_path(summary_path)
+
+        if eval_id.lower() not in text_lower:
+            uncited.append({"label": label, "eval_id": eval_id, "field": field_path})
+
+        tol = max(abs_tol, rel_tol * abs(actual))
+        if abs(actual - reported) > tol:
+            mismatched.append({
+                "label": label, "eval_id": eval_id, "field": field_path,
+                "reported": reported, "actual": actual, "tol": tol})
+
+    return CrossRefResult(
+        ok=(not uncited and not mismatched),
+        uncited=uncited,
+        mismatched=mismatched,
     )

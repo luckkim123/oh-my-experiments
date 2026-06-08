@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from omx_core.loop import queue_pending_launch, read_pending_launch, deadline_passed, compute_deadline
 from omx_core.profile import bootstrap_profile, default_metrics
 from omx_core.report import parse_findings
-from omx_core.coverage import check_coverage
+from omx_core.coverage import check_coverage, check_cross_run_refs
 from omx_core.profile import load_profile_metrics
 from omx_core.wiki import ingest as _wiki_ingest, query as _wiki_query, lint as _wiki_lint, storage as _wiki_storage, gc as _wiki_gc
 
@@ -317,13 +317,43 @@ def _cmd_report_coverage(args) -> int:
         raise SystemExit(f"report not found: {path}")
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
+    # baseline regression gate (dr_harder 2026-06-08 incident): when --baseline points
+    # at the prior report this one replaces, a shrink (fewer findings/tables, words past
+    # tolerance) is a hard fail. Resolve it explicitly OR auto-discover the latest other
+    # analysis for the same run when --baseline auto is given.
+    baseline_text = None
+    if args.baseline:
+        bpath = args.baseline if args.baseline != "auto" else _auto_baseline(path)
+        if bpath:
+            if not os.path.exists(bpath):
+                raise SystemExit(f"baseline report not found: {bpath}")
+            with open(bpath, encoding="utf-8") as fh:
+                baseline_text = fh.read()
+    # cross-run reference-value gate (E4 stale-column incident): --cross-run-refs
+    # points at a JSON list of refs the report carries forward from OTHER runs (e.g.
+    # a 'teacher hard' column). Each is verified for provenance (source eval id cited)
+    # + value (matches the source summary.json). The fragile table-parsing that BUILDS
+    # the refs is the caller's job (the skill writes refs.json); the core only verifies.
+    cross_refs = None
+    if args.cross_run_refs:
+        if not os.path.exists(args.cross_run_refs):
+            raise SystemExit(f"cross-run refs file not found: {args.cross_run_refs}")
+        with open(args.cross_run_refs, encoding="utf-8") as fh:
+            cross_refs = json.load(fh)
+        if not isinstance(cross_refs, list):
+            raise SystemExit(
+                f"--cross-run-refs must be a JSON list of ref objects, "
+                f"got {type(cross_refs).__name__}")
     try:
         profile = load_profile_metrics(args.root)
-        res = check_coverage(text, profile, min_coverage=args.min_coverage)
+        res = check_coverage(text, profile, min_coverage=args.min_coverage,
+                             baseline_text=baseline_text)
+        xref = check_cross_run_refs(text, cross_refs) if cross_refs is not None else None
     except OmxError as e:
         raise SystemExit(str(e))
     out = {
-        "ok": res.ok,
+        # overall gate verdict: coverage AND the cross-run-refs gate (when run)
+        "ok": res.ok and (xref is None or xref.ok),
         "missing_groups": res.missing_groups,
         "engine_cited": res.engine_cited,
         "checked_groups": res.checked_groups,
@@ -334,6 +364,13 @@ def _cmd_report_coverage(args) -> int:
         # GAP E: groups that pass the threshold but have unreferenced tokens — field-level
         # omissions within a passing group that lenient mode would otherwise silently accept.
         "partial_groups": res.partial_groups,
+        # dr_harder incident: required sections absent as headings + depth regression
+        "missing_sections": res.missing_sections,
+        "regression": res.regression,
+        # E4 incident: cross-run reference-value gate result (None when not requested)
+        "cross_run_refs": (
+            {"ok": xref.ok, "uncited": xref.uncited, "mismatched": xref.mismatched}
+            if xref is not None else None),
     }
     print(json.dumps(out))
     if res.partial_groups:
@@ -346,7 +383,7 @@ def _cmd_report_coverage(args) -> int:
                 f"— some fields may be missing from the report",
                 file=sys.stderr,
             )
-    if not res.ok:
+    if not out["ok"]:
         # loud-fail so the skill's coverage gate can detect it by exit code
         reasons = []
         if res.missing_groups:
@@ -355,8 +392,57 @@ def _cmd_report_coverage(args) -> int:
             reasons.append(
                 "no engine marker cited (report appears hand-extracted, not grounded "
                 f"in the engine output {res.markers_declared})")
+        if res.missing_sections:
+            reasons.append(
+                f"required sections missing as headings: {res.missing_sections} "
+                "(a whole diagnostic section was dropped — e.g. generalization/OOD)")
+        if res.regression is not None and res.regression["is_regression"]:
+            r = res.regression
+            dropped = [k for k in ("words", "findings", "tables") if r[k]["regressed"]]
+            detail = ", ".join(
+                f"{k} {r[k]['old']}->{r[k]['new']}" for k in dropped)
+            reasons.append(
+                f"DEPTH REGRESSION vs baseline ({detail}) — a re-analysis must NOT be "
+                "shallower than the report it replaces; use the OLD report as the BASE "
+                "and update plots/numbers on top of it, do not rewrite shorter")
+        if xref is not None and not xref.ok:
+            if xref.mismatched:
+                stale = ", ".join(
+                    f"{m['label']} reported {m['reported']} but {m['eval_id']} "
+                    f"{m['field']} = {m['actual']:.4g}" for m in xref.mismatched)
+                reasons.append(
+                    f"STALE cross-run reference value(s) ({stale}) — a carried-forward "
+                    "reference column must be RE-EXTRACTED from the source eval each "
+                    "analysis, never copied from a prior report")
+            if xref.uncited:
+                uncited = ", ".join(
+                    f"{u['label']} (eval {u['eval_id']})" for u in xref.uncited)
+                reasons.append(
+                    f"UNCITED cross-run reference source(s) ({uncited}) — the report "
+                    "must cite the eval id each reference value came from so it is auditable")
         raise SystemExit("report coverage FAILED — " + "; ".join(reasons))
     return 0
+
+
+def _auto_baseline(report_path: str) -> str | None:
+    """Find the most recent OTHER report.md for the same run (sibling analysis dir).
+
+    Layout: <run>/analysis/<analysis_id>/report.md. The baseline is the report.md in
+    the lexicographically-latest sibling analysis dir that is NOT the one being linted
+    (analysis_id is verb-YYYYMMDD-HHMMSS, so lexicographic order ~= chronological for a
+    fixed verb). Returns None if there is no prior sibling (first analysis of the run)."""
+    cur_analysis_dir = os.path.dirname(os.path.abspath(report_path))
+    analysis_root = os.path.dirname(cur_analysis_dir)
+    cur_name = os.path.basename(cur_analysis_dir)
+    if not os.path.isdir(analysis_root):
+        return None
+    siblings = sorted(
+        d for d in os.listdir(analysis_root)
+        if d != cur_name
+        and os.path.isfile(os.path.join(analysis_root, d, "report.md")))
+    if not siblings:
+        return None
+    return os.path.join(analysis_root, siblings[-1], "report.md")
 
 
 def _cmd_queue_launch(args) -> int:
@@ -649,6 +735,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--min-coverage", type=float, default=None, dest="min_coverage",
         help="strict mode: require this FRACTION (0<f<=1) of each group's tokens to be "
              "referenced, not just >=1. Omit for the lenient default (>=1 token per group).")
+    prc.add_argument(
+        "--baseline", default=None,
+        help="prior report.md this one replaces (dr_harder depth-regression gate): a "
+             "re-analysis that drops findings/tables or shrinks words past tolerance "
+             "loud-fails. Pass a path, or 'auto' to use the latest sibling analysis of "
+             "the same run. Omit to skip the regression check (first-time analysis).")
+    prc.add_argument(
+        "--cross-run-refs", default=None, dest="cross_run_refs",
+        help="path to a JSON list of cross-run reference cells the report carries from "
+             "OTHER runs (e.g. a 'teacher hard' column). Each ref = {label, summary_path, "
+             "field, reported_value}. The gate (E4 stale-column incident) verifies the "
+             "source eval id is CITED and the value MATCHES the source summary.json — a "
+             "stale carried-over value loud-fails. Omit to skip the cross-run-ref check.")
     prc.set_defaults(func=_cmd_report_coverage)
 
     pq = sub.add_parser("queue-launch",
