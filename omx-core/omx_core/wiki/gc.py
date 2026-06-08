@@ -79,6 +79,30 @@ def parse_gc_proposal(raw: str) -> GcPlan:
                 current["from"].append(_norm_slug(mf.group(1)))
     return GcPlan(deletes=deletes, merges=merges)
 
+def suggest_from_lint(lint_res: dict) -> dict:
+    """Turn a lint result into REVIEW-ONLY gc delete candidates (INV-1: candidates,
+    not a proposal; nothing is written or deleted). ONLY 'orphan' (info) slugs are
+    suggested for deletion — stale is 'old' not 'useless', and error/warning types
+    (broken-ref/oversized/broken-frontmatter) are fix-in-place, not delete. Returns
+    {delete_candidates: [slug...], proposal_skeleton: <editable wiki-gc proposal>}.
+    The human copies/edits the skeleton; gc-apply (git-guarded) is the only executor."""
+    candidates = sorted({
+        i["slug"] for i in lint_res.get("issues", [])
+        if i.get("type") == "orphan"
+    })
+    delete_lines = "\n".join(f"- slug: {s}" for s in candidates) or "# (none)"
+    skeleton = (
+        "---\n"
+        "kind: wiki-gc\n"
+        "---\n\n"
+        "## DELETE\n\n"
+        f"{delete_lines}\n\n"
+        "## MERGE\n\n"
+        "# (add `- into: <survivor>` then indented `- <source>` lines to merge instead of delete)\n"
+    )
+    return {"delete_candidates": candidates, "proposal_skeleton": skeleton}
+
+
 import subprocess
 from pathlib import Path
 

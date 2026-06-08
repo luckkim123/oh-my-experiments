@@ -4,6 +4,50 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.1.11] - 2026-06-08
+
+Four wiki-lint enhancements from an OMC-vs-OMX wiki source comparison, each
+re-shaped to OMX purpose (INV-1 candidates-only, loud-fail, injected-now, no
+auto-delete all preserved).
+
+### Added
+
+- **Contradiction-candidate lint.** `wiki lint` now emits `contradiction-candidate`
+  (info) signals: >=2 high-confidence pages sharing a tag, or a tag spanning
+  multiple categories. Structural candidates for human review only — the core never
+  judges whether content actually conflicts (INV-1).
+- **lint -> gc suggestion pipe.** `wiki gc` diagnosis now includes a `suggestions`
+  block: orphan slugs pre-formatted as a ready-to-edit `wiki-gc` proposal skeleton,
+  so cleanup no longer means hand-transcribing slugs. Review-only; `gc-apply`
+  (git-guarded two-phase) stays the sole executor. stale is excluded by design
+  (old != useless for experiment knowledge).
+
+### Changed
+
+- **Stronger orphan definition.** `orphan` is now `inbound == 0` (nobody links to
+  the page), catching dead-end pages that link out but are never linked to —
+  previously a page was orphan only with no links in EITHER direction. New seed
+  pages (created within `stale_days/2` of now) are exempt to avoid flagging
+  still-growing knowledge.
+- **exp-loop wiki reminder.** The iteration-end wiki audit now also reports
+  `orphan` / `contradiction-candidate` and, when info+ issues accumulate, reminds
+  the user to run `omx wiki gc` for delete candidates. Surface-only.
+
+### Verification
+
+- omx-core full pytest suite green (496 passed / 1 skipped); +7 net wiki test
+  functions.
+- CLI smoke: `omx wiki gc` emits a valid `suggestions.proposal_skeleton`.
+- Separate-lane code review (feature-dev:code-reviewer) confirmed INV-1 /
+  loud-fail / injected-now / no-auto-delete intact, verdict APPROVE.
+
+### Notes
+
+- Source analysis recorded in `claudebase/docs/reference/omc-wiki-skill-analysis.md`.
+- Design + plan: `docs/superpowers/specs|plans/2026-06-08-omx-wiki-lint-enhancements*`.
+- The orphan-definition change is the only intentional behavior change (one existing
+  test rewritten accordingly).
+
 ## [0.1.10] - 2026-06-08
 
 Two exp-analyze report-quality gates from the dr_harder 2026-06-08 incidents,

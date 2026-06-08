@@ -242,3 +242,29 @@ def test_apply_gc_empty_plan_is_noop(tmp_path):
     res = gc.apply_gc(paths, gc.GcPlan(), now="2026-06-06T02:00:00",
                       repo_root=tmp_path, git_check=_never_tracked)
     assert res == {"deleted": [], "merged": []}
+
+
+def test_suggest_delete_candidates_from_orphans_only():
+    # Given a lint result, suggest ONLY orphan slugs as delete candidates (not stale).
+    lint_res = {
+        "issues": [
+            {"slug": "lonely.md", "severity": "info", "type": "orphan", "message": "x"},
+            {"slug": "old.md", "severity": "info", "type": "stale", "message": "y"},
+            {"slug": "bad.md", "severity": "error", "type": "broken-frontmatter", "message": "z"},
+        ],
+        "stats": {"total_pages": 3, "by_type": {}},
+    }
+    out = gc.suggest_from_lint(lint_res)
+    assert out["delete_candidates"] == ["lonely.md"]   # orphan only; stale/error excluded
+    # proposal_skeleton is a ready-to-edit wiki-gc proposal body with the candidate
+    assert "kind: wiki-gc" in out["proposal_skeleton"]
+    assert "## DELETE" in out["proposal_skeleton"]
+    assert "lonely.md" in out["proposal_skeleton"]
+    assert "old.md" not in out["proposal_skeleton"]
+
+
+def test_suggest_from_lint_empty_when_no_orphans():
+    lint_res = {"issues": [{"slug": "x.md", "severity": "info", "type": "stale", "message": "m"}],
+                "stats": {"total_pages": 1, "by_type": {}}}
+    out = gc.suggest_from_lint(lint_res)
+    assert out["delete_candidates"] == []
