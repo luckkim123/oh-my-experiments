@@ -317,9 +317,22 @@ def _cmd_report_coverage(args) -> int:
         raise SystemExit(f"report not found: {path}")
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
+    # baseline regression gate (dr_harder 2026-06-08 incident): when --baseline points
+    # at the prior report this one replaces, a shrink (fewer findings/tables, words past
+    # tolerance) is a hard fail. Resolve it explicitly OR auto-discover the latest other
+    # analysis for the same run when --baseline auto is given.
+    baseline_text = None
+    if args.baseline:
+        bpath = args.baseline if args.baseline != "auto" else _auto_baseline(path)
+        if bpath:
+            if not os.path.exists(bpath):
+                raise SystemExit(f"baseline report not found: {bpath}")
+            with open(bpath, encoding="utf-8") as fh:
+                baseline_text = fh.read()
     try:
         profile = load_profile_metrics(args.root)
-        res = check_coverage(text, profile, min_coverage=args.min_coverage)
+        res = check_coverage(text, profile, min_coverage=args.min_coverage,
+                             baseline_text=baseline_text)
     except OmxError as e:
         raise SystemExit(str(e))
     out = {
@@ -334,6 +347,9 @@ def _cmd_report_coverage(args) -> int:
         # GAP E: groups that pass the threshold but have unreferenced tokens — field-level
         # omissions within a passing group that lenient mode would otherwise silently accept.
         "partial_groups": res.partial_groups,
+        # dr_harder incident: required sections absent as headings + depth regression
+        "missing_sections": res.missing_sections,
+        "regression": res.regression,
     }
     print(json.dumps(out))
     if res.partial_groups:
@@ -355,8 +371,42 @@ def _cmd_report_coverage(args) -> int:
             reasons.append(
                 "no engine marker cited (report appears hand-extracted, not grounded "
                 f"in the engine output {res.markers_declared})")
+        if res.missing_sections:
+            reasons.append(
+                f"required sections missing as headings: {res.missing_sections} "
+                "(a whole diagnostic section was dropped — e.g. generalization/OOD)")
+        if res.regression is not None and res.regression["is_regression"]:
+            r = res.regression
+            dropped = [k for k in ("words", "findings", "tables") if r[k]["regressed"]]
+            detail = ", ".join(
+                f"{k} {r[k]['old']}->{r[k]['new']}" for k in dropped)
+            reasons.append(
+                f"DEPTH REGRESSION vs baseline ({detail}) — a re-analysis must NOT be "
+                "shallower than the report it replaces; use the OLD report as the BASE "
+                "and update plots/numbers on top of it, do not rewrite shorter")
         raise SystemExit("report coverage FAILED — " + "; ".join(reasons))
     return 0
+
+
+def _auto_baseline(report_path: str) -> str | None:
+    """Find the most recent OTHER report.md for the same run (sibling analysis dir).
+
+    Layout: <run>/analysis/<analysis_id>/report.md. The baseline is the report.md in
+    the lexicographically-latest sibling analysis dir that is NOT the one being linted
+    (analysis_id is verb-YYYYMMDD-HHMMSS, so lexicographic order ~= chronological for a
+    fixed verb). Returns None if there is no prior sibling (first analysis of the run)."""
+    cur_analysis_dir = os.path.dirname(os.path.abspath(report_path))
+    analysis_root = os.path.dirname(cur_analysis_dir)
+    cur_name = os.path.basename(cur_analysis_dir)
+    if not os.path.isdir(analysis_root):
+        return None
+    siblings = sorted(
+        d for d in os.listdir(analysis_root)
+        if d != cur_name
+        and os.path.isfile(os.path.join(analysis_root, d, "report.md")))
+    if not siblings:
+        return None
+    return os.path.join(analysis_root, siblings[-1], "report.md")
 
 
 def _cmd_queue_launch(args) -> int:
@@ -649,6 +699,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--min-coverage", type=float, default=None, dest="min_coverage",
         help="strict mode: require this FRACTION (0<f<=1) of each group's tokens to be "
              "referenced, not just >=1. Omit for the lenient default (>=1 token per group).")
+    prc.add_argument(
+        "--baseline", default=None,
+        help="prior report.md this one replaces (dr_harder depth-regression gate): a "
+             "re-analysis that drops findings/tables or shrinks words past tolerance "
+             "loud-fails. Pass a path, or 'auto' to use the latest sibling analysis of "
+             "the same run. Omit to skip the regression check (first-time analysis).")
     prc.set_defaults(func=_cmd_report_coverage)
 
     pq = sub.add_parser("queue-launch",

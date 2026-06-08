@@ -346,3 +346,165 @@ def test_partial_groups_in_strict_mode_only_for_passing_thin_groups():
     assert "reward_decomp" in res.partial_groups
     # constraint (1/1) fully covered -> not partial
     assert "constraint" not in res.partial_groups
+
+
+# =====================================================================
+# required_sections — declared report sections (NOT metric tokens) must
+# exist as headings. Catches a whole '## generalization' section being
+# dropped, which the metric-token groups cannot see (the dr_harder
+# 2026-06-08 incident: OOD/generalization section deleted, lint passed).
+# =====================================================================
+_SECTIONS = ["tracking", "generalization", "constraint", "doraemon", "verdict"]
+
+
+def test_required_sections_absent_field_is_noop():
+    # back-compat: a profile without required_sections cannot fail on it.
+    # (no groups/markers either -> isolate the required_sections check)
+    res = check_coverage("## tracking\nstuff", _profile())
+    assert res.missing_sections == []
+    assert res.ok is True
+
+
+def test_required_sections_all_present_passes():
+    report = (
+        "## tracking error\nroll ss_error.\n"
+        "## generalization (in-dist hard vs OOD)\nood gap.\n"
+        "## constraint\nmargin/attitude.\n"
+        "## doraemon\nsuccess_rate.\n"
+        "## verdict\nbottom line.\n"
+        "Reward/att_rp lin_vel entropy line_search_success Loss/value_function "
+        "cost_value Encoder/z_std encoder_grad_norm margin/attitude "
+        "doraemon_success_rate ess_ratio [DIAGNOSIS] changepoint"
+    )
+    p = _profile(groups=_GROUPS, markers=_MARKERS)
+    p["required_sections"] = _SECTIONS
+    res = check_coverage(report, p)
+    assert res.missing_sections == []
+    assert res.ok is True
+
+
+def test_required_section_missing_fails():
+    # generalization section dropped -> must be caught (the exact incident)
+    report = (
+        "## tracking error\nroll ss_error.\n"
+        "## constraint\nmargin/attitude.\n"
+        "## doraemon\nsuccess_rate.\n"
+        "## verdict\nbottom line.\n"
+        "Reward/att_rp lin_vel entropy line_search_success Loss/value_function "
+        "cost_value Encoder/z_std encoder_grad_norm margin/attitude "
+        "doraemon_success_rate ess_ratio [DIAGNOSIS] changepoint"
+    )
+    p = _profile(groups=_GROUPS, markers=_MARKERS)
+    p["required_sections"] = _SECTIONS
+    res = check_coverage(report, p)
+    assert "generalization" in res.missing_sections
+    assert res.ok is False  # a missing required section is a hard fail
+
+
+def test_required_sections_match_is_substring_in_heading_only():
+    # a section token must appear in a markdown HEADING line, not anywhere in prose.
+    # Mentioning the word 'generalization' inside a paragraph must NOT satisfy it.
+    report = (
+        "## tracking error\nThe generalization to OOD is discussed below in prose only.\n"
+        "## constraint\nx\n## doraemon\nx\n## verdict\nx\n"
+        "Reward/att_rp lin_vel entropy line_search_success Loss/value_function "
+        "cost_value Encoder/z_std encoder_grad_norm margin/attitude "
+        "doraemon_success_rate ess_ratio [DIAGNOSIS]"
+    )
+    p = _profile(groups=_GROUPS, markers=_MARKERS)
+    p["required_sections"] = _SECTIONS
+    res = check_coverage(report, p)
+    assert "generalization" in res.missing_sections  # prose mention does NOT count
+
+
+def test_required_sections_must_be_list_of_str():
+    p = _profile(groups=_GROUPS)
+    p["required_sections"] = "generalization"  # not a list
+    with pytest.raises(OmxError):
+        check_coverage("## x", p)
+
+
+# =====================================================================
+# baseline regression gate — a RE-analysis must not be shallower than
+# the prior report it replaces. Compares word / [FINDING] / data-table-row
+# counts; a drop past tolerance is a regression (the dr_harder 2026-06-08
+# incident: reports shrank 25-39% in words, 40-91% in table rows, lint
+# still passed). Opt-in: only active when baseline_text is provided.
+# =====================================================================
+def _rich_report(n_find=10, n_rows=20, pad_words=400):
+    finds = "\n".join(f"[FINDING] claim {i} [EVIDENCE: x] [CONFIDENCE: HIGH]" for i in range(n_find))
+    rows = "\n".join(f"| axis{i} | {i}.0 | {i}.1 | {i}.2 |" for i in range(n_rows))
+    pad = " ".join(["word"] * pad_words)
+    return f"## tracking\n{finds}\n{rows}\n{pad}\n"
+
+
+def test_no_baseline_text_means_no_regression_check():
+    # back-compat: without a baseline, the regression gate is inert
+    res = check_coverage(_rich_report(n_find=1, n_rows=1, pad_words=10),
+                         _profile(groups=_GROUPS, markers=_MARKERS))
+    assert res.regression is None  # not evaluated
+
+
+def test_regression_flagged_when_report_shrinks():
+    old = _rich_report(n_find=16, n_rows=30, pad_words=2000)
+    new = _rich_report(n_find=10, n_rows=12, pad_words=1300)  # the dr_harder shrink shape
+    res = check_coverage(new, _profile(groups=_GROUPS, markers=_MARKERS),
+                         baseline_text=old)
+    assert res.regression is not None
+    assert res.regression["is_regression"] is True
+    # all three axes regressed
+    assert res.regression["words"]["new"] < res.regression["words"]["old"]
+    assert res.regression["findings"]["new"] < res.regression["findings"]["old"]
+    assert res.regression["tables"]["new"] < res.regression["tables"]["old"]
+    assert res.ok is False  # regression is a hard fail
+
+
+def test_no_regression_when_report_grows_or_matches():
+    # isolate the regression gate: no groups/markers, so only the baseline drives ok
+    old = _rich_report(n_find=10, n_rows=20, pad_words=1000)
+    new = _rich_report(n_find=12, n_rows=22, pad_words=1100)  # richer rewrite
+    res = check_coverage(new, _profile(), baseline_text=old)
+    assert res.regression["is_regression"] is False
+    assert res.ok is True
+
+
+def test_regression_tolerance_allows_small_shrink():
+    # default tolerance: a tiny shrink (e.g. tighter prose, same findings/tables)
+    # is allowed; only a meaningful drop trips it. findings/tables held equal,
+    # words down ~3% -> within tolerance. (no groups/markers -> isolate gate)
+    old = _rich_report(n_find=10, n_rows=20, pad_words=1000)
+    new = _rich_report(n_find=10, n_rows=20, pad_words=970)
+    res = check_coverage(new, _profile(), baseline_text=old)
+    assert res.regression["is_regression"] is False
+    assert res.ok is True
+
+
+def test_dropping_findings_is_a_regression_even_if_words_held():
+    # findings/tables are stronger signals than raw words: dropping analysis units
+    # is a regression even if word count is padded back up.
+    old = _rich_report(n_find=16, n_rows=30, pad_words=1000)
+    new = _rich_report(n_find=8, n_rows=30, pad_words=1400)  # words UP, findings HALVED
+    res = check_coverage(new, _profile(groups=_GROUPS, markers=_MARKERS),
+                         baseline_text=old)
+    assert res.regression["is_regression"] is True
+    assert res.ok is False
+
+
+def test_regression_and_coverage_independent():
+    # a report can pass coverage (all groups + engine) yet fail the regression gate
+    old = _rich_report(n_find=16, n_rows=30, pad_words=2000)
+    new_text = (
+        "## tracking\n[FINDING] one [EVIDENCE: x] [CONFIDENCE: HIGH]\n"
+        "| a | 1 |\n"
+        "Reward/att_rp lin_vel entropy line_search_success Loss/value_function "
+        "cost_value Encoder/z_std encoder_grad_norm margin/attitude "
+        "doraemon_success_rate ess_ratio [DIAGNOSIS]"
+    )
+    res = check_coverage(new_text, _profile(groups=_GROUPS, markers=_MARKERS),
+                         baseline_text=old)
+    # coverage groups all referenced + engine cited -> groups/engine fine
+    assert res.missing_groups == []
+    assert res.engine_cited is True
+    # but it shrank massively -> regression -> ok False
+    assert res.regression["is_regression"] is True
+    assert res.ok is False
