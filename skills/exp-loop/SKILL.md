@@ -120,8 +120,8 @@ knowledge surfaces (it is review-gated - you report, the human decides):
 `omx wiki lint --root <root>`
 
 Report any `stale` / `broken-ref` / `broken-frontmatter` / `orphan` /
-`contradiction-candidate` issues to the user in your summary. Do NOT auto-edit or
-delete any page (minimum-change / review-gated rule).
+`low-confidence` / `contradiction-candidate` issues to the user in your summary.
+Do NOT auto-edit or delete any page (minimum-change / review-gated rule).
 
 If `lint`'s `stats.by_type` shows several `info`+ issues (orphan / stale /
 contradiction-candidate accumulating), add a one-line cleanup reminder to the
