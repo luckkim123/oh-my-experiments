@@ -628,7 +628,8 @@ def _cmd_wiki_gc(args) -> int:
             "updated": page.updated,
             "bytes": len(page.content.encode("utf-8")),
         })
-    print(json.dumps({"lint": lint_res, "pages": pages}))
+    suggestions = _wiki_gc.suggest_from_lint(lint_res)
+    print(json.dumps({"lint": lint_res, "pages": pages, "suggestions": suggestions}))
     return 0
 
 
