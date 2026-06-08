@@ -50,23 +50,48 @@ def test_lint_flags_broken_frontmatter(tmp_path):
                for i in res["issues"])
 
 
-def test_lint_orphan_only_when_no_links_either_direction(tmp_path):
+def test_lint_orphan_is_inbound_zero(tmp_path):
+    # New definition: orphan = nobody links to it (inbound==0), even if it links OUT.
+    # A links to B; A itself has no inbound -> A is now an orphan. C is isolated -> orphan.
     p = OmxPaths(root=tmp_path)
-    # A links to B; C is isolated (no outbound, no inbound)
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="A",
+    ingest.ingest_knowledge(p, now="2026-01-01T10:00:00", title="A",
                             content="see [[B]] for more", tags=[], category="pattern",
                             confidence="high", sources=[])
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="B",
+    ingest.ingest_knowledge(p, now="2026-01-01T10:00:00", title="B",
                             content="body of B", tags=[], category="pattern",
                             confidence="high", sources=[])
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="C",
+    ingest.ingest_knowledge(p, now="2026-01-01T10:00:00", title="C",
                             content="isolated body", tags=[], category="pattern",
                             confidence="high", sources=[])
-    res = lint.lint_wiki(p, now="2026-05-31T10:01:00", stale_days=30, max_page_size=10240)
+    # now is well past stale_days/2 so no fresh-exemption applies
+    res = lint.lint_wiki(p, now="2026-05-31T10:00:00", stale_days=30, max_page_size=10240)
     orphans = {i["slug"] for i in res["issues"] if i["type"] == "orphan"}
+    assert "a.md" in orphans          # outbound-only, no inbound -> orphan (NEW behavior)
     assert "c.md" in orphans          # isolated -> orphan
-    assert "a.md" not in orphans      # has outbound link -> not orphan
-    assert "b.md" not in orphans      # is linked-to (inbound) -> not orphan
+    assert "b.md" not in orphans      # linked-to (inbound) -> not orphan
+
+
+def test_lint_fresh_page_exempt_from_orphan(tmp_path):
+    # A page created within stale_days/2 of now is NOT an orphan yet (still growing).
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="New",
+                            content="brand new isolated page", tags=[], category="pattern",
+                            confidence="high", sources=[])
+    # now is 5 days later; stale_days=30 -> half=15 -> 5 < 15 -> exempt
+    res = lint.lint_wiki(p, now="2026-06-05T10:00:00", stale_days=30, max_page_size=10240)
+    orphans = {i["slug"] for i in res["issues"] if i["type"] == "orphan"}
+    assert "new.md" not in orphans
+
+
+def test_lint_old_isolated_page_is_orphan_despite_exemption(tmp_path):
+    # A page older than stale_days/2 and isolated IS an orphan (exemption does not apply).
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-01-01T10:00:00", title="Old",
+                            content="old isolated page", tags=[], category="pattern",
+                            confidence="high", sources=[])
+    res = lint.lint_wiki(p, now="2026-03-01T10:00:00", stale_days=30, max_page_size=10240)
+    orphans = {i["slug"] for i in res["issues"] if i["type"] == "orphan"}
+    assert "old.md" in orphans
 
 
 def test_lint_flags_contradiction_candidate_shared_tag_high_confidence(tmp_path):

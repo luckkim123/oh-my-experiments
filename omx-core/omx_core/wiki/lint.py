@@ -31,6 +31,19 @@ def _parse_iso(value: str) -> datetime | None:
     return parsed.replace(tzinfo=None) if parsed.tzinfo is not None else parsed
 
 
+def _is_fresh(created: str, now_dt, stale_days: int) -> bool:
+    """True if `created` is within stale_days/2 of `now` (a new seed page, exempt
+    from orphan). An unparseable/absent created is treated as NOT fresh (so old or
+    malformed pages can still be flagged). now_dt is the already-parsed naive now;
+    None means no time basis -> nothing is fresh."""
+    if now_dt is None:
+        return False
+    created_dt = _parse_iso(created)
+    if created_dt is None:
+        return False
+    return (now_dt - created_dt).days <= stale_days // 2
+
+
 def _contradiction_candidates(pages: dict) -> list:
     """Structural contradiction SIGNALS (INV-1: candidates only, never a verdict).
 
@@ -97,9 +110,9 @@ def lint_wiki(paths: OmxPaths, *, now: str, stale_days: int = 30,
                                "message": f"link target {target!r} does not exist"})
 
     for slug, page in pages.items():
-        if not page.links and inbound.get(slug, 0) == 0:
+        if inbound.get(slug, 0) == 0 and not _is_fresh(page.created, now_dt, stale_days):
             issues.append({"slug": slug, "severity": "info", "type": "orphan",
-                           "message": "page has no inbound or outbound links"})
+                           "message": "no page links to this page (inbound==0)"})
         if now_dt is not None:
             updated_dt = _parse_iso(page.updated)
             if updated_dt is not None and (now_dt - updated_dt).days > stale_days:
