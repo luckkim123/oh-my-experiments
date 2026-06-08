@@ -31,6 +31,43 @@ def _parse_iso(value: str) -> datetime | None:
     return parsed.replace(tzinfo=None) if parsed.tzinfo is not None else parsed
 
 
+def _contradiction_candidates(pages: dict) -> list:
+    """Structural contradiction SIGNALS (INV-1: candidates only, never a verdict).
+
+    a-1: >=2 pages sharing a tag where EVERY sharing page is confidence 'high'
+         -> they may assert conflicting high-confidence conclusions; flag for review.
+    a-2: a tag spanning >1 category -> classification drift; flag for review.
+    One issue per tag (a-1 takes precedence over a-2 for the same tag)."""
+    by_tag: dict = {}
+    for page in pages.values():
+        for tag in page.tags:
+            by_tag.setdefault(tag, []).append(page)
+
+    issues = []
+    for tag in sorted(by_tag):
+        group = by_tag[tag]
+        if len(group) < 2:
+            continue
+        slugs = sorted(g.slug for g in group)
+        # a-1: all sharing pages are high-confidence
+        if all(g.confidence == "high" for g in group):
+            issues.append({
+                "slug": slugs[0], "severity": "info", "type": "contradiction-candidate",
+                "message": (f"{len(group)} high-confidence pages share tag {tag!r}; "
+                            f"review whether their conclusions conflict: {', '.join(slugs)}"),
+            })
+            continue
+        # a-2: tag spans multiple categories
+        cats = sorted({g.category for g in group})
+        if len(cats) > 1:
+            issues.append({
+                "slug": slugs[0], "severity": "info", "type": "contradiction-candidate",
+                "message": (f"tag {tag!r} appears across categories {cats}; "
+                            f"review for classification drift: {', '.join(slugs)}"),
+            })
+    return issues
+
+
 def lint_wiki(paths: OmxPaths, *, now: str, stale_days: int = 30,
               max_page_size: int = 10240) -> dict:
     """Audit every page. Returns {issues:[{slug,severity,type,message}], stats:{...}}."""
@@ -71,6 +108,8 @@ def lint_wiki(paths: OmxPaths, *, now: str, stale_days: int = 30,
         if len(page.content.encode("utf-8")) > max_page_size:
             issues.append({"slug": slug, "severity": "warning", "type": "oversized",
                            "message": f"content exceeds {max_page_size} bytes"})
+
+    issues.extend(_contradiction_candidates(pages))
 
     by_type = dict(Counter(i["type"] for i in issues))
     stats = {"total_pages": len(slugs), "by_type": by_type}
