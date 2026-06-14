@@ -83,6 +83,51 @@ def _contradiction_candidates(pages: dict) -> list:
     return issues
 
 
+# 0.5, not a higher bar: a real slug is truncated to 64 chars (storage.title_to_slug),
+# so an evolved-title duplicate carries divergent tail-noise tokens (e.g. a clipped
+# word, 'only'/'still') that inflate the union. The observed real pair
+# engine_gap_eval_adapter_* shares 7 content tokens yet scores 0.583 — 0.6 missed it.
+_NEAR_DUP_JACCARD = 0.5
+_STOP_TOKENS = frozenset({"the", "a", "an", "and", "or", "of", "to", "is", "in", "on", "md"})
+
+
+def _slug_tokens(slug: str) -> set:
+    """Tokens of a slug for similarity (underscore split, stopwords + '.md' dropped).
+    A title-derived slug (storage.title_to_slug) is words joined by underscores, so
+    this recovers the title's content words without re-reading the page."""
+    raw = slug[:-3] if slug.endswith(".md") else slug
+    return {t for t in raw.split("_") if t and t not in _STOP_TOKENS}
+
+
+def _near_duplicate_candidates(pages: dict) -> list:
+    """Near-duplicate SIGNALS (INV-1: candidates only, never a verdict). Two pages
+    whose slug tokens overlap at Jaccard >= _NEAR_DUP_JACCARD are flagged for a human
+    to read both bodies. This catches the slug-fork failure mode: the SAME knowledge
+    re-added under an evolved title forks the slug instead of merging (omx wiki add is
+    append-merge ONLY on an identical title-derived slug). No embeddings (hard
+    constraint) — pure lexical overlap. One issue per unordered pair, keyed on the
+    sorted-first slug; deterministic by sorted iteration."""
+    items = sorted((slug, _slug_tokens(slug)) for slug in pages)
+    issues = []
+    for i in range(len(items)):
+        slug_a, toks_a = items[i]
+        if not toks_a:
+            continue
+        for j in range(i + 1, len(items)):
+            slug_b, toks_b = items[j]
+            if not toks_b:
+                continue
+            union = toks_a | toks_b
+            jaccard = len(toks_a & toks_b) / len(union) if union else 0.0
+            if jaccard >= _NEAR_DUP_JACCARD:
+                issues.append({
+                    "slug": slug_a, "severity": "info", "type": "near-duplicate",
+                    "message": (f"slug overlaps {slug_b!r} at jaccard {jaccard:.2f}; "
+                                f"read both bodies — if one topic, gc-merge them"),
+                })
+    return issues
+
+
 def lint_wiki(paths: OmxPaths, *, now: str, stale_days: int = 30,
               max_page_size: int = 10240) -> dict:
     """Audit every page. Returns {issues:[{slug,severity,type,message}], stats:{...}}."""
@@ -128,6 +173,7 @@ def lint_wiki(paths: OmxPaths, *, now: str, stale_days: int = 30,
                            "message": "confidence is 'low'; review and strengthen or remove"})
 
     issues.extend(_contradiction_candidates(pages))
+    issues.extend(_near_duplicate_candidates(pages))
 
     by_type = dict(Counter(i["type"] for i in issues))
     stats = {"total_pages": len(slugs), "by_type": by_type}

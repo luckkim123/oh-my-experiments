@@ -182,3 +182,72 @@ def test_lint_high_and_medium_not_low_confidence(tmp_path):
                             tags=[], category="pattern", confidence="medium", sources=[])
     res = lint.lint_wiki(p, now="2026-05-31T10:01:00", stale_days=30, max_page_size=10240)
     assert not any(i["type"] == "low-confidence" for i in res["issues"])
+
+
+def test_lint_flags_near_duplicate_slug_token_overlap(tmp_path):
+    # Two pages whose title-derived slugs share most tokens are a near-duplicate
+    # candidate (INV-1: a SIGNAL for review, not a verdict). This is the exact
+    # failure mode that produced coexisting pages: the same knowledge re-added
+    # under an evolved title forks the slug instead of merging.
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00",
+                            title="engine gap eval adapter covers static segmented periodic",
+                            content="a", tags=[], category="reference", confidence="high", sources=[])
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00",
+                            title="engine gap eval adapter only covers static periodic",
+                            content="b", tags=[], category="reference", confidence="high", sources=[])
+    res = lint.lint_wiki(p, now="2026-05-31T10:01:00", stale_days=30, max_page_size=10240)
+    dups = [i for i in res["issues"] if i["type"] == "near-duplicate"]
+    assert len(dups) == 1
+    assert dups[0]["severity"] == "info"
+    # the message names BOTH slugs so a reviewer can read both bodies
+    assert "engine_gap_eval_adapter" in dups[0]["message"]
+
+
+def test_lint_near_duplicate_catches_real_truncated_slug_pair(tmp_path):
+    # Regression for the field case: real slugs are truncated to 64 chars by
+    # title_to_slug, so an evolved-title duplicate carries divergent tail-noise
+    # tokens that inflate the union. This exact on-disk pair shares 7 content
+    # tokens yet scores jaccard 0.583 — the detector MUST still flag it (a 0.6
+    # bar silently missed it). Operates on the slug tokens, so we exercise the
+    # helper directly with the real slugs rather than synthetic clean titles.
+    from omx_core.wiki.lint import _near_duplicate_candidates
+
+    class _P:  # minimal stand-in: _near_duplicate_candidates only reads dict keys
+        pass
+
+    a = "engine_gap_eval_adapter_covers_static_segmented_periodic_still_u.md"
+    b = "engine_gap_eval_adapter_only_covers_static_periodic_unsupported_.md"
+    pages = {a: _P(), b: _P()}
+    dups = _near_duplicate_candidates(pages)
+    assert len(dups) == 1
+    assert dups[0]["type"] == "near-duplicate"
+    assert dups[0]["severity"] == "info"
+
+
+def test_lint_no_near_duplicate_for_unrelated_pages(tmp_path):
+    # Pages on different topics (few shared slug tokens) are NOT near-duplicates.
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="doraemon curriculum levers",
+                            content="x", tags=[], category="reference", confidence="high", sources=[])
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="encoder dead latent dims",
+                            content="y", tags=[], category="reference", confidence="high", sources=[])
+    res = lint.lint_wiki(p, now="2026-05-31T10:01:00", stale_days=30, max_page_size=10240)
+    assert not any(i["type"] == "near-duplicate" for i in res["issues"])
+
+
+def test_lint_near_duplicate_reports_each_pair_once(tmp_path):
+    # Three mutually-similar pages must not spam one issue per ordered pair;
+    # at most one issue per unordered pair, deterministic by sorted slug.
+    p = OmxPaths(root=tmp_path)
+    for suffix in ["roll drives heavy tail crossover",
+                   "roll drives heavy tail crossover early",
+                   "roll drives heavy tail crossover late"]:
+        ingest.ingest_knowledge(p, now="2026-05-31T10:00:00",
+                                title=f"attitude per axis cv {suffix}",
+                                content="z", tags=[], category="reference",
+                                confidence="high", sources=[])
+    res = lint.lint_wiki(p, now="2026-05-31T10:01:00", stale_days=30, max_page_size=10240)
+    dups = [i for i in res["issues"] if i["type"] == "near-duplicate"]
+    # 3 mutually-similar pages -> at most C(3,2)=3 unordered pairs, never 6 ordered
+    assert 1 <= len(dups) <= 3

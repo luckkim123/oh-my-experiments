@@ -813,14 +813,17 @@ def build_parser() -> argparse.ArgumentParser:
                      help="emit only the body, omitting the '---' frontmatter block")
     pwr.set_defaults(func=_cmd_wiki_read)
 
-    pwg = wsub.add_parser("gc", help="read-only gc diagnosis (lint + page metadata as JSON)")
+    pwg = wsub.add_parser("gc", help="read-only gc diagnosis (lint + page metadata as JSON); "
+                                     "first step of the delete/merge path")
     pwg.add_argument("--root", required=True)
     pwg.add_argument("--stale-days", type=int, default=30, dest="stale_days")
     pwg.add_argument("--max-page-size", type=int, default=10240, dest="max_page_size")
     pwg.set_defaults(func=_cmd_wiki_gc)
 
     pwga = wsub.add_parser("gc-apply",
-                           help="apply an approved wiki-gc proposal (two-phase, git-guarded)")
+                           help="apply an approved wiki-gc proposal (two-phase, git-guarded) -- "
+                                "THIS is how you delete/merge pages; there is no separate 'delete' "
+                                "subcommand by design (add is append-merge, removal is git-guarded gc)")
     pwga.add_argument("--root", required=True)
     pwga.add_argument("--proposal", required=True, help="path to the approved wiki-gc proposal .md")
     pwga.set_defaults(func=_cmd_wiki_gc_apply)
