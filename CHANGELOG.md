@@ -4,6 +4,32 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.1.13] - 2026-06-14
+
+A discoverability gap, surfaced by the same OMC-vs-omx wiki comparison that drove
+0.1.12: a session reading only the project rules or `omx wiki --help` wrongly
+concluded "delete does not exist". omx has no `delete` subcommand by design (`add`
+is append-merge — INV-2; removal is the git-guarded two-phase `gc`/`gc-apply` path),
+but nothing made that path findable from `--help`, and `lint` could not catch the
+duplicate pages the missing-delete confusion left behind.
+
+### Added
+
+- **Near-duplicate lint.** `wiki lint` now emits `near-duplicate` (info) for page
+  pairs whose title-derived slug tokens overlap at Jaccard `>= 0.5`. Catches the
+  slug-fork failure mode — the same knowledge re-added under an evolved title forks
+  the slug instead of merging. No embeddings (hard constraint), pure lexical overlap.
+  Same signal-only, candidate-not-verdict shape as `contradiction-candidate` (INV-1).
+  The 0.5 threshold (not 0.6) accounts for the 64-char slug truncation that gives an
+  evolved-title duplicate divergent tail-noise tokens; the real on-disk pair
+  `engine_gap_eval_adapter_*` shares 7 content tokens yet scores 0.583.
+
+### Changed
+
+- **`gc`/`gc-apply` help now names the delete/merge path.** `omx wiki --help` states
+  that `gc-apply` IS how you delete/merge pages and that there is no separate `delete`
+  subcommand by design — so the confusion above resolves from `--help` alone.
+
 ## [0.1.12] - 2026-06-08
 
 The last OMC lint check that omx was missing (from the same wiki source
