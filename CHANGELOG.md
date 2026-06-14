@@ -4,6 +4,35 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.1.14] - 2026-06-14
+
+A structural hole in the exp-analyze deliverable, surfaced by an incident where a
+session patched a `report.md` section by hand (a wall-of-text paragraph with 3+
+numbers run inline and no evidence tags) while every sibling section was tables +
+short noun-phrases. The format gates were already specified in the skill — D1
+(`:151`), the mandatory evidence tags (`:142`), the PRE-WRITE table-of-contents
+gate, and the `omx report-coverage` lint — but they ALL fire only on the skill's own
+`atomic_path` write path. Opening the file with the Edit/Write tool and patching a
+section directly bypasses every one of them at once, and the coverage lint cannot
+recover the miss because it counts tokens, not visual format (a wall-of-text
+paragraph with the right tokens passes the lint, verified).
+
+### Added
+
+- **exp-analyze: "NEVER hand-Edit report.md" rule.** Once a `report.md`/`report.ko.md`
+  exists, it may not be modified with the Edit/Write tool — any change (a finding, a
+  number, an augmentation, a one-line fix) is a RE-analysis: re-enter the skill, take
+  the OLD report as the BASE, and rewrite through the `atomic_path` writer so all gates
+  run. Binds even for one-liners (the exact shape of the incident). Cross-referenced
+  from the RE-analysis section and the "When done" gate list.
+- **exp-analyze: format self-check before the atomic write.** A 3-point self-check the
+  author runs on every added/changed paragraph BEFORE writing — (1) 3+ numbers /
+  multi-axis comparison rendered as a bullet list or table, not a run-on sentence
+  (D1); (2) every new finding carries its `[FINDING]`/`[EVIDENCE]`/`[CONFIDENCE]` tags;
+  (3) visual consistency with the sibling sections. This is the authoring counterpart
+  of the coverage lint: the lint is the structural backstop, the self-check is the
+  format/evidence gate the lint structurally cannot be.
+
 ## [0.1.13] - 2026-06-14
 
 A discoverability gap, surfaced by the same OMC-vs-omx wiki comparison that drove

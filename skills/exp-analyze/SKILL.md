@@ -209,11 +209,63 @@ Before drafting `report.md`:
 This PRE-WRITE checklist is what actually prevents the skip; the `omx report-coverage`
 run in "When done" is the backstop that catches a checklist you didn't honor.
 
+## NEVER hand-Edit report.md — every change to it goes THROUGH this skill (the direct-Edit bypass incident)
+
+`report.md` (and `report.ko.md`) is exp-analyze's deliverable, and it is also a
+GATED artifact: D1 (readable format, `:151`), the mandatory evidence tags (`:142`),
+the PRE-WRITE table-of-contents gate ("Before drafting"), and the `omx report-coverage`
+completeness lint ("When done") all fire ONLY on the skill's own write path
+(`atomic_path` through `report_md(...)`). Opening the file with the Edit or Write tool
+and patching a section directly **bypasses every one of those gates at once** — the
+change lands with no D1 format check, no evidence tags, no coverage lint. That is a
+structural hole, not a judgment call, so it is closed by a rule, not by "remember to be careful":
+
+**Once a `report.md`/`report.ko.md` exists, you may NOT modify it with the Edit or Write
+tool. Any change — adding a finding, fixing a number, augmenting a section, a one-line
+correction — is a RE-analysis: re-enter this skill, take the OLD report as your BASE
+(see the next section), and rewrite it through the `atomic_path` writer so all the gates run.**
+
+- This binds even when the edit "looks like a one-liner". A single added paragraph is
+  exactly how the incident happened: a `## reward` section was hand-patched with a
+  wall-of-text paragraph (3+ numbers run together, `(1)(2)(3)` collapsed inline, no
+  evidence tags) while every sibling section was tables + short noun-phrases — and
+  nothing caught it because the Edit never touched the skill's write path.
+- The ONLY direct-tool touches allowed on the analysis tree are the auditor reads
+  (`Read` / `wc -w` / `grep '^|'`) the gates themselves call for. Never a `Write`/`Edit`.
+- If you arrived at this file already mid-edit of a `report.md` (e.g. you started in a
+  handle-directly flow and only now realize it is an exp-analyze deliverable), STOP the
+  hand-edit and restart as a re-analysis from the OLD report. The work done so far is
+  input, not the output.
+
+### Format self-check before the atomic write (the gate the lint cannot enforce)
+
+The `omx report-coverage` lint checks coverage, sections, and depth-regression — it
+CANNOT see visual format: a wall-of-text paragraph with the right tokens still passes
+the lint (it counts `[FINDING]` and `^|` table rows, it does not reject prose). So the
+format gate is a self-check YOU run on every paragraph you added or changed, BEFORE the
+`atomic_path` write, loud-failing your own draft if any item is No:
+
+1. **3+ numbers / multi-axis × multi-DR comparison → a bullet list or markdown table,
+   never a run-on sentence** (D1, `:151`). Re-read each changed paragraph: if it packs
+   three or more numbers into prose, convert it.
+2. **Every new finding carries its `[FINDING]` / `[EVIDENCE: <source>]` /
+   `[CONFIDENCE: …]` tags** (`:142`), and a numeric HIGH-confidence claim cites a
+   code-exec source, not a PNG.
+3. **Visual consistency with the SIBLING sections** — if the surrounding sections are
+   tables + short noun-phrases, your added section matches that shape; you do not drop a
+   lone prose blob into a table-driven report. Open the neighbours and compare.
+
+If any check is No, fix the draft and re-check — do not write the file. This is the
+authoring counterpart of the coverage lint: the lint is the structural backstop, this
+self-check is the format/evidence gate that the lint structurally cannot be.
+
 ## RE-analyzing a run that already has a report — the OLD report is your BASE, never start short (the report-shrink incident)
 
 When the run you are analyzing **already has a prior `report.md`** (a re-run because
 the eval/plot code changed, a correction pass, an updated analysis), you are NOT
-writing a fresh report — you are **revising the existing one**. The dr_harder
+writing a fresh report — you are **revising the existing one**. Per the rule above
+(NEVER hand-Edit report.md), this is the ONLY way to change a report that exists:
+every modification — even a one-line fix — re-enters this skill here. The dr_harder
 2026-06-08 incident is the cautionary tale: a re-analysis (only the plots had changed —
 yaw rad/s→deg/s, OOD level, error bars; the summary.json NUMBERS were identical) was
 rewritten from scratch off the data pack instead of from the OLD report, and it came
@@ -537,7 +589,10 @@ E4 stale-teacher-column guard. A report with carried-over reference values is no
 until this passes; a report with none can omit the flag. Also
 confirm the report is **bookended** — a `## TL;DR` at the top and a closing `## verdict` /
 `## bottom line` at the bottom (PRE-WRITE step 4); a report that ends on its last diagnostic
-group with no closing synthesis is not done. The PRE-WRITE per-group TodoWrite checklist
+group with no closing synthesis is not done. **Confirm too that the report was written
+THROUGH the skill's `atomic_path` writer (never hand-Edited) and that the format self-check
+passed** (see "NEVER hand-Edit report.md") — the lint cannot see a wall-of-text paragraph,
+so that format/evidence check is yours to have run. The PRE-WRITE per-group TodoWrite checklist
 ("Before drafting") is what should have prevented any failure here; this final lint is the
 backstop. Then STOP.
 Do not propose or launch a next experiment — that is exp-design's job (#5).
