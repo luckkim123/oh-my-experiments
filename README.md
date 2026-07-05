@@ -70,9 +70,9 @@ applies through the same RE-analysis path.
 
 ```
 oh-my-experiments/
-├── .claude-plugin/        # plugin.json (v0.1.0) — 4 skills, no MCP
+├── .claude-plugin/        # plugin.json — 4 skills, no MCP
 ├── skills/                # exp-init / exp-analyze / exp-design / exp-loop
-├── omx-core/              # pure-Python package + pyproject.toml (omx-core, v0.1.0)
+├── omx-core/              # pure-Python package + pyproject.toml
 │   ├── omx_core/          #   omx_paths · ingest/ · reduce/ · evaluator · decision · loop
 │   │                      #   · ledger · report · state · profile · wiki/ · cli
 │   └── tests/             #   Claude-free unit tests (pytest)
