@@ -134,6 +134,32 @@ def test_lint_flags_contradiction_candidate_tag_across_categories(tmp_path):
                for i in res["issues"])
 
 
+def test_a3_high_low_mix_flagged(tmp_path):
+    # a-3: two pages share tag "kl"; one high, one low -> contradiction candidate
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-07-05T10:00:00", title="kl budget conclusion",
+                            content="body 1", tags=["kl"], category="decision",
+                            confidence="high", sources=[])
+    ingest.ingest_knowledge(p, now="2026-07-05T10:00:00", title="kl stray note",
+                            content="body 2", tags=["kl"], category="decision",
+                            confidence="low", sources=[])
+    res = lint.lint_wiki(p, now="2026-07-05T10:01:00", stale_days=30, max_page_size=10240)
+    msgs = [i for i in res["issues"] if i["type"] == "contradiction-candidate"]
+    assert any("high and low" in i["message"] for i in msgs)
+
+
+def test_a3_not_flagged_without_low(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-07-05T10:00:00", title="adam beta one",
+                            content="body 1", tags=["adam"], category="decision",
+                            confidence="high", sources=[])
+    ingest.ingest_knowledge(p, now="2026-07-05T10:00:00", title="adam beta two",
+                            content="body 2", tags=["adam"], category="decision",
+                            confidence="medium", sources=[])
+    res = lint.lint_wiki(p, now="2026-07-05T10:01:00", stale_days=30, max_page_size=10240)
+    assert not any("high and low" in i["message"] for i in res["issues"])
+
+
 def test_lint_survives_aware_timestamp_in_updated(tmp_path):
     # A page hand-edited (or written by a future tool) with a tz-AWARE `updated:`
     # field must NOT crash lint's naive `now` stale-delta; lint stays the robust
