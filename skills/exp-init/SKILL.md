@@ -19,6 +19,11 @@ launch is never auto-fired).
 
 **Announce at start:** "Using exp-init to interview you and bootstrap the OMX profile."
 
+## Step-0 preflight
+
+`omx doctor --root <root>` (or without `--root` if the anchor is not chosen yet) —
+a stale/missing install fails actionably here instead of mid-interview.
+
 ## What it produces (via the `omx init` core verb — not direct file writes)
 
 `.omx/profile/` (anchored at the cwd or the chosen `--root`, resolved BEFORE output_root — design H4):

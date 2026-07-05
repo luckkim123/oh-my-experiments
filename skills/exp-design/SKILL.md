@@ -21,6 +21,8 @@ human reads and approves; exp-design's job ends at writing it.
 
 ## Preconditions (check, don't assume)
 
+0. Step-0 preflight: `omx doctor --root <root>` — a stale/missing install fails
+   actionably here instead of surfacing as a confusing error mid-design.
 1. A profile exists and is approved. Read `<root>/.omx/profile/metrics.yaml`. Missing
    → tell the user to run exp-init first; STOP. `pending_approval: true` still set
    → tell the user to approve it first; STOP. (Honors the exp-init hard gate.)

@@ -26,6 +26,8 @@ by the user directly" with no override path.
 
 ## Preconditions (check, don't assume)
 
+0. Step-0 preflight: `omx doctor --root <root>` — a stale/missing install fails
+   actionably here instead of surfacing as a confusing error mid-loop.
 1. A profile exists at `.omx/profile/` (run `exp-init` first if not). You need
    `metrics.yaml` (for `output_root` + the metric vocabulary) and `evaluator.sh`
    (the eval command) — both written by exp-init.

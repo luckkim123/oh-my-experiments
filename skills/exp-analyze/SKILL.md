@@ -27,6 +27,8 @@ answer is yes and this skill is how — verify by reading this file, not by scan
 
 ## Preconditions (check, don't assume)
 
+0. Step-0 preflight: `omx doctor --root <root>` — a stale/missing install fails
+   actionably here instead of surfacing as a confusing error mid-analysis.
 1. A profile exists and is approved. Read `<root>/.omx/profile/metrics.yaml`. If it
    is missing → tell the user to run exp-init first; STOP. If `pending_approval: true`
    is still set → tell the user to approve it first; STOP. (Honors the exp-init hard gate.)
@@ -139,7 +141,7 @@ put raw CSV/tables in context — that is the failure mode this router prevents.
 | exact numbers (mean, CV=std/mean, per-axis max, slope, pass/score) | **code-exec** | `omx reduce summarize --path <summary.json> --format eval_summary --cv-field <metric>` → exact JSON. For TB/wandb curves, `omx ingest`/`omx plot` then compute in a scratch script under `scratch/<sid>/py/` (write via the core path, run with python3). |
 | shape / convergence point / divergence span / heavy-tail tail | **PNG-vision** | `omx plot --root <root> --session-id <sid> --path <src> --format <fmt> --series <key> --metric <m> --view <v>` → renders a candidate PNG into scratch; then READ that PNG with the vision tool and describe the shape. |
 | where two runs diverged (aligned) | **PNG overlay OR code stride-extract** | overlay: plot both series on one figure (visual point); exact iter: stride-extract in a scratch script. |
-| one-line verdict (pass/score) | **code-exec → JSON scalar** | `omx eval ...` (only if the profile's evaluator is approved; NEVER auto-launch a live eval — read an existing verdict if present). |
+| one-line verdict (pass/score) | **code-exec → JSON scalar** | `omx eval --root <root> ...` (only if the profile's evaluator is approved; NEVER auto-launch a live eval — read an existing verdict if present). |
 
 Pipeline discipline: **summary-stat-first → PNG only if it's a shape question →
 code-exec to verify any precise claim.** A claim about a number must trace to a
