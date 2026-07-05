@@ -23,7 +23,7 @@ from omx_core.reduce.plot import line_plot
 from omx_core.reduce.promote import promote_plots
 from omx_core.evaluator import run_evaluator
 from omx_core.decision import decide_outcome, parse_keep_policy
-from omx_core.omx_paths import OmxError, OmxPaths, validate_token, resolve_session_id
+from omx_core.omx_paths import OmxError, OmxPaths, validate_token, resolve_session_id, atomic_path
 from omx_core import integrity as _integrity
 from datetime import datetime, timezone
 
@@ -531,6 +531,32 @@ def _cmd_report_coverage(args) -> int:
     return 0
 
 
+def _cmd_report_review(args) -> int:
+    """Mechanical review layer (spec 3.4). rc 2 only on missing files; a
+    'revise' verdict is data (rc 0) — R1 records reviews, it does not gate."""
+    from omx_core.review import review_report
+    if not os.path.exists(args.path):
+        raise SystemExit(f"report not found: {args.path}")
+    with open(args.path, encoding="utf-8") as fh:
+        text = fh.read()
+    baseline_text = None
+    if args.baseline:
+        bpath = args.baseline if args.baseline != "auto" else _auto_baseline(args.path)
+        if bpath:
+            if not os.path.exists(bpath):
+                raise SystemExit(f"baseline report not found: {bpath}")
+            with open(bpath, encoding="utf-8") as fh:
+                baseline_text = fh.read()
+    res = review_report(text, baseline_text=baseline_text)
+    if args.record_to:
+        target = Path(args.record_to) / "review.json"
+        with atomic_path(target) as tmp:
+            Path(tmp).write_text(json.dumps(res, indent=2), encoding="utf-8")
+        res = dict(res, recorded=str(target))
+    print(json.dumps(res))
+    return 0
+
+
 def _auto_baseline(report_path: str) -> str | None:
     """Find the most recent OTHER report.md for the same run (sibling analysis dir).
 
@@ -873,6 +899,15 @@ def build_parser() -> argparse.ArgumentParser:
              "source eval id is CITED and the value MATCHES the source summary.json — a "
              "stale carried-over value loud-fails. Omit to skip the cross-run-ref check.")
     prc.set_defaults(func=_cmd_report_coverage)
+
+    prr = sub.add_parser("report-review",
+                         help="deterministic critic checklist (spec 3.4; records, never gates)")
+    prr.add_argument("--path", required=True, help="path to a report.md")
+    prr.add_argument("--baseline", default=None,
+                     help="prior report for the depth check; 'auto' = latest sibling analysis")
+    prr.add_argument("--record-to", default=None, dest="record_to",
+                     help="analysis dir to write review.json into")
+    prr.set_defaults(func=_cmd_report_review)
 
     pq = sub.add_parser("queue-launch",
                         help="queue the next training launch as pending-approval (B8; never fires)")
