@@ -53,3 +53,26 @@ def test_cli_ingest_byte_limit_rc2(tmp_path, capsys):
                "--max-bytes", "4"])
     assert rc == 2
     assert "exceeds" in capsys.readouterr().err
+
+
+def test_cli_reduce_summarize_byte_limit_rc2(tmp_path, capsys):
+    from omx_core.cli import main
+    p = tmp_path / "summary.json"
+    p.write_text(json.dumps({"none": {"survival_pct": 1.0}}))
+    rc = main(["reduce", "summarize", "--path", str(p), "--format", "eval_summary",
+               "--max-bytes", "4"])
+    assert rc == 2
+    assert "exceeds" in capsys.readouterr().err
+
+
+def test_cli_plot_byte_limit_rc2(fixtures_dir, tmp_path, capsys):
+    from omx_core.cli import main
+    ev = fixtures_dir / "tb" / "events.out.tfevents.synthetic"
+    rc = main([
+        "plot", "--root", str(tmp_path), "--session-id", "20260530-101010-1",
+        "--path", str(ev), "--format", "tensorboard",
+        "--series", "Track/att/roll_err_deg", "--metric", "attitude", "--view", "trajectory",
+        "--max-bytes", "4",
+    ])
+    assert rc == 2
+    assert "exceeds" in capsys.readouterr().err

@@ -95,6 +95,9 @@ def _resolve_ingest_bounds(args):
         try:
             limits = load_profile_metrics(root).get("ingest_limits", {}) or {}
         except OmxError:
+            # deliberate swallow: --root is an OPTIONAL override slot, so a
+            # missing/unbootstrapped profile must not force profile setup —
+            # fall through to the adapter defaults instead of loud-failing.
             limits = {}
         if max_scalars is None:
             max_scalars = limits.get("max_scalars")
@@ -130,7 +133,10 @@ def _cmd_ingest(args) -> int:
 
 def _cmd_reduce_summarize(args) -> int:
     ms, mb = _resolve_ingest_bounds(args)
-    res = _ingest(args.path, args.format, max_scalars=ms, max_bytes=mb)
+    try:
+        res = _ingest(args.path, args.format, max_scalars=ms, max_bytes=mb)
+    except OmxError as e:
+        raise SystemExit(str(e))
     df = to_dataframe(res.summary)
     # GAP A: loud-fail when the requested cv-field is not in the ingested field
     # vocabulary (e.g. user passed an axis name like "roll" instead of a field
@@ -161,8 +167,8 @@ def _cmd_reduce_tb_final(args) -> int:
     'no data' (the engine-output-unverified trap this verb exists to prevent)."""
     from omx_core.reduce.tb_final import final_window_means
     ms, mb = _resolve_ingest_bounds(args)
-    res = _ingest(args.path, args.format, max_scalars=ms, max_bytes=mb)
     try:
+        res = _ingest(args.path, args.format, max_scalars=ms, max_bytes=mb)
         final = final_window_means(res.series, args.tag, window=args.window)
     except OmxError as e:
         raise SystemExit(str(e))
@@ -246,7 +252,10 @@ def _cmd_plot(args) -> int:
     matplotlib + scratch-path IO (design D8). Output filename = <metric>__<view>.png.
     """
     ms, mb = _resolve_ingest_bounds(args)
-    res = _ingest(args.path, args.format, max_scalars=ms, max_bytes=mb)
+    try:
+        res = _ingest(args.path, args.format, max_scalars=ms, max_bytes=mb)
+    except OmxError as e:
+        raise SystemExit(str(e))
     # GAP B: eval_summary is tabular (series={}); intercept for summary-based bar charts
     if res.meta.get("format") == "eval_summary":
         return _cmd_plot_summary_bar(args, res)
