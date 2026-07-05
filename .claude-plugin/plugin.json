@@ -21,5 +21,19 @@
     "./skills/exp-analyze/",
     "./skills/exp-design/",
     "./skills/exp-loop/"
-  ]
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.py", "report_guard"]
+          }
+        ]
+      }
+    ]
+  }
 }
