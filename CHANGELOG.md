@@ -4,6 +4,94 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.2.0] - 2026-07-06 — R1: precision core + minimal gates
+
+A structural gap between what exp-analyze/exp-design *specified* and what the harness
+could actually *enforce*: gates existed only as skill-level prose, so a report could be
+hand-edited after the fact, an evaluator script could be swapped between approval and
+launch, and wiki knowledge could accrete without any quality signal. R1 closes this
+along two axes: enforcement (make the existing guarantees loud-fail and, where useful,
+un-skippable) and rigor (give the harness the quality/novelty/version signals it was
+missing). Every new guarantee is carried by a CLI verb loud-fail first; hooks are a
+fail-open convenience layer on top (D9), never the sole enforcement point.
+
+### Added
+
+- **Hook runner + report-guard.** A fail-open `hooks/run_hook.py` dispatcher (spec 3.1,
+  OMC `run.cjs` pattern in Python) wired as a `PreToolUse` hook on `Edit|Write`, with a
+  `report_guard` handler that blocks hand-editing a gated `report.md`/`report.ko.md`
+  once it exists (spec 3.2) — the incident class the 0.1.14 entry recorded, now
+  structurally blocked at the edit call instead of relying on the skill remembering
+  the rule. `OMX_DISABLE=1` and `OMX_SKIP_HOOKS=<names>` kill switches.
+- **Integrity stamp + verify chain.** `report-coverage` now stamps a sibling
+  `manifest.json` (sha256 + gate summary) on a passing report (#14); `report-verify`
+  recomputes the hash and rc-2 fails on any deviation (strict); `report-parse` (the
+  consumer boundary) warns on unstamped legacy reports and rc-2 fails on hash mismatch
+  or missing gates, reconciling strict-verb vs backward-compat per spec 3.3/4.
+- **`report-review` verb + `report-reviewer` agent.** A deterministic critic checklist
+  (spec 3.4) plus a read-only `report-reviewer` agent (author != reviewer) that runs the
+  mechanical layer first, then judges what code cannot (evidence-to-claim correspondence,
+  earned-vs-asserted confidence, narrative consistency). Per spec 3.4, R1 *records* the
+  verdict (`review.json`) and never sets an exit code — exp-analyze applies revisions
+  through the existing RE-analysis path.
+- **`profile-seal` verb + eval preflight.** Seals `.omx/profile/{evaluator.sh,launch.sh}`
+  sha256 at approval time (#0); `omx eval --root` checks the seal before running and
+  warns (never hard-fails in R1) on drift or a missing seal — reviewer-fixed contract:
+  optional `--root`, files not commands, absent-seal/no-root both warn (spec 3.5).
+- **Wiki quality gate, `capture-session`, `sync-profile`, lint a-3.** A numeric quality
+  score with a profile-overridable floor (force-low below it) surfaces at `wiki add`
+  time (#3); `wiki capture-session` writes every report `[FINDING]` as a low-confidence
+  session-log stub automatically (#11); `wiki sync-profile` regenerates a reserved
+  `profile.md` projection from `.omx/profile/` (#17); `wiki lint` gained a-3
+  (high/low confidence mix on a shared tag, #23) alongside the existing lint families.
+- **`proposal-lint` + `probe-novelty`.** `proposal-lint` gates exp-design proposals for
+  H1/H2 discriminating predictions plus evidence and references (loud-fail, spec 3.10);
+  `probe-novelty` warns (never blocks) when a proposed probe family was already tried,
+  checked against both the wiki and past `proposals/<id>.md` files.
+- **Bounded ingest.** Ingest paths gained explicit limits (flags plus a profile
+  `ingest_limits` override) so an unbounded TensorBoard/scalar read can no longer run
+  the process out of memory — every new threshold in this release has an override
+  (D12): ingest via flags/profile, wiki quality via `wiki_quality_floor`, hook timeout
+  is internal-only.
+- **`sync_version.py` + `omx doctor`.** `scripts/sync_version.py` fans the
+  `.claude-plugin/plugin.json` version (the SSOT) out to `omx-core/pyproject.toml`
+  (#6); `omx doctor` is a read-only environment preflight covering install, deps,
+  profile presence, and hooks presence (#19).
+
+### Changed
+
+- **`report-coverage` stamps the sibling manifest** as part of its existing pass path
+  (see Integrity above), rather than coverage being a standalone check.
+- **`eval` and `ingest` verbs gained flags**: `eval --root` (enables the profile-seal
+  preflight, #0) and the ingest bounding flags above.
+- **Skill wiring**: `exp-analyze` now dispatches the `report-reviewer` agent after
+  coverage gates pass; `exp-analyze`/`exp-loop` call `wiki capture-session` at
+  iteration end; `exp-design` runs `proposal-lint`/`probe-novelty` before a proposal
+  is considered ready for approval.
+- **`omx-core/pyproject.toml` version** now follows `.claude-plugin/plugin.json` via
+  `sync_version.py` instead of being hand-maintained (drift source for the version
+  fan-out gap this release closes).
+
+### Verification
+
+- omx-core full pytest suite green: 586 passed / 1 pre-existing skip (baseline before
+  this task's edits was already at this count — the version bump/CHANGELOG/README
+  changes in this release commit carry no test-affecting code).
+- `python3 scripts/sync_version.py` fans `0.2.0` from `plugin.json` to
+  `omx-core/pyproject.toml`; `test_version_sync.py` asserts the two stay in sync so
+  drift fails pytest going forward.
+
+### Notes
+
+- **Hooks require a plugin reinstall to activate.** The `PreToolUse` `report_guard`
+  hook is inert until the plugin is reinstalled from this version — update the
+  claudebase installer (D7) as part of publishing this release so downstream
+  installs pick it up.
+- **Backward compat.** Unstamped legacy reports (pre-0.2.0) warn rather than fail in
+  `report-parse`; a strict rc-2 fail on `unstamped` is deferred to 0.3.0 (rc2). An
+  absent evaluator/launch seal warns in this release; hard-fail is a later milestone.
+  No retroactive quality scoring is applied to pre-existing wiki pages.
+
 ## [0.1.14] - 2026-06-14
 
 A structural hole in the exp-analyze deliverable, surfaced by an incident where a
