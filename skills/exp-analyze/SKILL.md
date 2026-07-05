@@ -106,6 +106,10 @@ engine precisely because a single symptom query (`"SS error attitude DR"`) never
 surfaced the engine's how-to page (its tags are `adapter`/`analyze`/`engine`, which
 share no vocabulary with a symptom query).
 
+- **Pass 0 — refresh + read the profile projection.** Run
+  `omx wiki sync-profile --root <root>` (no-op when current), then
+  `omx wiki read --root <root> --slug profile` — the auto-synced profile page is
+  the CURRENT metrics vocabulary/rules, immune to seed-page drift.
 - **Pass A — discover the analysis TOOLING this workspace owns.** Query for the
   tools/engines first:
   `omx wiki query --root <root> "analysis engine reference adapter how to analyze"`

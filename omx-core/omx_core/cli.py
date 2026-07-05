@@ -793,6 +793,16 @@ def _cmd_wiki_read(args) -> int:
     return 0
 
 
+def _cmd_wiki_sync_profile(args) -> int:
+    from omx_core.wiki.sync import sync_profile_page
+    try:
+        res = sync_profile_page(OmxPaths(root=args.root), now=_now_iso())
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(res))
+    return 0
+
+
 def _cmd_wiki_gc(args) -> int:
     """Read-only gc diagnosis: lint result + page metadata, as one JSON object for
     the skill to read. Touches nothing (the skill judges, gc-apply executes)."""
@@ -1039,6 +1049,11 @@ def build_parser() -> argparse.ArgumentParser:
     pwr.add_argument("--no-frontmatter", action="store_true", dest="no_frontmatter",
                      help="emit only the body, omitting the '---' frontmatter block")
     pwr.set_defaults(func=_cmd_wiki_read)
+
+    pws = wsub.add_parser("sync-profile",
+                          help="regenerate the reserved profile.md projection from .omx/profile/ (#17)")
+    pws.add_argument("--root", required=True)
+    pws.set_defaults(func=_cmd_wiki_sync_profile)
 
     pwg = wsub.add_parser("gc", help="read-only gc diagnosis (lint + page metadata as JSON); "
                                      "first step of the delete/merge path")

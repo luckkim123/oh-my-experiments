@@ -22,7 +22,7 @@ CATEGORIES = frozenset({
 CONFIDENCES = ("high", "medium", "low")
 
 #: Files in the wiki dir that are NOT pages (auto-maintained); never writable as a page.
-RESERVED_FILES = frozenset({"index.md", "log.md"})
+RESERVED_FILES = frozenset({"index.md", "log.md", "profile.md"})
 
 
 class WikiError(OmxError):

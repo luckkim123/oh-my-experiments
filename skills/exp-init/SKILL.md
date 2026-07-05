@@ -184,6 +184,10 @@ This is the only wiki write exp-init makes. It records workspace conventions, no
 findings (those come from exp-analyze). If `omx wiki add` loud-fails, surface the
 message and continue - the profile is already written; the seed is best-effort.
 
+Then project the profile into the wiki (repeatable, unlike the one-shot seed):
+`omx wiki sync-profile --root "<anchor>"` — regenerates the reserved `profile.md`
+page from `.omx/profile/*` so wiki readers always see the CURRENT profile.
+
 ## Re-running exp-init
 
 If a profile already exists, `omx init` refuses (rc 2). exp-init then asks whether to
