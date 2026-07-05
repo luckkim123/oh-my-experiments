@@ -186,6 +186,13 @@ def _cmd_session_id(args) -> int:
     return 0
 
 
+def _cmd_doctor(args) -> int:
+    from omx_core.doctor import run_doctor
+    plugin_root = args.plugin_root or os.environ.get("CLAUDE_PLUGIN_ROOT")
+    print(json.dumps(run_doctor(root=args.root, plugin_root=plugin_root)))
+    return 0
+
+
 def _cmd_eval(args) -> int:
     """Run an evaluator command, print its contract record (+ optional decision).
 
@@ -731,6 +738,12 @@ def build_parser() -> argparse.ArgumentParser:
     ps = sub.add_parser("session-id", help="resolve session id (flag>env>autogen)")
     ps.add_argument("--session-id", default=None, dest="session_id")
     ps.set_defaults(func=_cmd_session_id)
+
+    pdoc = sub.add_parser("doctor", help="read-only environment preflight (install/deps/profile/hooks)")
+    pdoc.add_argument("--root", default=None, help="optional .omx anchor to check profile presence")
+    pdoc.add_argument("--plugin-root", default=None, dest="plugin_root",
+                      help="plugin dir to check hooks presence (default: $CLAUDE_PLUGIN_ROOT)")
+    pdoc.set_defaults(func=_cmd_doctor)
 
     pe = sub.add_parser("eval", help="run an evaluator command, parse {pass,score?} (Claude-free)")
     pe.add_argument("--command", required=True, help="shell command; LAST stdout line must be the JSON verdict")
