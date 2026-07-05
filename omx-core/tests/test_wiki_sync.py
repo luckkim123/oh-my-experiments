@@ -53,6 +53,20 @@ def test_sync_loud_fails_without_profile(tmp_path, capsys):
     assert rc == 2
 
 
+def test_sync_loud_fails_cleanly_when_metrics_yaml_missing(tmp_path, capsys):
+    # Only evaluator.sh present (no metrics.yaml, no rules.md): the initial
+    # presence check (ANY of _PROJECTED) passes, but composing the page needs
+    # metrics.yaml specifically. Must exit rc 2 via a clean WikiError/SystemExit,
+    # never an unhandled FileNotFoundError.
+    prof = tmp_path / ".omx" / "profile"
+    prof.mkdir(parents=True)
+    (prof / "evaluator.sh").write_text("echo '{\"pass\": true}'\n")
+    rc = main(["wiki", "sync-profile", "--root", str(tmp_path)])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "metrics.yaml" in err
+
+
 def test_hand_write_of_profile_page_blocked(tmp_path):
     import pytest
     from omx_core.omx_paths import OmxPaths

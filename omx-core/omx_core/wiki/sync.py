@@ -19,7 +19,10 @@ _PROJECTED = ("metrics.yaml", "rules.md", "evaluator.sh", "launch.sh")
 
 
 def _compose(paths: OmxPaths, now: str) -> WikiPage:
-    metrics = (paths.profile_dir / "metrics.yaml").read_text(encoding="utf-8")
+    metrics_fp = paths.profile_dir / "metrics.yaml"
+    if not metrics_fp.exists():
+        raise WikiError(f"no metrics.yaml at {paths.profile_dir}; run exp-init first")
+    metrics = metrics_fp.read_text(encoding="utf-8")
     rules_fp = paths.profile_dir / "rules.md"
     rules = rules_fp.read_text(encoding="utf-8") if rules_fp.exists() else "(no rules.md)"
     seal = check_seal(paths)
