@@ -341,10 +341,23 @@ def _cmd_report_parse(args) -> int:
 
     The exp-design skill (#5) shells this to read findings without re-implementing
     the tag grammar; exp-loop (#6) reuses it. rc 0 + JSON {n_findings, findings:[]}
-    on success; rc 2 (SystemExit) on a missing file or a malformed tag run."""
+    on success; rc 2 (SystemExit) on a missing file or a malformed tag run.
+
+    Consumer boundary (#14): verifies the stamp before parsing. mismatch/no-gates
+    loud-fail (rc 2) — a consumer must never read a tampered or ungated report.
+    unstamped (pre-0.2.0 legacy) only warns on stderr and still parses (spec 4
+    backward-compat); the output JSON carries the integrity status either way."""
     path = args.path
     if not os.path.exists(path):
         raise SystemExit(f"report not found: {path}")
+    v = _integrity.verify_report(path)
+    if v["status"] in ("mismatch", "no-gates"):
+        raise SystemExit(
+            f"report integrity {v['status']} — refusing to parse a tampered/ungated "
+            "report; re-enter exp-analyze (RE-analysis) so report-coverage re-stamps it")
+    if v["status"] == "unstamped":
+        print("WARNING: unstamped legacy report (pre-0.2.0); "
+              "rc2 promotion earmarked for 0.3.0", file=sys.stderr)
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
     try:
@@ -357,7 +370,26 @@ def _cmd_report_parse(args) -> int:
             {"claim": f.claim, "evidence": f.evidence, "confidence": f.confidence}
             for f in findings
         ],
+        "integrity": v["status"],
     }))
+    return 0
+
+
+def _cmd_report_verify(args) -> int:
+    """STRICT integrity check (#14): rc 2 unless the stamp verifies clean.
+
+    Explicit call gets the strict answer (spec 3.3) — unlike report-parse's
+    consumer boundary, 'unstamped' is not tolerated here."""
+    if not os.path.exists(args.path):
+        raise SystemExit(f"report not found: {args.path}")
+    v = _integrity.verify_report(args.path)
+    print(json.dumps(v))
+    if v["status"] != "ok":
+        raise SystemExit(
+            f"report integrity {v['status']}"
+            + (f" (files: {v['mismatched']})" if v["mismatched"] else "")
+            + " — gated deliverables are re-written only through the exp-analyze "
+              "RE-analysis path, then re-stamped by report-coverage")
     return 0
 
 
@@ -811,6 +843,12 @@ def build_parser() -> argparse.ArgumentParser:
     prp = sub.add_parser("report-parse", help="parse exp-analyze report.md -> JSON findings (Claude-free)")
     prp.add_argument("--path", required=True, help="path to an exp-analyze report.md")
     prp.set_defaults(func=_cmd_report_parse)
+
+    prv = sub.add_parser(
+        "report-verify",
+        help="recompute report sha256 vs the manifest stamp (strict; rc 2 on any deviation)")
+    prv.add_argument("--path", required=True, help="report.md or its analysis dir")
+    prv.set_defaults(func=_cmd_report_verify)
 
     prc = sub.add_parser(
         "report-coverage",
