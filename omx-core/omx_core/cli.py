@@ -604,6 +604,52 @@ def _auto_baseline(report_path: str) -> str | None:
     return os.path.join(analysis_root, siblings[-1], "report.md")
 
 
+def _cmd_proposal_lint(args) -> int:
+    """Gate the discriminating-prediction contract (spec 3.10; loud-fail)."""
+    from omx_core.proposal import lint_proposal
+    if not os.path.exists(args.path):
+        raise SystemExit(f"proposal not found: {args.path}")
+    with open(args.path, encoding="utf-8") as fh:
+        res = lint_proposal(fh.read())
+    print(json.dumps(res))
+    if not res["ok"]:
+        raise SystemExit("proposal lint FAILED — "
+                         + "; ".join(i["rule"] for i in res["issues"]))
+    return 0
+
+
+def _cmd_probe_novelty(args) -> int:
+    """Warn-only novelty scan (spec 3.10): wiki + past proposals. Never fails."""
+    from omx_core.proposal import jaccard, probe_tokens
+    from omx_core.wiki.query import query_wiki
+    if not os.path.exists(args.proposal):
+        raise SystemExit(f"proposal not found: {args.proposal}")
+    with open(args.proposal, encoding="utf-8") as fh:
+        toks = probe_tokens(fh.read())
+    top = " ".join(sorted(toks)[:8])
+    try:
+        hits = query_wiki(OmxPaths(root=args.root), now=_now_iso(), text=top,
+                          tags=None, category=None, limit=5)
+    except OmxError:
+        hits = {"matches": []}
+    similar = []
+    if args.proposals_dir and os.path.isdir(args.proposals_dir):
+        for name in sorted(os.listdir(args.proposals_dir)):
+            fp = os.path.join(args.proposals_dir, name)
+            if not name.endswith(".md") or os.path.abspath(fp) == os.path.abspath(args.proposal):
+                continue
+            with open(fp, encoding="utf-8") as fh:
+                j = jaccard(toks, probe_tokens(fh.read()))
+            if j >= 0.3:
+                similar.append({"path": fp, "jaccard": round(j, 3)})
+    out = {"wiki_hits": hits.get("matches", []), "similar_proposals": similar}
+    print(json.dumps(out))
+    if similar:
+        print(f"WARNING: probe family overlaps {len(similar)} past proposal(s) — "
+              "check their outcome before re-trying it", file=sys.stderr)
+    return 0
+
+
 def _cmd_queue_launch(args) -> int:
     """Queue the next training launch as a pending-approval artifact (B8).
 
@@ -979,6 +1025,19 @@ def build_parser() -> argparse.ArgumentParser:
     prr.add_argument("--record-to", default=None, dest="record_to",
                      help="analysis dir to write review.json into")
     prr.set_defaults(func=_cmd_report_review)
+
+    ppl = sub.add_parser("proposal-lint",
+                         help="gate exp-design proposals: H1/H2 discriminating predictions + evidence + refs (loud-fail)")
+    ppl.add_argument("--path", required=True, help="path to a proposals/<id>.md")
+    ppl.set_defaults(func=_cmd_proposal_lint)
+
+    ppn = sub.add_parser("probe-novelty",
+                         help="warn-only: was this probe family already tried? (wiki + past proposals)")
+    ppn.add_argument("--root", required=True)
+    ppn.add_argument("--proposal", required=True)
+    ppn.add_argument("--proposals-dir", default=None, dest="proposals_dir",
+                     help="dir of past proposals/<id>.md to compare against")
+    ppn.set_defaults(func=_cmd_probe_novelty)
 
     pq = sub.add_parser("queue-launch",
                         help="queue the next training launch as pending-approval (B8; never fires)")

@@ -159,6 +159,12 @@ next-best alternative"). State, explicitly:
   change ONE variable so the next run is not confounded.
 - **What result confirms which hypothesis.**
 
+Write the two predictions as MACHINE-CHECKED tag lines inside the
+`## Discriminating probe` section (the lint gate reads them):
+
+    [H1-PREDICTS] <what the leading hypothesis predicts the probe outcome to be>
+    [H2-PREDICTS] <what the strongest alternative predicts — MUST differ from H1>
+
 The discriminating probe, expressed as a concrete change to the training/eval
 setup, IS the proposed next experiment. It is a PROPOSAL — never run it.
 
@@ -177,7 +183,7 @@ setup, IS the proposed next experiment. It is a PROPOSAL — never run it.
      ending with the ranked leading hypothesis vs strongest alternative.
    - **`## Discriminating probe (the proposed change)`** — what each top hypothesis
      predicts, the single-variable change (with exact value), and what result
-     confirms which hypothesis.
+     confirms which hypothesis, including the [H1-PREDICTS]/[H2-PREDICTS] tag lines.
    - **`## How to run (for the human — NOT auto-executed)`** — the concrete command
      delta from the profile's `launch.sh` (e.g. "set `payload_cog_offset_xy_radius`
      0.08 → 0.05, all else identical to <baseline run>"). State plainly that
@@ -215,6 +221,12 @@ setup, IS the proposed next experiment. It is a PROPOSAL — never run it.
 - Respond to the user in the machine's locale language / the user's language (repo rule); keep the proposal markdown / code in English.
 
 ## When done
+
+Before reporting, gate the proposal:
+`omx proposal-lint --path <proposals/<id>.md>` MUST exit 0 (fix the proposal
+through a re-write if it fails — the H1/H2 predictions must genuinely differ), and run
+`omx probe-novelty --root <root> --proposal <that path> --proposals-dir <output_root>/<run_id>/proposals`
+— surface any overlap warning to the user (novelty is their judgment call, not a gate).
 
 Tell the user where the proposal is
 (`<output_root>/<run_id>/proposals/<proposal_id>.md`), summarize the leading
