@@ -22,7 +22,7 @@ CATEGORIES = frozenset({
 CONFIDENCES = ("high", "medium", "low")
 
 #: Files in the wiki dir that are NOT pages (auto-maintained); never writable as a page.
-RESERVED_FILES = frozenset({"index.md", "log.md"})
+RESERVED_FILES = frozenset({"index.md", "log.md", "profile.md"})
 
 
 class WikiError(OmxError):
@@ -43,4 +43,6 @@ class WikiPage:
     category: str = "reference"
     confidence: str = "medium"
     schema_version: int = WIKI_SCHEMA_VERSION
+    quality_score: int | None = None
+    quality_reasons: list = field(default_factory=list)
     content: str = ""

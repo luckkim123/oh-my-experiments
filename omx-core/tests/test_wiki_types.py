@@ -25,7 +25,7 @@ def test_confidences():
 
 
 def test_reserved_files():
-    assert RESERVED_FILES == frozenset({"index.md", "log.md"})
+    assert RESERVED_FILES == frozenset({"index.md", "log.md", "profile.md"})
 
 
 def test_wikipage_holds_frontmatter_and_content():

@@ -26,6 +26,8 @@ by the user directly" with no override path.
 
 ## Preconditions (check, don't assume)
 
+0. Step-0 preflight: `omx doctor --root <root>` — a stale/missing install fails
+   actionably here instead of surfacing as a confusing error mid-loop.
 1. A profile exists at `.omx/profile/` (run `exp-init` first if not). You need
    `metrics.yaml` (for `output_root` + the metric vocabulary) and `evaluator.sh`
    (the eval command) — both written by exp-init.
@@ -78,9 +80,13 @@ current checkpoint, run it through the core (this is the single source of the
 pass/score verdict — never eyeball a metric):
 
 ```bash
-omx eval --command 'bash .omx/profile/evaluator.sh' --cwd <project_dir> \
+omx eval --root <root> --command 'bash .omx/profile/evaluator.sh' --cwd <project_dir> \
     --keep-policy <pass_only|score_improvement> --last-kept-score <prev_or_omit>
 ```
+
+`--root` enables the seal preflight (#0): a sealed evaluator that was modified mid-loop
+rc-2s instead of silently regrading; re-approve intentional changes with
+`omx profile-seal --root <root>`.
 
 The JSON includes a `decision` block (`keep`/`discard`/`ambiguous`/`bootstrap`)
 when `--keep-policy` is set. That decision is authoritative. If there is no new
@@ -116,6 +122,9 @@ the queued launch, and that THEY must approve and run the training command.
 
 At the end of each iteration, audit the accumulated wiki so stale/orphaned/broken
 knowledge surfaces (it is review-gated - you report, the human decides):
+
+First capture the iteration's findings as breadcrumbs (idempotent):
+`omx wiki capture-session --root <root> --from-report <this iteration's report.md> --run-id <run_id>`
 
 `omx wiki lint --root <root>`
 

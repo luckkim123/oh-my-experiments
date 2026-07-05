@@ -16,6 +16,7 @@ from datetime import datetime
 from omx_core.omx_paths import OmxPaths
 from omx_core.wiki.types import WikiError
 from omx_core.wiki import storage
+from omx_core.wiki.quality import QUALITY_FLOOR
 
 
 def _parse_iso(value: str) -> datetime | None:
@@ -51,8 +52,10 @@ def _contradiction_candidates(pages: dict) -> list:
 
     a-1: >=2 pages sharing a tag where EVERY sharing page is confidence 'high'
          -> they may assert conflicting high-confidence conclusions; flag for review.
+    a-3: a tag spanning both 'high' and 'low' confidence -> a low page may shadow
+         the authoritative conclusion; flag for review.
     a-2: a tag spanning >1 category -> classification drift; flag for review.
-    One issue per tag (a-1 takes precedence over a-2 for the same tag)."""
+    One issue per tag (a-1 > a-3 > a-2 takes precedence for the same tag)."""
     by_tag: dict = {}
     for page in pages.values():
         for tag in page.tags:
@@ -70,6 +73,17 @@ def _contradiction_candidates(pages: dict) -> list:
                 "slug": slugs[0], "severity": "info", "type": "contradiction-candidate",
                 "message": (f"{len(group)} high-confidence pages share tag {tag!r}; "
                             f"review whether their conclusions conflict: {', '.join(slugs)}"),
+            })
+            continue
+        # a-3: the group spans both 'high' and 'low' confidence -> a low page may
+        # shadow the authoritative conclusion (OMC smell, keyed on tags in omx idiom).
+        confs = {g.confidence for g in group}
+        if "high" in confs and "low" in confs:
+            issues.append({
+                "slug": slugs[0], "severity": "info", "type": "contradiction-candidate",
+                "message": (f"tag {tag!r} spans both high and low confidence pages; "
+                            f"review whether the low page shadows or contradicts the "
+                            f"high-confidence conclusion: {', '.join(slugs)}"),
             })
             continue
         # a-2: tag spans multiple categories
@@ -171,6 +185,9 @@ def lint_wiki(paths: OmxPaths, *, now: str, stale_days: int = 30,
         if page.confidence == "low":
             issues.append({"slug": slug, "severity": "info", "type": "low-confidence",
                            "message": "confidence is 'low'; review and strengthen or remove"})
+        if page.quality_score is not None and page.quality_score < QUALITY_FLOOR:
+            issues.append({"slug": slug, "severity": "info", "type": "low-quality",
+                           "message": f"quality_score {page.quality_score} < {QUALITY_FLOOR}"})
 
     issues.extend(_contradiction_candidates(pages))
     issues.extend(_near_duplicate_candidates(pages))

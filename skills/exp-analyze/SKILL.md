@@ -27,6 +27,8 @@ answer is yes and this skill is how — verify by reading this file, not by scan
 
 ## Preconditions (check, don't assume)
 
+0. Step-0 preflight: `omx doctor --root <root>` — a stale/missing install fails
+   actionably here instead of surfacing as a confusing error mid-analysis.
 1. A profile exists and is approved. Read `<root>/.omx/profile/metrics.yaml`. If it
    is missing → tell the user to run exp-init first; STOP. If `pending_approval: true`
    is still set → tell the user to approve it first; STOP. (Honors the exp-init hard gate.)
@@ -78,7 +80,9 @@ the raw TB before asserting absence**:
 1. **Dump the raw scalar tag set.** With the TB event file in hand:
    ```python
    from tensorboard.backend.event_processing import event_accumulator
-   ea = event_accumulator.EventAccumulator(str(ev), size_guidance={event_accumulator.SCALARS: 0})
+   # size_guidance caps samples per tag (reservoir); NEVER use 0 ("load all") —
+   # a large event file would load every scalar into memory (unbounded-ingest OOM).
+   ea = event_accumulator.EventAccumulator(str(ev), size_guidance={event_accumulator.SCALARS: 10000})
    ea.Reload(); tags = ea.Tags()["scalars"]
    ```
    Grep `tags` for the group's prefix (e.g. `Constraint/`, `Reward/`). 
@@ -104,6 +108,10 @@ engine precisely because a single symptom query (`"SS error attitude DR"`) never
 surfaced the engine's how-to page (its tags are `adapter`/`analyze`/`engine`, which
 share no vocabulary with a symptom query).
 
+- **Pass 0 — refresh + read the profile projection.** Run
+  `omx wiki sync-profile --root <root>` (no-op when current), then
+  `omx wiki read --root <root> --slug profile` — the auto-synced profile page is
+  the CURRENT metrics vocabulary/rules, immune to seed-page drift.
 - **Pass A — discover the analysis TOOLING this workspace owns.** Query for the
   tools/engines first:
   `omx wiki query --root <root> "analysis engine reference adapter how to analyze"`
@@ -133,7 +141,7 @@ put raw CSV/tables in context — that is the failure mode this router prevents.
 | exact numbers (mean, CV=std/mean, per-axis max, slope, pass/score) | **code-exec** | `omx reduce summarize --path <summary.json> --format eval_summary --cv-field <metric>` → exact JSON. For TB/wandb curves, `omx ingest`/`omx plot` then compute in a scratch script under `scratch/<sid>/py/` (write via the core path, run with python3). |
 | shape / convergence point / divergence span / heavy-tail tail | **PNG-vision** | `omx plot --root <root> --session-id <sid> --path <src> --format <fmt> --series <key> --metric <m> --view <v>` → renders a candidate PNG into scratch; then READ that PNG with the vision tool and describe the shape. |
 | where two runs diverged (aligned) | **PNG overlay OR code stride-extract** | overlay: plot both series on one figure (visual point); exact iter: stride-extract in a scratch script. |
-| one-line verdict (pass/score) | **code-exec → JSON scalar** | `omx eval ...` (only if the profile's evaluator is approved; NEVER auto-launch a live eval — read an existing verdict if present). |
+| one-line verdict (pass/score) | **code-exec → JSON scalar** | `omx eval --root <root> ...` (only if the profile's evaluator is approved; NEVER auto-launch a live eval — read an existing verdict if present). |
 
 Pipeline discipline: **summary-stat-first → PNG only if it's a shape question →
 code-exec to verify any precise claim.** A claim about a number must trace to a
@@ -569,6 +577,24 @@ engine printed `0`/empty for that group, you must first dump the raw TB tags
 justify the N/A. This closes the loop: the gate catches a skipped group, and the
 cross-check rule stops "the engine said 0" from being used to wave the skip through.
 
+## Review (author != reviewer — spec 3.4)
+
+After the When-done gates below pass, the report gets an INDEPENDENT review before
+you declare done (the writer of a report is never its approver):
+
+1. Run the mechanical layer yourself and record it into the analysis dir:
+   `omx report-review --path <report.md> [--baseline auto] --record-to <analysis_dir>`
+2. Dispatch the read-only `report-reviewer` agent (agent type
+   `oh-my-experiments:report-reviewer`) with the report path (and baseline path on a
+   re-analysis). It runs the verb again fresh and adds judgment the checklist cannot.
+3. If its verdict is `revise`: apply the fixes THROUGH the RE-analysis path (old
+   report as BASE, atomic_path writer, gates re-run — never hand-Edit), then re-review.
+4. If it is `approve`: proceed to When done. Record the verdict in your summary.
+
+In v0.2.0 the review is recorded, not consumption-gating (`report-parse` does not
+require review.json) — but a skipped review must be stated explicitly in your summary,
+never silent.
+
 ## When done
 
 Tell the user where the report is (`<output_root>/<run_id>/analysis/<analysis_id>/report.md`),
@@ -594,5 +620,13 @@ THROUGH the skill's `atomic_path` writer (never hand-Edited) and that the format
 passed** (see "NEVER hand-Edit report.md") — the lint cannot see a wall-of-text paragraph,
 so that format/evidence check is yours to have run. The PRE-WRITE per-group TodoWrite checklist
 ("Before drafting") is what should have prevented any failure here; this final lint is the
-backstop. Then STOP.
+backstop. Finally, state the reviewer verdict (`approve`, or `revise` + what was applied) —
+a report without a recorded review must say so explicitly.
+
+Then leave breadcrumbs UNCONDITIONALLY — before any manual curation, run
+`omx wiki capture-session --root <root> --from-report <report.md> --run-id <run_id>`
+so every finding lands as a low-confidence session-log stub even if this session
+never curates (slug append-merge absorbs the duplicate when you DO curate).
+
+Then STOP.
 Do not propose or launch a next experiment — that is exp-design's job (#5).

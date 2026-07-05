@@ -19,6 +19,11 @@ launch is never auto-fired).
 
 **Announce at start:** "Using exp-init to interview you and bootstrap the OMX profile."
 
+## Step-0 preflight
+
+`omx doctor --root <root>` (or without `--root` if the anchor is not chosen yet) —
+a stale/missing install fails actionably here instead of mid-interview.
+
 ## What it produces (via the `omx init` core verb — not direct file writes)
 
 `.omx/profile/` (anchored at the cwd or the chosen `--root`, resolved BEFORE output_root — design H4):
@@ -160,6 +165,8 @@ Next steps (yours, not mine):
   1. Edit evaluator.sh — replace the STUB with your real eval command.
   2. Fill rules.md + launch.sh.
   3. Set pending_approval: false in metrics.yaml (or delete the key) to approve.
+  4. After approving, run: omx profile-seal --root "<anchor>"  (seals evaluator.sh/launch.sh
+     sha256 so mid-loop edits surface as an explicit re-approval).
 Once approved, run exp-analyze on your runs.
 ```
 
@@ -181,6 +188,10 @@ you; do NOT ask new questions or scan directories.
 This is the only wiki write exp-init makes. It records workspace conventions, not
 findings (those come from exp-analyze). If `omx wiki add` loud-fails, surface the
 message and continue - the profile is already written; the seed is best-effort.
+
+Then project the profile into the wiki (repeatable, unlike the one-shot seed):
+`omx wiki sync-profile --root "<anchor>"` — regenerates the reserved `profile.md`
+page from `.omx/profile/*` so wiki readers always see the CURRENT profile.
 
 ## Re-running exp-init
 

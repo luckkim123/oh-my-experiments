@@ -35,7 +35,8 @@ def _extract_links(content: str) -> list[str]:
 
 def ingest_knowledge(paths: OmxPaths, *, now: str, title: str, content: str,
                      tags: list, category: str, confidence: str,
-                     sources: list) -> dict:
+                     sources: list, quality_score: int | None = None,
+                     quality_reasons: tuple = ()) -> dict:
     """Create or append-merge a wiki page. Returns {action, slug}."""
     if "+" in now or now.endswith("Z"):
         raise WikiError(f"now must be a naive ISO timestamp (no tz offset); got {now!r}")
@@ -59,6 +60,7 @@ def ingest_knowledge(paths: OmxPaths, *, now: str, title: str, content: str,
                 links=_extract_links(content),
                 category=category, confidence=confidence,
                 schema_version=WIKI_SCHEMA_VERSION,
+                quality_score=quality_score, quality_reasons=list(quality_reasons),
                 content=f"\n# {title}\n\n{content}\n",
             )
             action = "created"
@@ -71,13 +73,17 @@ def ingest_knowledge(paths: OmxPaths, *, now: str, title: str, content: str,
                 merged_conf = confidence
             else:
                 merged_conf = existing.confidence
+            new_qs = quality_score if quality_score is not None else existing.quality_score
+            new_qr = list(quality_reasons) if quality_score is not None else existing.quality_reasons
             appended = existing.content.rstrip() + f"\n\n---\n\n## Update ({now})\n\n{content}\n"
             page = WikiPage(
                 slug=slug, title=existing.title,
                 tags=merged_tags, created=existing.created, updated=now,
                 sources=merged_sources, links=merged_links,
                 category=existing.category, confidence=merged_conf,
-                schema_version=existing.schema_version, content=appended,
+                schema_version=existing.schema_version,
+                quality_score=new_qs, quality_reasons=new_qr,
+                content=appended,
             )
             action = "updated"
 

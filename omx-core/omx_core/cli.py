@@ -4,6 +4,7 @@ These verbs are pure Python so they are unit-testable from Bash with no Claude
 or Isaac dependency. Skills (builds #3-#6) shell out to these.
 """
 import argparse
+import importlib.metadata
 import json
 import math
 import os
@@ -22,7 +23,8 @@ from omx_core.reduce.plot import line_plot
 from omx_core.reduce.promote import promote_plots
 from omx_core.evaluator import run_evaluator
 from omx_core.decision import decide_outcome, parse_keep_policy
-from omx_core.omx_paths import OmxError, OmxPaths, validate_token, resolve_session_id
+from omx_core.omx_paths import OmxError, OmxPaths, validate_token, resolve_session_id, atomic_path
+from omx_core import integrity as _integrity
 from datetime import datetime, timezone
 
 from omx_core.loop import queue_pending_launch, read_pending_launch, deadline_passed, compute_deadline
@@ -64,7 +66,7 @@ _ADAPTERS = {
 }
 
 
-def _ingest(path, fmt):
+def _ingest(path, fmt, max_scalars=None, max_bytes=None):
     if fmt == "npz":
         from omx_core.reduce.series import load_npz
         from omx_core.ingest.base import IngestResult
@@ -77,11 +79,51 @@ def _ingest(path, fmt):
                                   "skipped_nd": sorted(all_keys - set(series))})
     if fmt not in _ADAPTERS:
         raise SystemExit(f"unknown --format {fmt!r}; choose from {sorted(_ADAPTERS) + ['npz']}")
-    return _ADAPTERS[fmt]().ingest(path)
+    if fmt == "tensorboard":
+        adapter = TensorboardAdapter(max_scalars=max_scalars, max_bytes=max_bytes)
+    elif fmt == "eval_summary":
+        adapter = EvalSummaryAdapter(max_bytes=max_bytes)
+    else:
+        adapter = _ADAPTERS[fmt]()
+    return adapter.ingest(path)
+
+
+def _resolve_ingest_bounds(args):
+    """Flag > profile ingest_limits > None (adapter default). D12 override slot."""
+    max_scalars = getattr(args, "max_scalars", None)
+    max_bytes = getattr(args, "max_bytes", None)
+    root = getattr(args, "root", None)
+    if root and (max_scalars is None or max_bytes is None):
+        try:
+            limits = load_profile_metrics(root).get("ingest_limits", {}) or {}
+        except OmxError:
+            # deliberate swallow: --root is an OPTIONAL override slot, so a
+            # missing/unbootstrapped profile must not force profile setup —
+            # fall through to the adapter defaults instead of loud-failing.
+            limits = {}
+        if max_scalars is None:
+            max_scalars = limits.get("max_scalars")
+        if max_bytes is None:
+            max_bytes = limits.get("max_bytes")
+    return max_scalars, max_bytes
+
+
+def _add_ingest_bounds(parser, *, with_root: bool):
+    parser.add_argument("--max-scalars", type=int, default=None, dest="max_scalars",
+                        help="cap TB scalar samples per tag (default 10000)")
+    parser.add_argument("--max-bytes", type=int, default=None, dest="max_bytes",
+                        help="refuse sources larger than this (default 1 GiB)")
+    if with_root:
+        parser.add_argument("--root", default=None,
+                            help="optional .omx anchor; reads profile ingest_limits")
 
 
 def _cmd_ingest(args) -> int:
-    res = _ingest(args.path, args.format)
+    ms, mb = _resolve_ingest_bounds(args)
+    try:
+        res = _ingest(args.path, args.format, max_scalars=ms, max_bytes=mb)
+    except OmxError as e:
+        raise SystemExit(str(e))
     print(json.dumps({
         "format": res.meta.get("format"),
         "source": res.meta.get("source"),
@@ -92,7 +134,11 @@ def _cmd_ingest(args) -> int:
 
 
 def _cmd_reduce_summarize(args) -> int:
-    res = _ingest(args.path, args.format)
+    ms, mb = _resolve_ingest_bounds(args)
+    try:
+        res = _ingest(args.path, args.format, max_scalars=ms, max_bytes=mb)
+    except OmxError as e:
+        raise SystemExit(str(e))
     df = to_dataframe(res.summary)
     # GAP A: loud-fail when the requested cv-field is not in the ingested field
     # vocabulary (e.g. user passed an axis name like "roll" instead of a field
@@ -122,8 +168,9 @@ def _cmd_reduce_tb_final(args) -> int:
     tags) — never a silent 0 — so the caller cross-checks instead of asserting
     'no data' (the engine-output-unverified trap this verb exists to prevent)."""
     from omx_core.reduce.tb_final import final_window_means
-    res = _ingest(args.path, args.format)
+    ms, mb = _resolve_ingest_bounds(args)
     try:
+        res = _ingest(args.path, args.format, max_scalars=ms, max_bytes=mb)
         final = final_window_means(res.series, args.tag, window=args.window)
     except OmxError as e:
         raise SystemExit(str(e))
@@ -141,14 +188,47 @@ def _cmd_session_id(args) -> int:
     return 0
 
 
+def _cmd_doctor(args) -> int:
+    from omx_core.doctor import run_doctor
+    plugin_root = args.plugin_root or os.environ.get("CLAUDE_PLUGIN_ROOT")
+    print(json.dumps(run_doctor(root=args.root, plugin_root=plugin_root)))
+    return 0
+
+
+def _cmd_profile_seal(args) -> int:
+    """Record the approved evaluator/launch sha256 seal (#0)."""
+    from omx_core.seal import write_seal
+    try:
+        seal = write_seal(OmxPaths(root=args.root), now=_now_iso())
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(seal))
+    return 0
+
+
 def _cmd_eval(args) -> int:
     """Run an evaluator command, print its contract record (+ optional decision).
 
     rc 0 when the evaluator produced a graded verdict (status pass|fail);
     rc 1 when the evaluator itself errored (status error) — so Bash callers can
     tell 'graded' from 'broke'. With --keep-policy, also runs decide_outcome and
-    embeds a 'decision' block (B5 coupling visible from the CLI).
+    embeds a 'decision' block (B5 coupling visible from the CLI). With --root,
+    preflights the profile seal (#0) BEFORE running anything: rc 2 if the sealed
+    evaluator/launch files were modified since the last `omx profile-seal`.
     """
+    from omx_core.seal import check_seal
+    if args.root:
+        st = check_seal(OmxPaths(root=args.root))
+        if st["status"] == "mismatch":
+            raise SystemExit(
+                f"profile files modified since seal ({st['mismatched']}); run "
+                "`omx profile-seal --root <root>` to re-approve as an explicit change")
+        if st["status"] == "absent":
+            print("WARNING: no profile seal (.omx/profile/seal.json); run "
+                  "`omx profile-seal` after approving the profile", file=sys.stderr)
+    else:
+        print("WARNING: seal check skipped (no --root)", file=sys.stderr)
+
     rec = run_evaluator(args.command, cwd=args.cwd or os.getcwd(), timeout=args.timeout)
     out = dict(rec)
     if args.keep_policy is not None:
@@ -206,7 +286,11 @@ def _cmd_plot(args) -> int:
     Claude-free: the skill picks WHICH series/metric/view; this verb does the
     matplotlib + scratch-path IO (design D8). Output filename = <metric>__<view>.png.
     """
-    res = _ingest(args.path, args.format)
+    ms, mb = _resolve_ingest_bounds(args)
+    try:
+        res = _ingest(args.path, args.format, max_scalars=ms, max_bytes=mb)
+    except OmxError as e:
+        raise SystemExit(str(e))
     # GAP B: eval_summary is tabular (series={}); intercept for summary-based bar charts
     if res.meta.get("format") == "eval_summary":
         return _cmd_plot_summary_bar(args, res)
@@ -283,10 +367,23 @@ def _cmd_report_parse(args) -> int:
 
     The exp-design skill (#5) shells this to read findings without re-implementing
     the tag grammar; exp-loop (#6) reuses it. rc 0 + JSON {n_findings, findings:[]}
-    on success; rc 2 (SystemExit) on a missing file or a malformed tag run."""
+    on success; rc 2 (SystemExit) on a missing file or a malformed tag run.
+
+    Consumer boundary (#14): verifies the stamp before parsing. mismatch/no-gates
+    loud-fail (rc 2) — a consumer must never read a tampered or ungated report.
+    unstamped (pre-0.2.0 legacy) only warns on stderr and still parses (spec 4
+    backward-compat); the output JSON carries the integrity status either way."""
     path = args.path
     if not os.path.exists(path):
         raise SystemExit(f"report not found: {path}")
+    v = _integrity.verify_report(path)
+    if v["status"] in ("mismatch", "no-gates"):
+        raise SystemExit(
+            f"report integrity {v['status']} — refusing to parse a tampered/ungated "
+            "report; re-enter exp-analyze (RE-analysis) so report-coverage re-stamps it")
+    if v["status"] == "unstamped":
+        print("WARNING: unstamped legacy report (pre-0.2.0); "
+              "rc2 promotion earmarked for 0.3.0", file=sys.stderr)
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
     try:
@@ -299,7 +396,26 @@ def _cmd_report_parse(args) -> int:
             {"claim": f.claim, "evidence": f.evidence, "confidence": f.confidence}
             for f in findings
         ],
+        "integrity": v["status"],
     }))
+    return 0
+
+
+def _cmd_report_verify(args) -> int:
+    """STRICT integrity check (#14): rc 2 unless the stamp verifies clean.
+
+    Explicit call gets the strict answer (spec 3.3) — unlike report-parse's
+    consumer boundary, 'unstamped' is not tolerated here."""
+    if not os.path.exists(args.path):
+        raise SystemExit(f"report not found: {args.path}")
+    v = _integrity.verify_report(args.path)
+    print(json.dumps(v))
+    if v["status"] != "ok":
+        raise SystemExit(
+            f"report integrity {v['status']}"
+            + (f" (files: {v['mismatched']})" if v["mismatched"] else "")
+            + " — gated deliverables are re-written only through the exp-analyze "
+              "RE-analysis path, then re-stamped by report-coverage")
     return 0
 
 
@@ -372,6 +488,23 @@ def _cmd_report_coverage(args) -> int:
             {"ok": xref.ok, "uncited": xref.uncited, "mismatched": xref.mismatched}
             if xref is not None else None),
     }
+    # #14: stamper = verifier, one call — stamp the sibling manifest when the
+    # gates pass AND the report actually lives in an analysis tree (linting a
+    # loose copy must not scatter manifest.json files).
+    out["stamped"] = False
+    if out["ok"] and _integrity.is_analysis_report(path):
+        try:
+            omx_version = importlib.metadata.version("omx-core")
+        except importlib.metadata.PackageNotFoundError:
+            omx_version = None
+        _integrity.stamp_report(
+            path, gates_passed=[g for g, cond in (
+                ("coverage", True),
+                ("baseline-regression", baseline_text is not None),
+                ("cross-run-refs", cross_refs is not None),
+            ) if cond],
+            now=_now_iso(), omx_version=omx_version)
+        out["stamped"] = True
     print(json.dumps(out))
     if res.partial_groups:
         # Warn loudly to stderr so the analyst cannot silently miss sub-group fields.
@@ -424,6 +557,32 @@ def _cmd_report_coverage(args) -> int:
     return 0
 
 
+def _cmd_report_review(args) -> int:
+    """Mechanical review layer (spec 3.4). rc 2 only on missing files; a
+    'revise' verdict is data (rc 0) — R1 records reviews, it does not gate."""
+    from omx_core.review import review_report
+    if not os.path.exists(args.path):
+        raise SystemExit(f"report not found: {args.path}")
+    with open(args.path, encoding="utf-8") as fh:
+        text = fh.read()
+    baseline_text = None
+    if args.baseline:
+        bpath = args.baseline if args.baseline != "auto" else _auto_baseline(args.path)
+        if bpath:
+            if not os.path.exists(bpath):
+                raise SystemExit(f"baseline report not found: {bpath}")
+            with open(bpath, encoding="utf-8") as fh:
+                baseline_text = fh.read()
+    res = review_report(text, baseline_text=baseline_text)
+    if args.record_to:
+        target = Path(args.record_to) / "review.json"
+        with atomic_path(target) as tmp:
+            Path(tmp).write_text(json.dumps(res, indent=2), encoding="utf-8")
+        res = dict(res, recorded=str(target))
+    print(json.dumps(res))
+    return 0
+
+
 def _auto_baseline(report_path: str) -> str | None:
     """Find the most recent OTHER report.md for the same run (sibling analysis dir).
 
@@ -443,6 +602,52 @@ def _auto_baseline(report_path: str) -> str | None:
     if not siblings:
         return None
     return os.path.join(analysis_root, siblings[-1], "report.md")
+
+
+def _cmd_proposal_lint(args) -> int:
+    """Gate the discriminating-prediction contract (spec 3.10; loud-fail)."""
+    from omx_core.proposal import lint_proposal
+    if not os.path.exists(args.path):
+        raise SystemExit(f"proposal not found: {args.path}")
+    with open(args.path, encoding="utf-8") as fh:
+        res = lint_proposal(fh.read())
+    print(json.dumps(res))
+    if not res["ok"]:
+        raise SystemExit("proposal lint FAILED — "
+                         + "; ".join(i["rule"] for i in res["issues"]))
+    return 0
+
+
+def _cmd_probe_novelty(args) -> int:
+    """Warn-only novelty scan (spec 3.10): wiki + past proposals. Never fails."""
+    from omx_core.proposal import jaccard, probe_tokens
+    from omx_core.wiki.query import query_wiki
+    if not os.path.exists(args.proposal):
+        raise SystemExit(f"proposal not found: {args.proposal}")
+    with open(args.proposal, encoding="utf-8") as fh:
+        toks = probe_tokens(fh.read())
+    top = " ".join(sorted(toks)[:8])
+    try:
+        hits = query_wiki(OmxPaths(root=args.root), now=_now_iso(), text=top,
+                          tags=None, category=None, limit=5)
+    except OmxError:
+        hits = {"matches": []}
+    similar = []
+    if args.proposals_dir and os.path.isdir(args.proposals_dir):
+        for name in sorted(os.listdir(args.proposals_dir)):
+            fp = os.path.join(args.proposals_dir, name)
+            if not name.endswith(".md") or os.path.abspath(fp) == os.path.abspath(args.proposal):
+                continue
+            with open(fp, encoding="utf-8") as fh:
+                j = jaccard(toks, probe_tokens(fh.read()))
+            if j >= 0.3:
+                similar.append({"path": fp, "jaccard": round(j, 3)})
+    out = {"wiki_hits": hits.get("matches", []), "similar_proposals": similar}
+    print(json.dumps(out))
+    if similar:
+        print(f"WARNING: probe family overlaps {len(similar)} past proposal(s) — "
+              "check their outcome before re-trying it", file=sys.stderr)
+    return 0
 
 
 def _cmd_queue_launch(args) -> int:
@@ -534,11 +739,55 @@ def _cmd_wiki_add(args) -> int:
     content = args.content
     if content == "-":
         content = sys.stdin.read()
+    from omx_core.wiki.quality import QUALITY_FLOOR, score_page
+    floor = QUALITY_FLOOR
+    try:
+        floor = int(load_profile_metrics(args.root).get("wiki_quality_floor", floor))
+    except OmxError:
+        pass  # no profile yet — built-in floor (D12: override slot, generic default)
+    score, reasons = score_page(content, tags, title=args.title)
+    confidence = args.confidence
+    forced = score < floor and confidence != "low"
+    if forced:
+        confidence = "low"
     try:
         res = _wiki_ingest.ingest_knowledge(
             paths, now=_now_iso(), title=args.title, content=content,
-            tags=tags, category=args.category, confidence=args.confidence,
-            sources=[s.strip() for s in (args.sources or "").split(",") if s.strip()])
+            tags=tags, category=args.category, confidence=confidence,
+            sources=[s.strip() for s in (args.sources or "").split(",") if s.strip()],
+            quality_score=score, quality_reasons=reasons)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps({**res, "quality_score": score, "quality_forced_low": forced,
+                      "quality_reasons": reasons}))
+    return 0
+
+
+def _cmd_wiki_capture_session(args) -> int:
+    """Write session-log stub pages from a report's [FINDING] blocks (#11, spec 3.7).
+
+    Consumer boundary (#14): mirrors report-parse's integrity gate — capture is a
+    report consumer too, and a tampered/ungated report must not seed durable wiki
+    pages. mismatch/no-gates loud-fail (rc 2); unstamped (pre-0.2.0 legacy) only
+    warns on stderr and still captures (spec 4 backward-compat; keeps loose test
+    reports working)."""
+    from omx_core.wiki.capture import capture_session
+    report = Path(args.from_report)
+    if not report.exists():
+        raise SystemExit(f"report not found: {report}")
+    v = _integrity.verify_report(str(report))
+    if v["status"] in ("mismatch", "no-gates"):
+        raise SystemExit(
+            f"report integrity {v['status']} — refusing to capture a tampered/ungated "
+            "report; re-enter exp-analyze (RE-analysis) so report-coverage re-stamps it")
+    if v["status"] == "unstamped":
+        print("WARNING: unstamped legacy report (pre-0.2.0); "
+              "rc2 promotion earmarked for 0.3.0", file=sys.stderr)
+    try:
+        res = capture_session(
+            OmxPaths(root=args.root), now=_now_iso(),
+            report_text=report.read_text(encoding="utf-8"),
+            report_ref=str(report), run_id=args.run_id)
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(res))
@@ -605,6 +854,16 @@ def _cmd_wiki_read(args) -> int:
     return 0
 
 
+def _cmd_wiki_sync_profile(args) -> int:
+    from omx_core.wiki.sync import sync_profile_page
+    try:
+        res = sync_profile_page(OmxPaths(root=args.root), now=_now_iso())
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(res))
+    return 0
+
+
 def _cmd_wiki_gc(args) -> int:
     """Read-only gc diagnosis: lint result + page metadata, as one JSON object for
     the skill to read. Touches nothing (the skill judges, gc-apply executes)."""
@@ -656,6 +915,7 @@ def build_parser() -> argparse.ArgumentParser:
     pi = sub.add_parser("ingest", help="normalize a source to IngestResult (prints counts)")
     pi.add_argument("--path", required=True)
     pi.add_argument("--format", required=True)
+    _add_ingest_bounds(pi, with_root=True)
     pi.set_defaults(func=_cmd_ingest)
 
     pr = sub.add_parser("reduce", help="reduction verbs")
@@ -664,6 +924,7 @@ def build_parser() -> argparse.ArgumentParser:
     prs.add_argument("--path", required=True)
     prs.add_argument("--format", required=True)
     prs.add_argument("--cv-field", default="ss_error", dest="cv_field")
+    _add_ingest_bounds(prs, with_root=True)
     prs.set_defaults(func=_cmd_reduce_summarize)
 
     prt = rsub.add_parser(
@@ -674,11 +935,18 @@ def build_parser() -> argparse.ArgumentParser:
                      help="scalar tag to reduce (repeatable)")
     prt.add_argument("--window", type=int, default=200,
                      help="trailing samples to average (default 200)")
+    _add_ingest_bounds(prt, with_root=True)
     prt.set_defaults(func=_cmd_reduce_tb_final)
 
     ps = sub.add_parser("session-id", help="resolve session id (flag>env>autogen)")
     ps.add_argument("--session-id", default=None, dest="session_id")
     ps.set_defaults(func=_cmd_session_id)
+
+    pdoc = sub.add_parser("doctor", help="read-only environment preflight (install/deps/profile/hooks)")
+    pdoc.add_argument("--root", default=None, help="optional .omx anchor to check profile presence")
+    pdoc.add_argument("--plugin-root", default=None, dest="plugin_root",
+                      help="plugin dir to check hooks presence (default: $CLAUDE_PLUGIN_ROOT)")
+    pdoc.set_defaults(func=_cmd_doctor)
 
     pe = sub.add_parser("eval", help="run an evaluator command, parse {pass,score?} (Claude-free)")
     pe.add_argument("--command", required=True, help="shell command; LAST stdout line must be the JSON verdict")
@@ -688,7 +956,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="pass_only | score_improvement; when set, embeds a decide_outcome block")
     pe.add_argument("--last-kept-score", type=float, default=None, dest="last_kept_score",
                     help="prior baseline score for score_improvement comparison")
+    pe.add_argument("--root", default=None, help="optional .omx anchor; enables the profile seal preflight (#0)")
     pe.set_defaults(func=_cmd_eval)
+
+    psl = sub.add_parser("profile-seal",
+                         help="seal .omx/profile/{evaluator.sh,launch.sh} sha256 at approval time (#0)")
+    psl.add_argument("--root", required=True)
+    psl.set_defaults(func=_cmd_profile_seal)
 
     pp = sub.add_parser("plot", help="render a candidate curve PNG into scratch (Claude-free IO)")
     pp.add_argument("--root", required=True, help="anchor dir under which .omx/ lives")
@@ -698,6 +972,7 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--series", required=True, help="series key within the source")
     pp.add_argument("--metric", required=True, help="metric token (output filename field)")
     pp.add_argument("--view", required=True, help="view token (output filename field)")
+    _add_ingest_bounds(pp, with_root=False)
     pp.set_defaults(func=_cmd_plot)
 
     pm = sub.add_parser("promote-plots", help="B3: move report-referenced PNGs scratch->permanent")
@@ -727,6 +1002,12 @@ def build_parser() -> argparse.ArgumentParser:
     prp.add_argument("--path", required=True, help="path to an exp-analyze report.md")
     prp.set_defaults(func=_cmd_report_parse)
 
+    prv = sub.add_parser(
+        "report-verify",
+        help="recompute report sha256 vs the manifest stamp (strict; rc 2 on any deviation)")
+    prv.add_argument("--path", required=True, help="report.md or its analysis dir")
+    prv.set_defaults(func=_cmd_report_verify)
+
     prc = sub.add_parser(
         "report-coverage",
         help="lint report.md for diagnostic-group + engine-marker completeness (GAP 4; loud-fail)")
@@ -750,6 +1031,28 @@ def build_parser() -> argparse.ArgumentParser:
              "source eval id is CITED and the value MATCHES the source summary.json — a "
              "stale carried-over value loud-fails. Omit to skip the cross-run-ref check.")
     prc.set_defaults(func=_cmd_report_coverage)
+
+    prr = sub.add_parser("report-review",
+                         help="deterministic critic checklist (spec 3.4; records, never gates)")
+    prr.add_argument("--path", required=True, help="path to a report.md")
+    prr.add_argument("--baseline", default=None,
+                     help="prior report for the depth check; 'auto' = latest sibling analysis")
+    prr.add_argument("--record-to", default=None, dest="record_to",
+                     help="analysis dir to write review.json into")
+    prr.set_defaults(func=_cmd_report_review)
+
+    ppl = sub.add_parser("proposal-lint",
+                         help="gate exp-design proposals: H1/H2 discriminating predictions + evidence + refs (loud-fail)")
+    ppl.add_argument("--path", required=True, help="path to a proposals/<id>.md")
+    ppl.set_defaults(func=_cmd_proposal_lint)
+
+    ppn = sub.add_parser("probe-novelty",
+                         help="warn-only: was this probe family already tried? (wiki + past proposals)")
+    ppn.add_argument("--root", required=True)
+    ppn.add_argument("--proposal", required=True)
+    ppn.add_argument("--proposals-dir", default=None, dest="proposals_dir",
+                     help="dir of past proposals/<id>.md to compare against")
+    ppn.set_defaults(func=_cmd_probe_novelty)
 
     pq = sub.add_parser("queue-launch",
                         help="queue the next training launch as pending-approval (B8; never fires)")
@@ -788,6 +1091,14 @@ def build_parser() -> argparse.ArgumentParser:
                      help="extract-only: print [FINDING] candidates from a report.md, write nothing")
     pwa.set_defaults(func=_cmd_wiki_add)
 
+    pwc = wsub.add_parser("capture-session",
+                          help="write every report [FINDING] as a low-confidence session-log stub page (#11)")
+    pwc.add_argument("--root", required=True)
+    pwc.add_argument("--from-report", required=True, dest="from_report")
+    pwc.add_argument("--run-id", default=None, dest="run_id",
+                     help="optional run id added as a tag")
+    pwc.set_defaults(func=_cmd_wiki_capture_session)
+
     pwq = wsub.add_parser("query", help="keyword + tag search (tag>title>content, CJK-aware)")
     pwq.add_argument("--root", required=True)
     pwq.add_argument("text", help="query text")
@@ -812,6 +1123,11 @@ def build_parser() -> argparse.ArgumentParser:
     pwr.add_argument("--no-frontmatter", action="store_true", dest="no_frontmatter",
                      help="emit only the body, omitting the '---' frontmatter block")
     pwr.set_defaults(func=_cmd_wiki_read)
+
+    pws = wsub.add_parser("sync-profile",
+                          help="regenerate the reserved profile.md projection from .omx/profile/ (#17)")
+    pws.add_argument("--root", required=True)
+    pws.set_defaults(func=_cmd_wiki_sync_profile)
 
     pwg = wsub.add_parser("gc", help="read-only gc diagnosis (lint + page metadata as JSON); "
                                      "first step of the delete/merge path")
