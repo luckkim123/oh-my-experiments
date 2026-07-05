@@ -26,14 +26,31 @@ def _ping(payload):
     return {"pong": True}
 
 
+def _sleep(payload):
+    """Test-only probe: sleeps past the alarm budget to exercise the timeout path."""
+    import time
+    time.sleep(_TIMEOUT_S + 2)
+    return {"woke": True}
+
+
 def _handlers():
-    table = {"ping": _ping}
+    table = {"ping": _ping, "sleep": _sleep}
     try:
-        import handlers as _h  # hooks/handlers.py (Task 6+)
-        table.update(_h.HANDLERS)
+        import importlib.util
+        from pathlib import Path
+        fp = Path(__file__).resolve().parent / "handlers.py"
+        if fp.exists():
+            spec = importlib.util.spec_from_file_location("omx_hook_handlers", fp)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            table.update(mod.HANDLERS)
     except Exception:
-        pass  # fail-open: no handler module -> only ping
+        pass  # fail-open: no handler module -> only the built-ins above
     return table
+
+
+def _on_alarm(signum, frame):
+    raise TimeoutError("omx hook budget exceeded")
 
 
 def main() -> int:
@@ -46,6 +63,7 @@ def main() -> int:
     if name in skip:
         return 0
     try:
+        signal.signal(signal.SIGALRM, _on_alarm)
         signal.alarm(_TIMEOUT_S)
         payload = json.load(sys.stdin)
         handler = _handlers().get(name)

@@ -48,3 +48,8 @@ def test_omx_skip_hooks_other_name_still_runs():
     r = _run("ping", {"hello": 1}, {"OMX_SKIP_HOOKS": "report_guard"})
     assert r.returncode == 0
     assert json.loads(r.stdout)["pong"] is True
+
+
+def test_timeout_fails_open():
+    r = _run("sleep", {"x": 1})
+    assert r.returncode == 0 and r.stdout.strip() == ""
