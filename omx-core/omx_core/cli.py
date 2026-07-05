@@ -4,6 +4,7 @@ These verbs are pure Python so they are unit-testable from Bash with no Claude
 or Isaac dependency. Skills (builds #3-#6) shell out to these.
 """
 import argparse
+import importlib.metadata
 import json
 import math
 import os
@@ -23,6 +24,7 @@ from omx_core.reduce.promote import promote_plots
 from omx_core.evaluator import run_evaluator
 from omx_core.decision import decide_outcome, parse_keep_policy
 from omx_core.omx_paths import OmxError, OmxPaths, validate_token, resolve_session_id
+from omx_core import integrity as _integrity
 from datetime import datetime, timezone
 
 from omx_core.loop import queue_pending_launch, read_pending_launch, deadline_passed, compute_deadline
@@ -428,6 +430,23 @@ def _cmd_report_coverage(args) -> int:
             {"ok": xref.ok, "uncited": xref.uncited, "mismatched": xref.mismatched}
             if xref is not None else None),
     }
+    # #14: stamper = verifier, one call — stamp the sibling manifest when the
+    # gates pass AND the report actually lives in an analysis tree (linting a
+    # loose copy must not scatter manifest.json files).
+    out["stamped"] = False
+    if out["ok"] and _integrity.is_analysis_report(path):
+        try:
+            omx_version = importlib.metadata.version("omx-core")
+        except importlib.metadata.PackageNotFoundError:
+            omx_version = None
+        _integrity.stamp_report(
+            path, gates_passed=[g for g, cond in (
+                ("coverage", True),
+                ("baseline-regression", baseline_text is not None),
+                ("cross-run-refs", cross_refs is not None),
+            ) if cond],
+            now=_now_iso(), omx_version=omx_version)
+        out["stamped"] = True
     print(json.dumps(out))
     if res.partial_groups:
         # Warn loudly to stderr so the analyst cannot silently miss sub-group fields.
