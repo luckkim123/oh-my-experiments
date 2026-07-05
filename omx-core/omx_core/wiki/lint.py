@@ -16,6 +16,7 @@ from datetime import datetime
 from omx_core.omx_paths import OmxPaths
 from omx_core.wiki.types import WikiError
 from omx_core.wiki import storage
+from omx_core.wiki.quality import QUALITY_FLOOR
 
 
 def _parse_iso(value: str) -> datetime | None:
@@ -171,6 +172,9 @@ def lint_wiki(paths: OmxPaths, *, now: str, stale_days: int = 30,
         if page.confidence == "low":
             issues.append({"slug": slug, "severity": "info", "type": "low-confidence",
                            "message": "confidence is 'low'; review and strengthen or remove"})
+        if page.quality_score is not None and page.quality_score < QUALITY_FLOOR:
+            issues.append({"slug": slug, "severity": "info", "type": "low-quality",
+                           "message": f"quality_score {page.quality_score} < {QUALITY_FLOOR}"})
 
     issues.extend(_contradiction_candidates(pages))
     issues.extend(_near_duplicate_candidates(pages))

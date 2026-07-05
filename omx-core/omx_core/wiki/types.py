@@ -43,4 +43,6 @@ class WikiPage:
     category: str = "reference"
     confidence: str = "medium"
     schema_version: int = WIKI_SCHEMA_VERSION
+    quality_score: int | None = None
+    quality_reasons: list = field(default_factory=list)
     content: str = ""

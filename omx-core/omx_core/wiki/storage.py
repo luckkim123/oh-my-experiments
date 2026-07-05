@@ -92,7 +92,7 @@ def _parse_yaml(block: str) -> dict:
 
 def serialize_page(page: WikiPage) -> str:
     """WikiPage -> markdown string with a '---' YAML frontmatter block."""
-    yaml = "\n".join([
+    lines = [
         f'title: "{_esc(page.title)}"',
         "tags: [" + ", ".join(f'"{_esc(t)}"' for t in page.tags) + "]",
         f"created: {page.created}",
@@ -102,8 +102,12 @@ def serialize_page(page: WikiPage) -> str:
         f"category: {page.category}",
         f"confidence: {page.confidence}",
         f"schemaVersion: {page.schema_version}",
-    ])
-    return f"---\n{yaml}\n---\n{page.content}"
+    ]
+    if page.quality_score is not None:
+        lines.append(f"qualityScore: {page.quality_score}")
+        lines.append("qualityReasons: [" + ", ".join(
+            f'"{_esc(r)}"' for r in page.quality_reasons) + "]")
+    return "---\n" + "\n".join(lines) + "\n---\n" + page.content
 
 
 def parse_page(slug: str, raw: str) -> WikiPage:
@@ -117,6 +121,12 @@ def parse_page(slug: str, raw: str) -> WikiPage:
         schema_version = int(fm.get("schemaVersion", WIKI_SCHEMA_VERSION))
     except (TypeError, ValueError):
         schema_version = WIKI_SCHEMA_VERSION
+    quality_score = None
+    if "qualityScore" in fm:
+        try:
+            quality_score = int(fm["qualityScore"])
+        except (TypeError, ValueError):
+            quality_score = None
     return WikiPage(
         slug=slug,
         title=fm.get("title", ""),
@@ -128,6 +138,8 @@ def parse_page(slug: str, raw: str) -> WikiPage:
         category=fm.get("category", "reference"),
         confidence=fm.get("confidence", "medium"),
         schema_version=schema_version,
+        quality_score=quality_score,
+        quality_reasons=_parse_array(fm.get("qualityReasons", "")),
         content=m.group(2),
     )
 

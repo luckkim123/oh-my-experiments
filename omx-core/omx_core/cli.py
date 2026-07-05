@@ -693,14 +693,27 @@ def _cmd_wiki_add(args) -> int:
     content = args.content
     if content == "-":
         content = sys.stdin.read()
+    from omx_core.wiki.quality import QUALITY_FLOOR, score_page
+    floor = QUALITY_FLOOR
+    try:
+        floor = int(load_profile_metrics(args.root).get("wiki_quality_floor", floor))
+    except OmxError:
+        pass  # no profile yet — built-in floor (D12: override slot, generic default)
+    score, reasons = score_page(content, tags, title=args.title)
+    confidence = args.confidence
+    forced = score < floor and confidence != "low"
+    if forced:
+        confidence = "low"
     try:
         res = _wiki_ingest.ingest_knowledge(
             paths, now=_now_iso(), title=args.title, content=content,
-            tags=tags, category=args.category, confidence=args.confidence,
-            sources=[s.strip() for s in (args.sources or "").split(",") if s.strip()])
+            tags=tags, category=args.category, confidence=confidence,
+            sources=[s.strip() for s in (args.sources or "").split(",") if s.strip()],
+            quality_score=score, quality_reasons=reasons)
     except OmxError as e:
         raise SystemExit(str(e))
-    print(json.dumps(res))
+    print(json.dumps({**res, "quality_score": score, "quality_forced_low": forced,
+                      "quality_reasons": reasons}))
     return 0
 
 
