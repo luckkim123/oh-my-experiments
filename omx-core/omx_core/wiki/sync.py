@@ -46,7 +46,11 @@ def sync_profile_page(paths: OmxPaths, *, now: str) -> dict:
     if not present:
         raise WikiError(f"no profile at {paths.profile_dir}; run exp-init first")
     page_fp = paths.wiki_dir() / "profile.md"
-    prof_mtime = max(f.stat().st_mtime for f in present)
+    mtime_inputs = list(present)
+    seal_fp = paths.seal_json()
+    if seal_fp.exists():
+        mtime_inputs.append(seal_fp)
+    prof_mtime = max(f.stat().st_mtime for f in mtime_inputs)
     if page_fp.exists() and page_fp.stat().st_mtime >= prof_mtime:
         return {"action": "unchanged", "slug": "profile.md"}
 

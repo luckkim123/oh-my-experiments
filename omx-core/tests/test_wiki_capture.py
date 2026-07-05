@@ -50,3 +50,15 @@ def test_capture_loud_fails_on_malformed(tmp_path, capsys):
     rp.write_text("[EVIDENCE: orphan]\n")
     rc = main(["wiki", "capture-session", "--root", str(tmp_path), "--from-report", str(rp)])
     assert rc == 2
+
+
+def test_capture_loud_fails_on_tampered_report(tmp_path, capsys):
+    # I-2: capture-session must sit behind the same integrity boundary as
+    # report-parse — a stamped-then-mutated report must never seed the wiki.
+    from omx_core import integrity
+    rp = _write_report(tmp_path)
+    integrity.stamp_report(rp, gates_passed=["coverage"], now="2026-07-06T00:00:00",
+                           omx_version="0.2.0")
+    rp.write_text(REPORT + "\ntampered byte\n")
+    rc = main(["wiki", "capture-session", "--root", str(tmp_path), "--from-report", str(rp)])
+    assert rc == 2

@@ -48,6 +48,27 @@ def test_sync_skips_when_page_newer(tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["action"] == "synced"
 
 
+def test_sync_after_seal_resyncs(tmp_path, capsys):
+    # I-1: sealing after a sync (no projected-file changes) must not leave
+    # profile.md stuck asserting the pre-seal status forever.
+    from omx_core.omx_paths import OmxPaths
+    from omx_core.seal import write_seal
+    _mk_profile(tmp_path)
+    main(["wiki", "sync-profile", "--root", str(tmp_path)])
+    capsys.readouterr()
+    write_seal(OmxPaths(root=tmp_path), now="2026-07-06T00:00:00")
+    # force the seal strictly newer than the page (same-second writes would
+    # otherwise tie under mtime `>=`, same edge as the carried T12 minor)
+    seal_fp = OmxPaths(root=tmp_path).seal_json()
+    st = seal_fp.stat()
+    os.utime(seal_fp, (st.st_atime + 10, st.st_mtime + 10))
+    rc = main(["wiki", "sync-profile", "--root", str(tmp_path)])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out["action"] == "synced"
+    page = tmp_path / ".omx" / "registry" / "findings" / "profile.md"
+    assert "status: ok" in page.read_text()
+
+
 def test_sync_loud_fails_without_profile(tmp_path, capsys):
     rc = main(["wiki", "sync-profile", "--root", str(tmp_path)])
     assert rc == 2

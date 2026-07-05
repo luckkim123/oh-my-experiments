@@ -764,10 +764,25 @@ def _cmd_wiki_add(args) -> int:
 
 
 def _cmd_wiki_capture_session(args) -> int:
+    """Write session-log stub pages from a report's [FINDING] blocks (#11, spec 3.7).
+
+    Consumer boundary (#14): mirrors report-parse's integrity gate — capture is a
+    report consumer too, and a tampered/ungated report must not seed durable wiki
+    pages. mismatch/no-gates loud-fail (rc 2); unstamped (pre-0.2.0 legacy) only
+    warns on stderr and still captures (spec 4 backward-compat; keeps loose test
+    reports working)."""
     from omx_core.wiki.capture import capture_session
     report = Path(args.from_report)
     if not report.exists():
         raise SystemExit(f"report not found: {report}")
+    v = _integrity.verify_report(str(report))
+    if v["status"] in ("mismatch", "no-gates"):
+        raise SystemExit(
+            f"report integrity {v['status']} — refusing to capture a tampered/ungated "
+            "report; re-enter exp-analyze (RE-analysis) so report-coverage re-stamps it")
+    if v["status"] == "unstamped":
+        print("WARNING: unstamped legacy report (pre-0.2.0); "
+              "rc2 promotion earmarked for 0.3.0", file=sys.stderr)
     try:
         res = capture_session(
             OmxPaths(root=args.root), now=_now_iso(),
