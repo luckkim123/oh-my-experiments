@@ -571,6 +571,24 @@ engine printed `0`/empty for that group, you must first dump the raw TB tags
 justify the N/A. This closes the loop: the gate catches a skipped group, and the
 cross-check rule stops "the engine said 0" from being used to wave the skip through.
 
+## Review (author != reviewer — spec 3.4)
+
+After the When-done gates below pass, the report gets an INDEPENDENT review before
+you declare done (the writer of a report is never its approver):
+
+1. Run the mechanical layer yourself and record it into the analysis dir:
+   `omx report-review --path <report.md> [--baseline auto] --record-to <analysis_dir>`
+2. Dispatch the read-only `report-reviewer` agent (agent type
+   `oh-my-experiments:report-reviewer`) with the report path (and baseline path on a
+   re-analysis). It runs the verb again fresh and adds judgment the checklist cannot.
+3. If its verdict is `revise`: apply the fixes THROUGH the RE-analysis path (old
+   report as BASE, atomic_path writer, gates re-run — never hand-Edit), then re-review.
+4. If it is `approve`: proceed to When done. Record the verdict in your summary.
+
+In v0.2.0 the review is recorded, not consumption-gating (`report-parse` does not
+require review.json) — but a skipped review must be stated explicitly in your summary,
+never silent.
+
 ## When done
 
 Tell the user where the report is (`<output_root>/<run_id>/analysis/<analysis_id>/report.md`),
@@ -596,5 +614,6 @@ THROUGH the skill's `atomic_path` writer (never hand-Edited) and that the format
 passed** (see "NEVER hand-Edit report.md") — the lint cannot see a wall-of-text paragraph,
 so that format/evidence check is yours to have run. The PRE-WRITE per-group TodoWrite checklist
 ("Before drafting") is what should have prevented any failure here; this final lint is the
-backstop. Then STOP.
+backstop. Finally, state the reviewer verdict (`approve`, or `revise` + what was applied) —
+a report without a recorded review must say so explicitly. Then STOP.
 Do not propose or launch a next experiment — that is exp-design's job (#5).
