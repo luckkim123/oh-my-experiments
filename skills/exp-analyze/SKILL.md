@@ -78,7 +78,9 @@ the raw TB before asserting absence**:
 1. **Dump the raw scalar tag set.** With the TB event file in hand:
    ```python
    from tensorboard.backend.event_processing import event_accumulator
-   ea = event_accumulator.EventAccumulator(str(ev), size_guidance={event_accumulator.SCALARS: 0})
+   # size_guidance caps samples per tag (reservoir); NEVER use 0 ("load all") —
+   # a large event file would load every scalar into memory (unbounded-ingest OOM).
+   ea = event_accumulator.EventAccumulator(str(ev), size_guidance={event_accumulator.SCALARS: 10000})
    ea.Reload(); tags = ea.Tags()["scalars"]
    ```
    Grep `tags` for the group's prefix (e.g. `Constraint/`, `Reward/`). 

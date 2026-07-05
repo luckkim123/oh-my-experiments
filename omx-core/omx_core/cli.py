@@ -64,7 +64,7 @@ _ADAPTERS = {
 }
 
 
-def _ingest(path, fmt):
+def _ingest(path, fmt, max_scalars=None, max_bytes=None):
     if fmt == "npz":
         from omx_core.reduce.series import load_npz
         from omx_core.ingest.base import IngestResult
@@ -77,11 +77,48 @@ def _ingest(path, fmt):
                                   "skipped_nd": sorted(all_keys - set(series))})
     if fmt not in _ADAPTERS:
         raise SystemExit(f"unknown --format {fmt!r}; choose from {sorted(_ADAPTERS) + ['npz']}")
-    return _ADAPTERS[fmt]().ingest(path)
+    if fmt == "tensorboard":
+        adapter = TensorboardAdapter(max_scalars=max_scalars, max_bytes=max_bytes)
+    elif fmt == "eval_summary":
+        adapter = EvalSummaryAdapter(max_bytes=max_bytes)
+    else:
+        adapter = _ADAPTERS[fmt]()
+    return adapter.ingest(path)
+
+
+def _resolve_ingest_bounds(args):
+    """Flag > profile ingest_limits > None (adapter default). D12 override slot."""
+    max_scalars = getattr(args, "max_scalars", None)
+    max_bytes = getattr(args, "max_bytes", None)
+    root = getattr(args, "root", None)
+    if root and (max_scalars is None or max_bytes is None):
+        try:
+            limits = load_profile_metrics(root).get("ingest_limits", {}) or {}
+        except OmxError:
+            limits = {}
+        if max_scalars is None:
+            max_scalars = limits.get("max_scalars")
+        if max_bytes is None:
+            max_bytes = limits.get("max_bytes")
+    return max_scalars, max_bytes
+
+
+def _add_ingest_bounds(parser, *, with_root: bool):
+    parser.add_argument("--max-scalars", type=int, default=None, dest="max_scalars",
+                        help="cap TB scalar samples per tag (default 10000)")
+    parser.add_argument("--max-bytes", type=int, default=None, dest="max_bytes",
+                        help="refuse sources larger than this (default 1 GiB)")
+    if with_root:
+        parser.add_argument("--root", default=None,
+                            help="optional .omx anchor; reads profile ingest_limits")
 
 
 def _cmd_ingest(args) -> int:
-    res = _ingest(args.path, args.format)
+    ms, mb = _resolve_ingest_bounds(args)
+    try:
+        res = _ingest(args.path, args.format, max_scalars=ms, max_bytes=mb)
+    except OmxError as e:
+        raise SystemExit(str(e))
     print(json.dumps({
         "format": res.meta.get("format"),
         "source": res.meta.get("source"),
@@ -92,7 +129,8 @@ def _cmd_ingest(args) -> int:
 
 
 def _cmd_reduce_summarize(args) -> int:
-    res = _ingest(args.path, args.format)
+    ms, mb = _resolve_ingest_bounds(args)
+    res = _ingest(args.path, args.format, max_scalars=ms, max_bytes=mb)
     df = to_dataframe(res.summary)
     # GAP A: loud-fail when the requested cv-field is not in the ingested field
     # vocabulary (e.g. user passed an axis name like "roll" instead of a field
@@ -122,7 +160,8 @@ def _cmd_reduce_tb_final(args) -> int:
     tags) — never a silent 0 — so the caller cross-checks instead of asserting
     'no data' (the engine-output-unverified trap this verb exists to prevent)."""
     from omx_core.reduce.tb_final import final_window_means
-    res = _ingest(args.path, args.format)
+    ms, mb = _resolve_ingest_bounds(args)
+    res = _ingest(args.path, args.format, max_scalars=ms, max_bytes=mb)
     try:
         final = final_window_means(res.series, args.tag, window=args.window)
     except OmxError as e:
@@ -206,7 +245,8 @@ def _cmd_plot(args) -> int:
     Claude-free: the skill picks WHICH series/metric/view; this verb does the
     matplotlib + scratch-path IO (design D8). Output filename = <metric>__<view>.png.
     """
-    res = _ingest(args.path, args.format)
+    ms, mb = _resolve_ingest_bounds(args)
+    res = _ingest(args.path, args.format, max_scalars=ms, max_bytes=mb)
     # GAP B: eval_summary is tabular (series={}); intercept for summary-based bar charts
     if res.meta.get("format") == "eval_summary":
         return _cmd_plot_summary_bar(args, res)
@@ -656,6 +696,7 @@ def build_parser() -> argparse.ArgumentParser:
     pi = sub.add_parser("ingest", help="normalize a source to IngestResult (prints counts)")
     pi.add_argument("--path", required=True)
     pi.add_argument("--format", required=True)
+    _add_ingest_bounds(pi, with_root=True)
     pi.set_defaults(func=_cmd_ingest)
 
     pr = sub.add_parser("reduce", help="reduction verbs")
@@ -664,6 +705,7 @@ def build_parser() -> argparse.ArgumentParser:
     prs.add_argument("--path", required=True)
     prs.add_argument("--format", required=True)
     prs.add_argument("--cv-field", default="ss_error", dest="cv_field")
+    _add_ingest_bounds(prs, with_root=True)
     prs.set_defaults(func=_cmd_reduce_summarize)
 
     prt = rsub.add_parser(
@@ -674,6 +716,7 @@ def build_parser() -> argparse.ArgumentParser:
                      help="scalar tag to reduce (repeatable)")
     prt.add_argument("--window", type=int, default=200,
                      help="trailing samples to average (default 200)")
+    _add_ingest_bounds(prt, with_root=True)
     prt.set_defaults(func=_cmd_reduce_tb_final)
 
     ps = sub.add_parser("session-id", help="resolve session id (flag>env>autogen)")
@@ -698,6 +741,7 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--series", required=True, help="series key within the source")
     pp.add_argument("--metric", required=True, help="metric token (output filename field)")
     pp.add_argument("--view", required=True, help="view token (output filename field)")
+    _add_ingest_bounds(pp, with_root=False)
     pp.set_defaults(func=_cmd_plot)
 
     pm = sub.add_parser("promote-plots", help="B3: move report-referenced PNGs scratch->permanent")

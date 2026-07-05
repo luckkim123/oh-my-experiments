@@ -8,14 +8,19 @@ import json
 from pathlib import Path
 
 from omx_core.ingest.base import IngestAdapter, IngestResult, SummaryRecord
+from omx_core.ingest.tensorboard import check_ingest_size
 
 
 class EvalSummaryAdapter(IngestAdapter):
+    def __init__(self, max_bytes=None):
+        self.max_bytes = max_bytes
+
     def can_handle(self, path: Path) -> bool:
         return Path(path).name == "summary.json"
 
     def ingest(self, path: Path) -> IngestResult:
         path = Path(path)
+        check_ingest_size(path, self.max_bytes)
         data = json.loads(path.read_text())  # loud-fail on malformed JSON
         records = []
         for dr_level, level_body in data.items():
