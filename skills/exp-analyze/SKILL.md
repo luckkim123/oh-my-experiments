@@ -615,5 +615,12 @@ passed** (see "NEVER hand-Edit report.md") — the lint cannot see a wall-of-tex
 so that format/evidence check is yours to have run. The PRE-WRITE per-group TodoWrite checklist
 ("Before drafting") is what should have prevented any failure here; this final lint is the
 backstop. Finally, state the reviewer verdict (`approve`, or `revise` + what was applied) —
-a report without a recorded review must say so explicitly. Then STOP.
+a report without a recorded review must say so explicitly.
+
+Then leave breadcrumbs UNCONDITIONALLY — before any manual curation, run
+`omx wiki capture-session --root <root> --from-report <report.md> --run-id <run_id>`
+so every finding lands as a low-confidence session-log stub even if this session
+never curates (slug append-merge absorbs the duplicate when you DO curate).
+
+Then STOP.
 Do not propose or launch a next experiment — that is exp-design's job (#5).

@@ -121,6 +121,9 @@ the queued launch, and that THEY must approve and run the training command.
 At the end of each iteration, audit the accumulated wiki so stale/orphaned/broken
 knowledge surfaces (it is review-gated - you report, the human decides):
 
+First capture the iteration's findings as breadcrumbs (idempotent):
+`omx wiki capture-session --root <root> --from-report <this iteration's report.md> --run-id <run_id>`
+
 `omx wiki lint --root <root>`
 
 Report any `stale` / `broken-ref` / `broken-frontmatter` / `orphan` /

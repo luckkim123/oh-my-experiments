@@ -717,6 +717,22 @@ def _cmd_wiki_add(args) -> int:
     return 0
 
 
+def _cmd_wiki_capture_session(args) -> int:
+    from omx_core.wiki.capture import capture_session
+    report = Path(args.from_report)
+    if not report.exists():
+        raise SystemExit(f"report not found: {report}")
+    try:
+        res = capture_session(
+            OmxPaths(root=args.root), now=_now_iso(),
+            report_text=report.read_text(encoding="utf-8"),
+            report_ref=str(report), run_id=args.run_id)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(res))
+    return 0
+
+
 def _cmd_wiki_query(args) -> int:
     paths = OmxPaths(root=args.root)
     tags = [t.strip() for t in (args.tags or "").split(",") if t.strip()] or None
@@ -990,6 +1006,14 @@ def build_parser() -> argparse.ArgumentParser:
     pwa.add_argument("--from-report", default=None, dest="from_report",
                      help="extract-only: print [FINDING] candidates from a report.md, write nothing")
     pwa.set_defaults(func=_cmd_wiki_add)
+
+    pwc = wsub.add_parser("capture-session",
+                          help="write every report [FINDING] as a low-confidence session-log stub page (#11)")
+    pwc.add_argument("--root", required=True)
+    pwc.add_argument("--from-report", required=True, dest="from_report")
+    pwc.add_argument("--run-id", default=None, dest="run_id",
+                     help="optional run id added as a tag")
+    pwc.set_defaults(func=_cmd_wiki_capture_session)
 
     pwq = wsub.add_parser("query", help="keyword + tag search (tag>title>content, CJK-aware)")
     pwq.add_argument("--root", required=True)
