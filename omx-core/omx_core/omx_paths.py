@@ -184,6 +184,11 @@ class OmxPaths:
                 f"profile file {name!r} not in {sorted(_PROFILE_FILES)}")
         return self.profile_dir / name
 
+    def seal_json(self) -> Path:
+        """profile/seal.json — sha256 seal over the executable profile files (#0).
+        Not in _PROFILE_FILES: bootstrap never writes it; profile-seal owns it."""
+        return self.profile_dir / "seal.json"
+
     # --- runs/<run_id>/ (run-bound) ---
     def run_dir(self, run_id) -> Path:
         return self.omx_dir / "runs" / self._check_run_id(run_id)

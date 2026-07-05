@@ -160,6 +160,8 @@ Next steps (yours, not mine):
   1. Edit evaluator.sh — replace the STUB with your real eval command.
   2. Fill rules.md + launch.sh.
   3. Set pending_approval: false in metrics.yaml (or delete the key) to approve.
+  4. After approving, run: omx profile-seal --root "<anchor>"  (seals evaluator.sh/launch.sh
+     sha256 so mid-loop edits surface as an explicit re-approval).
 Once approved, run exp-analyze on your runs.
 ```
 

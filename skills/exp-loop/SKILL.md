@@ -78,9 +78,13 @@ current checkpoint, run it through the core (this is the single source of the
 pass/score verdict — never eyeball a metric):
 
 ```bash
-omx eval --command 'bash .omx/profile/evaluator.sh' --cwd <project_dir> \
+omx eval --root <root> --command 'bash .omx/profile/evaluator.sh' --cwd <project_dir> \
     --keep-policy <pass_only|score_improvement> --last-kept-score <prev_or_omit>
 ```
+
+`--root` enables the seal preflight (#0): a sealed evaluator that was modified mid-loop
+rc-2s instead of silently regrading; re-approve intentional changes with
+`omx profile-seal --root <root>`.
 
 The JSON includes a `decision` block (`keep`/`discard`/`ambiguous`/`bootstrap`)
 when `--keep-policy` is set. That decision is authoritative. If there is no new

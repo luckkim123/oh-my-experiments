@@ -195,14 +195,40 @@ def _cmd_doctor(args) -> int:
     return 0
 
 
+def _cmd_profile_seal(args) -> int:
+    """Record the approved evaluator/launch sha256 seal (#0)."""
+    from omx_core.seal import write_seal
+    try:
+        seal = write_seal(OmxPaths(root=args.root), now=_now_iso())
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(seal))
+    return 0
+
+
 def _cmd_eval(args) -> int:
     """Run an evaluator command, print its contract record (+ optional decision).
 
     rc 0 when the evaluator produced a graded verdict (status pass|fail);
     rc 1 when the evaluator itself errored (status error) — so Bash callers can
     tell 'graded' from 'broke'. With --keep-policy, also runs decide_outcome and
-    embeds a 'decision' block (B5 coupling visible from the CLI).
+    embeds a 'decision' block (B5 coupling visible from the CLI). With --root,
+    preflights the profile seal (#0) BEFORE running anything: rc 2 if the sealed
+    evaluator/launch files were modified since the last `omx profile-seal`.
     """
+    from omx_core.seal import check_seal
+    if args.root:
+        st = check_seal(OmxPaths(root=args.root))
+        if st["status"] == "mismatch":
+            raise SystemExit(
+                f"profile files modified since seal ({st['mismatched']}); run "
+                "`omx profile-seal --root <root>` to re-approve as an explicit change")
+        if st["status"] == "absent":
+            print("WARNING: no profile seal (.omx/profile/seal.json); run "
+                  "`omx profile-seal` after approving the profile", file=sys.stderr)
+    else:
+        print("WARNING: seal check skipped (no --root)", file=sys.stderr)
+
     rec = run_evaluator(args.command, cwd=args.cwd or os.getcwd(), timeout=args.timeout)
     out = dict(rec)
     if args.keep_policy is not None:
@@ -830,7 +856,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="pass_only | score_improvement; when set, embeds a decide_outcome block")
     pe.add_argument("--last-kept-score", type=float, default=None, dest="last_kept_score",
                     help="prior baseline score for score_improvement comparison")
+    pe.add_argument("--root", default=None, help="optional .omx anchor; enables the profile seal preflight (#0)")
     pe.set_defaults(func=_cmd_eval)
+
+    psl = sub.add_parser("profile-seal",
+                         help="seal .omx/profile/{evaluator.sh,launch.sh} sha256 at approval time (#0)")
+    psl.add_argument("--root", required=True)
+    psl.set_defaults(func=_cmd_profile_seal)
 
     pp = sub.add_parser("plot", help="render a candidate curve PNG into scratch (Claude-free IO)")
     pp.add_argument("--root", required=True, help="anchor dir under which .omx/ lives")

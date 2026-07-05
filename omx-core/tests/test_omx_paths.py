@@ -568,6 +568,7 @@ def test_every_public_path_getter_is_exercised(tmp_path):
     rid, aid, pid, sid = "r1", "20260530-143022-x", "20260530-143022-next", "s-1"
     calls = {
         "profile_file": lambda: p.profile_file("metrics.yaml"),
+        "seal_json": lambda: p.seal_json(),
         "run_dir": lambda: p.run_dir(rid),
         "results_tsv": lambda: p.results_tsv(rid),
         "ledger_json": lambda: p.ledger_json(rid),
