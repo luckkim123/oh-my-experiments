@@ -84,7 +84,7 @@ def validate_run_id(value) -> str:
 
 
 def validate_group(value) -> str:
-    """Validate an optional run-grouping prefix (e.g. ``rsl_rl/albc_trpo_teacher/dr_harder``).
+    """Validate an optional run-grouping prefix (e.g. ``rsl_rl/exp_a_teacher/dr_sweep``).
 
     A *group* lets runs cluster under the output_root by experiment_name / purpose
     (``output_root/<group>/<run_id>/...``) instead of flat ``output_root/<run_id>/...``.

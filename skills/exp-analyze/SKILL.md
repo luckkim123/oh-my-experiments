@@ -45,7 +45,8 @@ page tagged `engine`/`adapter`, e.g. `training_log_analysis_engine_reference_ada
 (its `[DIAGNOSIS]` / `[TREND]` / changepoint / plateau / regime lines), not just in
 final scalars you read off the curve. Run it, e.g.:
 
-`ALBC_LOGS_ROOT=<logs/rsl_rl> python3 .omx/profile/analyze_training.py <run-path> --tier 3 --deep`
+`<project-env-vars> python3 .omx/profile/analyze_training.py <run-path> --tier 3 --deep`
+(the exact env vars are project-specific; they are documented in that project's `.omx/profile/`)
 
 Hand-extracting FINAL SCALARS from raw TB/wandb **instead of** running the engine is
 the exact anti-pattern this skill forbids (it is what produced a count-looks-fine but
@@ -337,16 +338,16 @@ but it BINDS hardest on re-analysis, where a prior report exists to measure agai
 ## Building the report (permanent tree, via the core — never hand-write paths)
 
 > **Grouped runs (purpose / experiment_name layer).** When a run lives under an extra
-> grouping layer — `<output_root>/<group>/<run_id>/` (e.g. `rsl_rl/albc_trpo_teacher/dr_harder`)
+> grouping layer — `<output_root>/<group>/<run_id>/` (e.g. `rsl_rl/exp_a_teacher/dr_sweep`)
 > rather than flat `<output_root>/<run_id>/` — pass that prefix as `--group <group>` to
 > `omx promote-plots` AND as the keyword arg `group="<group>"` to every `OmxPaths` getter
 > (`report_md` / `report_ko_md` / `manifest_json` / `analysis_dir`), so the report lands
 > BESIDE the run instead of in a phantom flat dir. Omit it for flat layouts (the default).
 > **MUST: the group must contain ALL path segments between output_root and run_id.** For
 > RSL-RL runs the framework subdir is part of the group — pass `rsl_rl/<exp_name>/<purpose>`
-> (e.g. `rsl_rl/albc_trpo_teacher/dr_harder`), NOT just `<exp_name>/<purpose>`. Omitting
+> (e.g. `rsl_rl/exp_a_teacher/dr_sweep`), NOT just `<exp_name>/<purpose>`. Omitting
 > the framework segment silently drops the report into a sibling tree
-> (`experiments/albc_trpo_teacher/...` instead of `experiments/rsl_rl/albc_trpo_teacher/...`).
+> (`experiments/exp_a_teacher/...` instead of `experiments/rsl_rl/exp_a_teacher/...`).
 > The group string is validated (alnum/_/- per segment, no traversal). The `omx wiki add
 > --from-report` path then becomes `<output_root>/<group>/<run_id>/analysis/<analysis_id>/report.md`.
 
