@@ -454,6 +454,22 @@ def _cmd_tree_alias(args) -> int:
     return 0
 
 
+def _cmd_tree_index(args) -> int:
+    """Regenerate (or --check) the generated INDEX.md at the index root (spec 2.6)."""
+    from omx_core.tree import load_tree_schema
+    from omx_core.tree_ops import write_index
+    root = _resolved_root(args)
+    try:
+        schema = load_tree_schema(OmxPaths(root=root).tree_yaml())
+        res = write_index(schema, Path(root), check=args.check, adopt=args.adopt)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(res))
+    if args.check and res["stale"]:
+        raise SystemExit("INDEX.md is stale — rerun `omx tree-index` to regenerate")
+    return 0
+
+
 def _cmd_report_parse(args) -> int:
     """Parse an exp-analyze report.md into structured findings (Claude-free).
 
@@ -1136,6 +1152,15 @@ def build_parser() -> argparse.ArgumentParser:
                           "level is optional and absent on the target)")
     ptl.add_argument("--list", action="store_true")
     ptl.set_defaults(func=_cmd_tree_alias)
+
+    pti = sub.add_parser("tree-index",
+                         help="regenerate the generated INDEX.md at the index root "
+                              "(marker-guarded; --check reports staleness as rc 2)")
+    pti.add_argument("--root", default=None, help="anchor; default: #13 ladder")
+    pti.add_argument("--check", action="store_true")
+    pti.add_argument("--adopt", action="store_true",
+                     help="overwrite an unmarked (hand-written) INDEX.md")
+    pti.set_defaults(func=_cmd_tree_index)
 
     prp = sub.add_parser("report-parse", help="parse exp-analyze report.md -> JSON findings (Claude-free)")
     prp.add_argument("--path", required=True, help="path to an exp-analyze report.md")
