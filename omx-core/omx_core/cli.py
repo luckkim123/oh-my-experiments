@@ -424,7 +424,7 @@ def _cmd_report_coverage(args) -> int:
 
     Reads the profile's optional groups/engine_markers, checks the report covered
     each declared diagnostic group and cited the training-log engine. rc 0 + JSON
-    {ok, missing_groups, engine_cited, ...} when ok; rc 3 (loud-fail) when a group
+    {ok, missing_groups, engine_cited, ...} when ok; rc 2 (loud-fail) when a group
     was skipped or the engine was never cited, so a 'When done' gate in the skill
     can hard-block a hand-extracted, engine-skipping report. The exact incident:
     a report can touch most vocab via final scalars yet never run the engine."""
