@@ -8,6 +8,7 @@ The skill writes nothing to .omx/profile/ directly.
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
 import yaml
 
@@ -209,4 +210,11 @@ def bootstrap_profile(paths: OmxPaths, *, profile_name: str = "isaaclab",
         with atomic_path(targets[name]) as tmp:
             tmp.write_text(text)
         written.append(targets[name])
+
+    tree_fp = paths.tree_yaml()
+    if not tree_fp.exists():
+        from omx_core.tree import DEFAULT_TREE_YAML
+        with atomic_path(tree_fp) as tmp:
+            Path(tmp).write_text(DEFAULT_TREE_YAML, encoding="utf-8")
+        written.append(tree_fp)
     return written

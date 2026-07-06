@@ -189,6 +189,12 @@ class OmxPaths:
         Not in _PROFILE_FILES: bootstrap never writes it; profile-seal owns it."""
         return self.profile_dir / "seal.json"
 
+    def tree_yaml(self) -> Path:
+        """profile/tree.yaml — the declarative tree schema (R2, D10).
+        Not in _PROFILE_FILES: `omx init` writes the generic default only when
+        absent; `omx tree-codify` owns replacement."""
+        return self.profile_dir / "tree.yaml"
+
     # --- runs/<run_id>/ (run-bound) ---
     def run_dir(self, run_id) -> Path:
         return self.omx_dir / "runs" / self._check_run_id(run_id)

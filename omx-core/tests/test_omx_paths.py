@@ -569,6 +569,7 @@ def test_every_public_path_getter_is_exercised(tmp_path):
     calls = {
         "profile_file": lambda: p.profile_file("metrics.yaml"),
         "seal_json": lambda: p.seal_json(),
+        "tree_yaml": lambda: p.tree_yaml(),
         "run_dir": lambda: p.run_dir(rid),
         "results_tsv": lambda: p.results_tsv(rid),
         "ledger_json": lambda: p.ledger_json(rid),

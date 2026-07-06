@@ -106,7 +106,7 @@ def test_bootstrap_writes_all_four_files(tmp_path):
     paths, written = _bootstrap(tmp_path)
     for name in ("evaluator.sh", "metrics.yaml", "rules.md", "launch.sh"):
         assert paths.profile_file(name).exists(), f"{name} not written"
-    assert {p.name for p in written} == {"evaluator.sh", "metrics.yaml", "rules.md", "launch.sh"}
+    assert {p.name for p in written} == {"evaluator.sh", "metrics.yaml", "rules.md", "launch.sh", "tree.yaml"}
 
 
 def test_bootstrap_metrics_yaml_roundtrips_and_is_valid(tmp_path):
