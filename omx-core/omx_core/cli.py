@@ -373,6 +373,28 @@ def _cmd_init(args) -> int:
     return 0
 
 
+def _cmd_tree_codify(args) -> int:
+    """Infer tree.yaml from an existing tree (census; pending approval; spec 2.2)."""
+    from omx_core.tree import load_tree_schema
+    from omx_core.tree_ops import codify_tree
+    root = _resolved_root(args)
+    target = OmxPaths(root=root).tree_yaml()
+    if target.exists() and not args.force:
+        raise SystemExit(
+            f"{target} exists; pass --force to regenerate (tree-codify owns replacement)")
+    try:
+        text, report = codify_tree(Path(root), index_root=args.index_root,
+                                   data_root=args.data_root)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    with atomic_path(target) as tmp:
+        Path(tmp).write_text(text, encoding="utf-8")
+    load_tree_schema(target)  # round-trip guard: loader must accept our own output
+    print(json.dumps({"written": str(target), "pending_approval": True,
+                      "report": report}))
+    return 0
+
+
 def _cmd_report_parse(args) -> int:
     """Parse an exp-analyze report.md into structured findings (Claude-free).
 
@@ -1008,6 +1030,18 @@ def build_parser() -> argparse.ArgumentParser:
                     help="metrics.yaml content as a JSON object; omitted = built-in defaults")
     pn.add_argument("--force", action="store_true", help="overwrite an existing profile")
     pn.set_defaults(func=_cmd_init)
+
+    ptc = sub.add_parser("tree-codify",
+                         help="infer .omx/profile/tree.yaml from an existing tree "
+                              "(census-based, pending approval)")
+    ptc.add_argument("--root", default=None, help="anchor; default: #13 ladder")
+    ptc.add_argument("--index-root", default=None, dest="index_root",
+                     help="index tree root relative to the anchor (default: experiments)")
+    ptc.add_argument("--data-root", default=None, dest="data_root",
+                     help="data tree root override (default: inferred from pointers)")
+    ptc.add_argument("--force", action="store_true",
+                     help="regenerate over an existing tree.yaml")
+    ptc.set_defaults(func=_cmd_tree_codify)
 
     prp = sub.add_parser("report-parse", help="parse exp-analyze report.md -> JSON findings (Claude-free)")
     prp.add_argument("--path", required=True, help="path to an exp-analyze report.md")
