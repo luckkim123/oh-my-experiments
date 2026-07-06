@@ -628,5 +628,8 @@ Then leave breadcrumbs UNCONDITIONALLY — before any manual curation, run
 so every finding lands as a low-confidence session-log stub even if this session
 never curates (slug append-merge absorbs the duplicate when you DO curate).
 
+- Tree hygiene (report-only): `omx tree-audit --root <root>` — surface violations
+  to the user; never auto-fix the tree.
+
 Then STOP.
 Do not propose or launch a next experiment — that is exp-design's job (#5).

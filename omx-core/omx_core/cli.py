@@ -395,6 +395,22 @@ def _cmd_tree_codify(args) -> int:
     return 0
 
 
+def _cmd_tree_audit(args) -> int:
+    """Walk the declared trees against tree.yaml; report-only (spec 2.3)."""
+    from omx_core.tree import load_tree_schema
+    from omx_core.tree_audit import audit_tree
+    root = _resolved_root(args)
+    try:
+        schema = load_tree_schema(OmxPaths(root=root).tree_yaml())
+        res = audit_tree(schema, Path(root))
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(res))
+    if args.strict and res["counts"]["error"] > 0:
+        raise SystemExit(f"tree-audit: {res['counts']['error']} error(s) under --strict")
+    return 0
+
+
 def _cmd_report_parse(args) -> int:
     """Parse an exp-analyze report.md into structured findings (Claude-free).
 
@@ -1042,6 +1058,14 @@ def build_parser() -> argparse.ArgumentParser:
     ptc.add_argument("--force", action="store_true",
                      help="regenerate over an existing tree.yaml")
     ptc.set_defaults(func=_cmd_tree_codify)
+
+    pta = sub.add_parser("tree-audit",
+                         help="validate the output trees against tree.yaml "
+                              "(report-only; --strict escalates errors to rc 2)")
+    pta.add_argument("--root", default=None, help="anchor; default: #13 ladder")
+    pta.add_argument("--strict", action="store_true",
+                     help="rc 2 when any error-severity violation is found")
+    pta.set_defaults(func=_cmd_tree_audit)
 
     prp = sub.add_parser("report-parse", help="parse exp-analyze report.md -> JSON findings (Claude-free)")
     prp.add_argument("--path", required=True, help="path to an exp-analyze report.md")
