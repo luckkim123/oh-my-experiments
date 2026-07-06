@@ -104,6 +104,9 @@ decision is `discard`, tell the user the exact `git revert`/`git checkout`
 command to unwind to `baseline_commit` (from `ledger.json`) — but do NOT run it
 unless they explicitly approve (minimum-change revert, repo rule).
 
+- On keep: `omx tree-alias --name latest --run <run_id>` — explicit only; no
+  alias is ever re-pointed automatically.
+
 ### 5. Queue the next launch (NEVER fire it — B8)
 Mint the run skeleton first: `omx tree-scaffold --run-id <id> --under <levels>
 [--data-dir <logs dir>]` — grammar/tag violations and existing leaves are

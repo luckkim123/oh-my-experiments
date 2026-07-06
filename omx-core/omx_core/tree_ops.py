@@ -19,6 +19,7 @@ from omx_core.tree import (
     parse_run_id,
     runs_at_declared_depth,
     walk_runs,
+    walk_symlinks,
 )
 
 _TS_CANDIDATES = ("%y%m%d_%H%M%S", "%Y%m%d_%H%M%S", "%Y-%m-%d_%H-%M-%S")
@@ -270,3 +271,58 @@ def scaffold_eval(schema: TreeSchema, base, run_spec, mode, *, now_ts) -> Path:
         raise TreeError(f"{target} already exists (F4 same-second guard)")
     target.mkdir(parents=True)
     return target
+
+
+# --- alias (spec 2.5) ---------------------------------------------------------
+
+def set_alias(schema: TreeSchema, base, name, run_spec, *, scope_path=None) -> dict:
+    link = schema.links.get(name)
+    if link is None or link.kind != "alias":
+        raise TreeError(f"{name!r} is not a declared alias in tree.yaml links "
+                        "(undeclared aliases are exactly the drift tree-audit flags)")
+    run_dir = resolve_run_dir(schema, base, run_spec)
+    if parse_run_id(schema, run_dir.name) is None:
+        raise TreeError(f"alias target {run_dir.name!r} is not a grammar-valid run dir")
+    role = schema.trees["index"]
+    index_root = Path(base) / role.root
+    if scope_path is not None:
+        scope_dir = Path(scope_path)
+        if not scope_dir.is_dir():
+            raise TreeError(f"--scope-path {scope_path!r} is not a directory")
+    elif link.scope == "root":
+        scope_dir = index_root
+    else:
+        # Derive from the target run's own ancestry (spec 2.5): the run's
+        # enclosing dir at the alias's declared level position.
+        pos = [n for n, _ in role.levels].index(link.scope) + 1
+        rel = run_dir.resolve().relative_to(index_root.resolve())
+        used_levels = len(rel.parts) - 1
+        if used_levels < pos:
+            raise TreeError(f"run {run_dir.name!r} omits the optional "
+                            f"{link.scope!r} level; pass --scope-path explicitly")
+        scope_dir = index_root.joinpath(*rel.parts[:pos])
+    try:
+        run_dir.resolve().relative_to(scope_dir.resolve())
+    except ValueError:
+        raise TreeError(f"alias target {run_dir} is outside the {link.scope!r} "
+                        f"scope {scope_dir} — refusing a cross-scope alias")
+    alias_fp = scope_dir / name
+    if alias_fp.exists() and not alias_fp.is_symlink():
+        raise TreeError(f"{alias_fp} exists and is not a symlink — refusing to replace")
+    tmp = scope_dir / f".{name}.tmp{os.getpid()}"
+    if os.path.lexists(tmp):
+        tmp.unlink()
+    tmp.symlink_to(os.path.relpath(run_dir.resolve(), scope_dir.resolve()))
+    os.replace(tmp, alias_fp)
+    return {"name": name, "scope_dir": str(scope_dir), "target": str(run_dir)}
+
+
+def list_aliases(schema: TreeSchema, base) -> list:
+    names = {l.name for l in schema.aliases()}
+    out = []
+    for l in walk_symlinks(schema, base):
+        if l["name"] in names:
+            out.append({"name": l["name"], "path": str(l["path"]),
+                        "target": str(l["target"]) if l["target"] else None,
+                        "dangling": l["target"] is None})
+    return out

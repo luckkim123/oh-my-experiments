@@ -435,6 +435,25 @@ def _cmd_tree_scaffold(args) -> int:
     return 0
 
 
+def _cmd_tree_alias(args) -> int:
+    """Manage declared alias symlinks (atomic re-point; spec 2.5)."""
+    from omx_core.tree import load_tree_schema
+    from omx_core.tree_ops import list_aliases, set_alias
+    root = _resolved_root(args)
+    try:
+        schema = load_tree_schema(OmxPaths(root=root).tree_yaml())
+        if args.list:
+            print(json.dumps({"aliases": list_aliases(schema, Path(root))}))
+            return 0
+        if not args.name or not args.run:
+            raise SystemExit("--name and --run are required (or --list)")
+        print(json.dumps(set_alias(schema, Path(root), args.name, args.run,
+                                   scope_path=args.scope_path)))
+    except OmxError as e:
+        raise SystemExit(str(e))
+    return 0
+
+
 def _cmd_report_parse(args) -> int:
     """Parse an exp-analyze report.md into structured findings (Claude-free).
 
@@ -1105,6 +1124,18 @@ def build_parser() -> argparse.ArgumentParser:
     pts.add_argument("--mode", default=None, help="eval mode (must be in eval_modes)")
     pts.add_argument("--ts", default=None, help="explicit timestamp (tests)")
     pts.set_defaults(func=_cmd_tree_scaffold)
+
+    ptl = sub.add_parser("tree-alias",
+                         help="create/re-point a DECLARED alias symlink to a run "
+                              "(atomic; refuses undeclared names and dangling targets)")
+    ptl.add_argument("--root", default=None, help="anchor; default: #13 ladder")
+    ptl.add_argument("--name", default=None)
+    ptl.add_argument("--run", default=None, help="run spec (path or exact leaf)")
+    ptl.add_argument("--scope-path", default=None, dest="scope_path",
+                     help="explicit alias location (required when the scope "
+                          "level is optional and absent on the target)")
+    ptl.add_argument("--list", action="store_true")
+    ptl.set_defaults(func=_cmd_tree_alias)
 
     prp = sub.add_parser("report-parse", help="parse exp-analyze report.md -> JSON findings (Claude-free)")
     prp.add_argument("--path", required=True, help="path to an exp-analyze report.md")
