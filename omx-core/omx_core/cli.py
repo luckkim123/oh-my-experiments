@@ -750,11 +750,51 @@ def _cmd_probe_novelty(args) -> int:
                 j = jaccard(toks, probe_tokens(fh.read()))
             if j >= 0.3:
                 similar.append({"path": fp, "jaccard": round(j, 3)})
-    out = {"wiki_hits": hits.get("matches", []), "similar_proposals": similar}
+    ledger_hits = []
+    lp = OmxPaths(root=_resolved_root(args))
+    camp_root = lp.omx_dir / "campaigns"
+    if camp_root.is_dir():
+        for led in sorted(camp_root.glob("*/ledger.jsonl")):
+            for line in led.read_text(encoding="utf-8").splitlines():
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if ev.get("event") not in ("kept", "discarded", "note"):
+                    continue
+                text = " ".join([str(ev.get("run_id") or ""),
+                                 json.dumps(ev.get("data") or {})])
+                j = jaccard(toks, probe_tokens(text))
+                if j >= 0.3:
+                    ledger_hits.append({"source": str(led),
+                                        "event": ev.get("event"),
+                                        "run_id": ev.get("run_id"),
+                                        "jaccard": round(j, 3)})
+    runs_root = lp.omx_dir / "runs"
+    if runs_root.is_dir():
+        for lj in sorted(runs_root.glob("*/ledger.json")):
+            try:
+                led = json.loads(lj.read_text())
+            except ValueError:
+                continue
+            for e in led.get("entries", []):
+                j = jaccard(toks, probe_tokens(str(e.get("description") or "")))
+                if j >= 0.3:
+                    ledger_hits.append({"source": str(lj),
+                                        "event": e.get("status"),
+                                        "run_id": lj.parent.name,
+                                        "jaccard": round(j, 3)})
+    out = {"wiki_hits": hits.get("matches", []), "similar_proposals": similar, "ledger_hits": ledger_hits}
     print(json.dumps(out))
     if similar:
         print(f"WARNING: probe family overlaps {len(similar)} past proposal(s) — "
               "check their outcome before re-trying it", file=sys.stderr)
+    if ledger_hits:
+        outcomes = {}
+        for h in ledger_hits:
+            outcomes[h["event"]] = outcomes.get(h["event"], 0) + 1
+        print(f"WARNING: probe family appears in ledger history ({outcomes}) — "
+              "check the recorded outcome before re-trying it", file=sys.stderr)
     return 0
 
 
