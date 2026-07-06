@@ -105,6 +105,10 @@ command to unwind to `baseline_commit` (from `ledger.json`) — but do NOT run i
 unless they explicitly approve (minimum-change revert, repo rule).
 
 ### 5. Queue the next launch (NEVER fire it — B8)
+Mint the run skeleton first: `omx tree-scaffold --run-id <id> --under <levels>
+[--data-dir <logs dir>]` — grammar/tag violations and existing leaves are
+refused at mint time (F8/F4); nothing is launched.
+
 The proposal from step 2 is the next experiment. Queue it for human approval:
 
 ```bash

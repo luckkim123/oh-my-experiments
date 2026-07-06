@@ -14,7 +14,11 @@ from pathlib import Path
 
 from omx_core.tree import (
     TreeError,
+    TreeSchema,
     compile_ts_pattern,
+    parse_run_id,
+    runs_at_declared_depth,
+    walk_runs,
 )
 
 _TS_CANDIDATES = ("%y%m%d_%H%M%S", "%Y%m%d_%H%M%S", "%Y-%m-%d_%H-%M-%S")
@@ -204,3 +208,65 @@ def codify_tree(base, *, index_root=None, data_root=None) -> tuple:
         "",
     ]
     return "\n".join(lines), report
+
+
+# --- scaffold / shared run resolution (spec 2.4) ------------------------------
+
+def resolve_run_dir(schema: TreeSchema, base, spec) -> Path:
+    """Resolve a run spec: an existing dir path, else an EXACT leaf name among
+    detected runs. Deterministic — no substring convenience (that is a
+    workspace resolver's affordance, not core's)."""
+    p = Path(spec)
+    if p.is_dir():
+        return p
+    hits = [e["path"] for e in runs_at_declared_depth(walk_runs(schema, base))
+            if e["leaf"] == str(spec)]
+    if not hits:
+        raise TreeError(f"no run named {spec!r} in the index tree")
+    if len(hits) > 1:
+        raise TreeError(f"run name {spec!r} is ambiguous: "
+                        f"{[str(h) for h in hits]}; pass a path")
+    return hits[0]
+
+
+def scaffold_run(schema: TreeSchema, base, run_id, *, under="", data_dir=None) -> Path:
+    parsed = parse_run_id(schema, run_id)
+    if parsed is None:
+        raise TreeError(f"run_id {run_id!r} does not parse under the grammar "
+                        f"(<label>[_<tag>]_<ts>, ts_format {schema.ts_format!r})")
+    if schema.tag == "required" and parsed["tag"] == "":
+        raise TreeError(f"run_id {run_id!r} has no tag (run_id.tag: required) — "
+                        "F8 refused at mint time")
+    role = schema.trees["index"]
+    segs = [s for s in str(under).split("/") if s]
+    if not role.min_levels <= len(segs) <= role.max_levels:
+        raise TreeError(f"--under {under!r} has {len(segs)} segment(s); the index "
+                        f"tree declares {role.min_levels}..{role.max_levels} level(s)")
+    run_dir = Path(base) / role.root
+    for s in segs:
+        run_dir = run_dir / s
+    run_dir = run_dir / run_id
+    if run_dir.exists():
+        raise TreeError(f"{run_dir} already exists — scaffold refuses to reuse a "
+                        "leaf (F4 same-second guard); mint a fresh ts")
+    run_dir.mkdir(parents=True)
+    for e in (schema.entries or ()):
+        (run_dir / e).mkdir()
+    if data_dir is not None:
+        for link in schema.data_pointers():
+            (run_dir / link.name).symlink_to(
+                os.path.relpath(Path(data_dir).resolve(), run_dir))
+    return run_dir
+
+
+def scaffold_eval(schema: TreeSchema, base, run_spec, mode, *, now_ts) -> Path:
+    # mode FIRST (cheap vocabulary check, its own error), then run resolution.
+    if mode not in schema.eval_modes:
+        raise TreeError(f"mode {mode!r} not in eval_modes {list(schema.eval_modes)}")
+    run_dir = resolve_run_dir(schema, base, run_spec)
+    leaf = schema.eval_pattern.replace("<mode>", mode).replace("<ts>", now_ts)
+    target = run_dir / leaf
+    if target.exists():
+        raise TreeError(f"{target} already exists (F4 same-second guard)")
+    target.mkdir(parents=True)
+    return target

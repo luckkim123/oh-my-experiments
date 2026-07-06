@@ -411,6 +411,30 @@ def _cmd_tree_audit(args) -> int:
     return 0
 
 
+def _cmd_tree_scaffold(args) -> int:
+    """Mint a run skeleton or an eval leaf per tree.yaml (spec 2.4; D4-safe)."""
+    from omx_core.tree import load_tree_schema
+    from omx_core.tree_ops import scaffold_eval, scaffold_run
+    root = _resolved_root(args)
+    try:
+        schema = load_tree_schema(OmxPaths(root=root).tree_yaml())
+        if args.eval_for is not None:
+            if args.mode is None:
+                raise SystemExit("--mode is required with --eval-for")
+            ts = args.ts or datetime.now().strftime(schema.ts_format)
+            out = scaffold_eval(schema, Path(root), args.eval_for, args.mode,
+                                now_ts=ts)
+        else:
+            if args.run_id is None:
+                raise SystemExit("--run-id (or --eval-for) is required")
+            out = scaffold_run(schema, Path(root), args.run_id,
+                               under=args.under or "", data_dir=args.data_dir)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps({"created": str(out)}))
+    return 0
+
+
 def _cmd_report_parse(args) -> int:
     """Parse an exp-analyze report.md into structured findings (Claude-free).
 
@@ -1066,6 +1090,21 @@ def build_parser() -> argparse.ArgumentParser:
     pta.add_argument("--strict", action="store_true",
                      help="rc 2 when any error-severity violation is found")
     pta.set_defaults(func=_cmd_tree_audit)
+
+    pts = sub.add_parser("tree-scaffold",
+                         help="mint a run skeleton or an eval leaf per tree.yaml "
+                              "(refuses existing leaves — F4 guard; never launches)")
+    pts.add_argument("--root", default=None, help="anchor; default: #13 ladder")
+    pts.add_argument("--run-id", default=None, dest="run_id")
+    pts.add_argument("--under", default=None,
+                     help="'/'-joined level values, e.g. fw/exp_a/camp_a")
+    pts.add_argument("--data-dir", default=None, dest="data_dir",
+                     help="training log dir the data_pointer symlink targets")
+    pts.add_argument("--eval-for", default=None, dest="eval_for",
+                     help="run spec (path or exact leaf) to mint an eval leaf under")
+    pts.add_argument("--mode", default=None, help="eval mode (must be in eval_modes)")
+    pts.add_argument("--ts", default=None, help="explicit timestamp (tests)")
+    pts.set_defaults(func=_cmd_tree_scaffold)
 
     prp = sub.add_parser("report-parse", help="parse exp-analyze report.md -> JSON findings (Claude-free)")
     prp.add_argument("--path", required=True, help="path to an exp-analyze report.md")
