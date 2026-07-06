@@ -760,6 +760,8 @@ def _cmd_probe_novelty(args) -> int:
                     ev = json.loads(line)
                 except ValueError:
                     continue
+                # launched is in-flight and eval is non-terminal; only
+                # outcome-bearing events feed novelty warnings.
                 if ev.get("event") not in ("kept", "discarded", "note"):
                     continue
                 text = " ".join([str(ev.get("run_id") or ""),
@@ -781,7 +783,7 @@ def _cmd_probe_novelty(args) -> int:
                 j = jaccard(toks, probe_tokens(str(e.get("description") or "")))
                 if j >= 0.3:
                     ledger_hits.append({"source": str(lj),
-                                        "event": e.get("status"),
+                                        "event": e.get("decision"),
                                         "run_id": lj.parent.name,
                                         "jaccard": round(j, 3)})
     out = {"wiki_hits": hits.get("matches", []), "similar_proposals": similar, "ledger_hits": ledger_hits}

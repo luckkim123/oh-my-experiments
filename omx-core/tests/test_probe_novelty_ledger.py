@@ -1,7 +1,9 @@
-"""Task 12 — probe-novelty scans campaign + run ledgers for outcomes (spec 2.9)."""
+"""Task 12 — probe-novelty scans campaign + run ledgers for outcomes (R1 spec 3.10 residue)."""
 import json
 
 from omx_core.cli import main
+from omx_core.ledger import record_iteration, seed_ledger
+from omx_core.omx_paths import OmxPaths
 
 PROPOSAL = """\
 # Proposal
@@ -41,7 +43,7 @@ def test_run_ledger_hit(tmp_path, capsys):
     run_dir.mkdir(parents=True)
     (run_dir / "ledger.json").write_text(json.dumps({
         "schema_version": 1, "entries": [
-            {"status": "discard",
+            {"decision": "discard",
              "description": ("entropy floor widen constraint margin schedule "
                              "plateau attitude error metric probe")}]}))
     capsys.readouterr()
@@ -49,6 +51,31 @@ def test_run_ledger_hit(tmp_path, capsys):
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert any(h["event"] == "discard" for h in out["ledger_hits"])
+
+
+def test_run_ledger_hit_via_real_writer(tmp_path, capsys):
+    # Schema-drift guard: writes via the actual production writer
+    # (record_iteration) instead of a hand-built fixture, so a field-name
+    # mismatch between the scanner and omx_core.ledger's real schema (entries
+    # use "decision", not "status") gets caught here rather than only in prod.
+    fp = _proposal(tmp_path)
+    paths = OmxPaths(root=tmp_path)
+    run_id = "alpha_t3_260603_120000"
+    seed_ledger(paths, run_id, baseline_commit="base000", keep_policy="score_improvement")
+    decision = {
+        "decision": "discard", "decision_reason": "no improvement", "keep": False,
+        "evaluator": {"status": "pass", "pass": True, "score": 0.1}, "notes": ["n"],
+    }
+    record_iteration(paths, run_id, iteration=0, decision=decision,
+                     candidate_checkpoint="/w/m0.pt", candidate_commit="cand000",
+                     description=("entropy floor widen constraint margin schedule "
+                                  "plateau attitude error metric probe"))
+    capsys.readouterr()
+    rc = main(["probe-novelty", "--proposal", str(fp), "--root", str(tmp_path)])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    hit = next(h for h in out["ledger_hits"] if h["run_id"] == run_id)
+    assert hit["event"] == decision["decision"]   # matches the real recorded decision
 
 
 def test_no_ledgers_is_quiet(tmp_path, capsys):
