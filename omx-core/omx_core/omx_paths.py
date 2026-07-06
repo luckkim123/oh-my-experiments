@@ -285,6 +285,19 @@ class OmxPaths:
         hand. Run-bound, sits beside the ledger trio."""
         return self.run_dir(run_id) / "pending-launch.json"
 
+    # --- campaigns/<campaign_id>/ (cross-run ledger, R2 #28) ---
+    def campaign_dir(self, campaign_id) -> Path:
+        """campaigns/<campaign_id>/ — campaign_id shares the run_id CHARSET
+        (single segment; it IS the tree's group segment, D-R2-5) but not the
+        profile run_id regex (a campaign is a group name, not a run)."""
+        return self.omx_dir / "campaigns" / validate_run_id(campaign_id)
+
+    def campaign_plan(self, campaign_id) -> Path:
+        return self.campaign_dir(campaign_id) / "plan.json"
+
+    def campaign_ledger(self, campaign_id) -> Path:
+        return self.campaign_dir(campaign_id) / "ledger.jsonl"
+
     # --- permanent output tree (output_root passed per-getter; design 10.1) ---
     # These live OUTSIDE .omx/. output_root originates from metrics.yaml and is
     # supplied by the caller every call; it is never derived from self.root.

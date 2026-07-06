@@ -106,6 +106,9 @@ unless they explicitly approve (minimum-change revert, repo rule).
 
 - On keep: `omx tree-alias --name latest --run <run_id>` — explicit only; no
   alias is ever re-pointed automatically.
+- Record the decision in the campaign ledger: `omx campaign-log --id <group>
+  --event <kept|discarded> --run <run_id> [--data '{"reason": "..."}']`
+  (campaign id = the run's group segment; init once with `omx campaign-init`).
 
 ### 5. Queue the next launch (NEVER fire it — B8)
 Mint the run skeleton first: `omx tree-scaffold --run-id <id> --under <levels>

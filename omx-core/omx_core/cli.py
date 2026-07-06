@@ -1048,6 +1048,61 @@ def _cmd_clean(args) -> int:
     return 0
 
 
+def _cmd_campaign_init(args) -> int:
+    from omx_core.campaign import init_campaign
+    paths = OmxPaths(root=_resolved_root(args))
+    extra = None
+    if args.plan is not None:
+        try:
+            extra = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise SystemExit(f"--plan file unreadable or not JSON: {e}")
+        if not isinstance(extra, dict):
+            raise SystemExit("--plan file must contain a JSON object")
+    try:
+        plan = init_campaign(paths, args.id, now=_now_iso(), goal=args.goal,
+                             baseline_run_id=args.baseline_run, extra=extra)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(plan))
+    return 0
+
+
+def _cmd_campaign_log(args) -> int:
+    from omx_core.campaign import append_event
+    paths = OmxPaths(root=_resolved_root(args))
+    data = None
+    if args.data is not None:
+        try:
+            data = json.loads(args.data)
+        except ValueError as e:
+            raise SystemExit(f"--data must parse as a JSON object: {e}")
+        if not isinstance(data, dict):
+            raise SystemExit("--data must parse as a JSON object (got a non-object)")
+    try:
+        rec = append_event(paths, args.id, now=_now_iso(), event=args.event,
+                           run_id=args.run, session_id=args.session_id, data=data)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(rec))
+    return 0
+
+
+def _cmd_campaign_status(args) -> int:
+    from omx_core.campaign import campaign_status
+    try:
+        print(json.dumps(campaign_status(OmxPaths(root=_resolved_root(args)), args.id)))
+    except OmxError as e:
+        raise SystemExit(str(e))
+    return 0
+
+
+def _cmd_campaign_list(args) -> int:
+    from omx_core.campaign import list_campaigns
+    print(json.dumps({"campaigns": list_campaigns(OmxPaths(root=_resolved_root(args)))}))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="omx", description="OMX experiment-analysis core")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1354,6 +1409,34 @@ def build_parser() -> argparse.ArgumentParser:
     pcl.add_argument("--i-understand-permanent", action="store_true",
                      dest="i_understand_permanent")
     pcl.set_defaults(func=_cmd_clean)
+
+    pci = sub.add_parser("campaign-init", help="create .omx/campaigns/<id>/ "
+                         "(plan.json + empty ledger); id = the tree's group segment")
+    pci.add_argument("--root", default=None)
+    pci.add_argument("--id", required=True)
+    pci.add_argument("--goal", default=None)
+    pci.add_argument("--baseline-run", default=None, dest="baseline_run")
+    pci.add_argument("--plan", default=None, help="optional JSON file merged into plan.json")
+    pci.set_defaults(func=_cmd_campaign_init)
+
+    pcg = sub.add_parser("campaign-log", help="append one event to the campaign ledger")
+    pcg.add_argument("--root", default=None)
+    pcg.add_argument("--id", required=True)
+    pcg.add_argument("--event", required=True,
+                     choices=("launched", "kept", "discarded", "eval", "note"))
+    pcg.add_argument("--run", default=None)
+    pcg.add_argument("--data", default=None, help="JSON object payload")
+    pcg.add_argument("--session-id", default=None, dest="session_id")
+    pcg.set_defaults(func=_cmd_campaign_log)
+
+    pcs = sub.add_parser("campaign-status", help="aggregate one campaign's ledger")
+    pcs.add_argument("--root", default=None)
+    pcs.add_argument("--id", required=True)
+    pcs.set_defaults(func=_cmd_campaign_status)
+
+    pcll = sub.add_parser("campaign-list", help="list campaigns with event counts")
+    pcll.add_argument("--root", default=None)
+    pcll.set_defaults(func=_cmd_campaign_list)
 
     return p
 

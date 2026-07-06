@@ -235,3 +235,5 @@ Tell the user where the proposal is
 hypothesis and the one-variable probe in 2-3 lines, and remind them it is
 **pending approval — not launched**. Do not start a loop or run anything; the
 analyze→design→eval loop is exp-loop's job (#6).
+- Append the adopted proposal to the campaign ledger:
+  `omx campaign-log --id <group> --event note --data '{"proposal": "<proposal_id>"}'`.
