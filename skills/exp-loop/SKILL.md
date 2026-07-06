@@ -12,7 +12,7 @@ argument-hint: "[--root <dir>] <run_id> [--max-runtime <seconds>]"
 
 ```
 analyze (exp-analyze) -> design (exp-design) -> evaluate candidate (omx eval)
-   -> keep/discard (omx decision via the core) -> log the iteration (ledger)
+   -> keep/discard (a decision via the core engine) -> log the iteration (ledger)
    -> queue the next launch (pending approval) -> STOP for human, or repeat
 ```
 

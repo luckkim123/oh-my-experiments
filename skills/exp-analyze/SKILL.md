@@ -49,7 +49,7 @@ final scalars you read off the curve. Run it, e.g.:
 
 Hand-extracting FINAL SCALARS from raw TB/wandb **instead of** running the engine is
 the exact anti-pattern this skill forbids (it is what produced a count-looks-fine but
-diagnosis-empty report; cf the `omx-route-must-invoke` discipline — declaring the omx
+diagnosis-empty report; cf the `omx-route-must-invoke` discipline — declaring this
 lane is a commitment to invoke the engine, not to hand-read curves). The engine's
 time-series diagnosis (phase/plateau onset, PELT changepoints, HMM regime, lead-lag)
 CANNOT be reconstructed from end-of-run values. If you deliberately choose not to run
