@@ -48,6 +48,21 @@ def test_sync_skips_when_page_newer(tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["action"] == "synced"
 
 
+def test_same_second_profile_edit_still_syncs(tmp_path, capsys):
+    # Same-second mtime tie must re-sync, not skip (R1 carry-over): the skip
+    # condition is STRICTLY > prof_mtime, not >=.
+    prof = _mk_profile(tmp_path)
+    main(["wiki", "sync-profile", "--root", str(tmp_path)])
+    capsys.readouterr()
+    page = tmp_path / ".omx" / "registry" / "findings" / "profile.md"
+    m = prof / "metrics.yaml"
+    m.write_text(m.read_text() + "# same-second edit\n")
+    tie = page.stat().st_mtime
+    os.utime(m, (tie, tie))  # exact mtime tie with the already-synced page
+    main(["wiki", "sync-profile", "--root", str(tmp_path)])
+    assert json.loads(capsys.readouterr().out)["action"] == "synced"
+
+
 def test_sync_after_seal_resyncs(tmp_path, capsys):
     # I-1: sealing after a sync (no projected-file changes) must not leave
     # profile.md stuck asserting the pre-seal status forever.

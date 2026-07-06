@@ -76,3 +76,14 @@ def test_cli_probe_novelty_reports_similar(tmp_path, capsys):
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out["similar_proposals"] and out["similar_proposals"][0]["jaccard"] >= 0.3
+
+
+def test_probe_novelty_path_alias(tmp_path, capsys):
+    # M-6: --path is the canonical flag; --proposal stays a working alias.
+    fp = tmp_path / "p.md"
+    fp.write_text(GOOD)
+    assert main(["probe-novelty", "--path", str(fp), "--root", str(tmp_path)]) == 0
+    capsys.readouterr()
+    assert main(["probe-novelty", "--root", str(tmp_path)]) == 2  # neither flag
+    assert main(["probe-novelty", "--path", str(fp), "--proposal", str(fp),
+                 "--root", str(tmp_path)]) == 2  # both flags

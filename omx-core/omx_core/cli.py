@@ -730,6 +730,12 @@ def _cmd_probe_novelty(args) -> int:
     """Warn-only novelty scan (spec 3.10): wiki + past proposals. Never fails."""
     from omx_core.proposal import jaccard, probe_tokens
     from omx_core.wiki.query import query_wiki
+    if args.path and args.proposal:
+        raise SystemExit("pass only one of --path/--proposal")
+    if args.path:
+        args.proposal = args.path
+    if not args.proposal:
+        raise SystemExit("--path is required")
     if not os.path.exists(args.proposal):
         raise SystemExit(f"proposal not found: {args.proposal}")
     with open(args.proposal, encoding="utf-8") as fh:
@@ -959,10 +965,16 @@ def _cmd_wiki_query(args) -> int:
 
 def _cmd_wiki_lint(args) -> int:
     paths = OmxPaths(root=_resolved_root(args))
+    from omx_core.wiki.quality import QUALITY_FLOOR
+    floor = QUALITY_FLOOR
+    try:
+        floor = int(load_profile_metrics(_resolved_root(args)).get("wiki_quality_floor", floor))
+    except OmxError:
+        pass  # no profile yet — built-in floor (D12: override slot, generic default)
     try:
         res = _wiki_lint.lint_wiki(
             paths, now=_now_iso(), stale_days=args.stale_days,
-            max_page_size=args.max_page_size)
+            max_page_size=args.max_page_size, quality_floor=floor)
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(res))
@@ -1342,7 +1354,8 @@ def build_parser() -> argparse.ArgumentParser:
     ppn = sub.add_parser("probe-novelty",
                          help="warn-only: was this probe family already tried? (wiki + past proposals)")
     ppn.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
-    ppn.add_argument("--proposal", required=True)
+    ppn.add_argument("--path", default=None, help="proposal path (canonical flag)")
+    ppn.add_argument("--proposal", default=None, help="alias of --path (deprecated)")
     ppn.add_argument("--proposals-dir", default=None, dest="proposals_dir",
                      help="dir of past proposals/<id>.md to compare against")
     ppn.set_defaults(func=_cmd_probe_novelty)

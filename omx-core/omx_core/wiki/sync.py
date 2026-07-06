@@ -71,7 +71,8 @@ def sync_profile_page(paths: OmxPaths, *, now: str) -> dict:
     if seal_fp.exists():
         mtime_inputs.append(seal_fp)
     prof_mtime = max(f.stat().st_mtime for f in mtime_inputs)
-    if page_fp.exists() and page_fp.stat().st_mtime >= prof_mtime:
+    # STRICT >: a same-second tie re-syncs (idempotent) instead of being missed
+    if page_fp.exists() and page_fp.stat().st_mtime > prof_mtime:
         return {"action": "unchanged", "slug": "profile.md"}
 
     def _do() -> dict:

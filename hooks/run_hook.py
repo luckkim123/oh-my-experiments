@@ -19,6 +19,7 @@ import signal
 import sys
 
 _TIMEOUT_S = 3
+_HAS_ALARM = hasattr(signal, "SIGALRM")
 
 
 def _ping(payload):
@@ -63,8 +64,9 @@ def main() -> int:
     if name in skip:
         return 0
     try:
-        signal.signal(signal.SIGALRM, _on_alarm)
-        signal.alarm(_TIMEOUT_S)
+        if _HAS_ALARM:
+            signal.signal(signal.SIGALRM, _on_alarm)
+            signal.alarm(_TIMEOUT_S)
         payload = json.load(sys.stdin)
         handler = _handlers().get(name)
         if handler is None:
@@ -75,7 +77,8 @@ def main() -> int:
     except BaseException:
         return 0  # fail-open, always
     finally:
-        signal.alarm(0)
+        if _HAS_ALARM:
+            signal.alarm(0)
     return 0
 
 
