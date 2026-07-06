@@ -9,6 +9,7 @@ validate, scaffold = generate, alias = the links section, index = walk.
 from __future__ import annotations
 
 import fnmatch
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -278,3 +279,100 @@ run_dir:
 walk:
   ignore: ["legacy", "_*"]
 """
+
+
+# --- walker (spec 2.1 detection predicate; consumed by every tree verb) ------
+
+def _detect_index_run(schema: TreeSchema, d: Path) -> str | None:
+    """The three-clause predicate: requires | data_pointer | grammar."""
+    for req in schema.requires:
+        if (d / req).exists():
+            return "requires"
+    for link in schema.data_pointers():
+        # lexists: a DANGLING pointer still marks the dir as run-shaped
+        if os.path.lexists(d / link.name):
+            return "data_pointer"
+    if parse_run_id(schema, d.name) is not None:
+        return "grammar"
+    return None
+
+
+def _declared_depths(role: TreeRole) -> range:
+    # run dir sits one below the used levels
+    return range(role.min_levels + 1, role.max_levels + 2)
+
+
+def walk_runs(schema: TreeSchema, base) -> list:
+    """Enumerate run-dir candidates in every declared tree under *base*.
+
+    Index-tree entries carry the detection clause in "detected_via"
+    ("requires"/"data_pointer"/"grammar"); data-tree entries are leaf dirs at
+    the declared depth ("depth"). Symlinks and walk.ignore segments never
+    surface (an alias is never a run — paths.py find_runs discipline)."""
+    base = Path(base)
+    out = []
+    for role in schema.trees.values():
+        root = base / role.root
+        if not root.is_dir():
+            continue
+        depths = _declared_depths(role)
+
+        def _scan(d: Path, depth: int):
+            for child in sorted(d.iterdir()):
+                if not child.is_dir() or child.is_symlink():
+                    continue
+                if segment_ignored(schema, child.name):
+                    continue
+                if role.name == "index":
+                    via = _detect_index_run(schema, child)
+                    if via is not None:
+                        out.append({"role": role.name, "path": child,
+                                    "leaf": child.name, "depth": depth,
+                                    "at_declared_depth": depth in depths,
+                                    "detected_via": via,
+                                    "parsed": parse_run_id(schema, child.name)})
+                        continue  # never descend into a detected run
+                else:
+                    if depth == role.max_levels + 1:
+                        out.append({"role": role.name, "path": child,
+                                    "leaf": child.name, "depth": depth,
+                                    "at_declared_depth": True,
+                                    "detected_via": "depth", "parsed": None})
+                        continue
+                # Descend only through level dirs (depth <= max_levels): the
+                # deepest run depth is max_levels+1, so wrong-depth detection
+                # covers the SHALLOW side — F7's real shape (a missing level
+                # segment). Never descending past run depth also keeps eval/
+                # analysis leaves inside an UNDETECTED dir from surfacing as
+                # phantom wrong-depth runs.
+                if depth <= role.max_levels:
+                    _scan(child, depth + 1)
+
+        _scan(root, 1)
+    return out
+
+
+def walk_symlinks(schema: TreeSchema, base) -> list:
+    """Every non-ignored symlink inside the declared trees (aliases + pointers).
+
+    target is the RESOLVED Path when it exists, None when dangling."""
+    base = Path(base)
+    out = []
+    for role in schema.trees.values():
+        root = base / role.root
+        if not root.is_dir():
+            continue
+        for p in sorted(root.rglob("*")):
+            rel = p.relative_to(root)
+            if any(segment_ignored(schema, s) for s in rel.parts):
+                continue
+            if p.is_symlink():
+                target = p.resolve() if p.exists() else None
+                out.append({"role": role.name, "path": p, "name": p.name,
+                            "target": target})
+    return out
+
+
+def runs_at_declared_depth(entries) -> list:
+    return [e for e in entries
+            if e["role"] == "index" and e["at_declared_depth"]]
