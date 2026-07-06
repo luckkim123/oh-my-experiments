@@ -403,7 +403,7 @@ but it BINDS hardest on re-analysis, where a prior report exists to measure agai
 - NEVER launch training or eval (no `launch.sh`, no live eval_dr). Analysis reads existing results only.
 - NEVER write a path by hand; every `.omx/`/output path comes from an `omx` verb or `omx_paths` getter, and every permanent-tree write goes through `atomic_path`/`atomic_dir`.
 - NEVER claim a number you did not get from code-exec. PNG vision is for SHAPE, not digits.
-- Candidate plots that the report doesn't reference are LEFT in scratch (omx clean sweeps them) — do not delete them yourself.
+- Candidate plots that the report doesn't reference are LEFT in scratch — do not delete them yourself. `omx clean --scope session` (dry-run) lists them; `--apply` moves them to `.omx/.trash/` only after the user approves.
 - Respond to the user in the user's language (the machine's locale language); keep report.md/code/markdown in English.
 - **D2 — report.md contains ONLY this run's analysis results.** Harness/engine-gap
   metadata, CLI-misuse notes, and metrics.yaml coverage checks do NOT belong in

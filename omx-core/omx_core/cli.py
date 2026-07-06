@@ -1016,6 +1016,38 @@ def _cmd_wiki_gc_apply(args) -> int:
     return 0
 
 
+def _cmd_clean(args) -> int:
+    """#22 -- review-gated cleanup: dry-run by default; --apply trashes, never rm."""
+    from omx_core.clean import apply_sweep, classify, purge_trash
+    paths = OmxPaths(root=_resolved_root(args))
+    try:
+        if args.purge_trash:
+            if not args.i_understand_permanent:
+                raise SystemExit(
+                    "--purge-trash requires --i-understand-permanent (the second "
+                    "explicit confirm; this deletes the trash for real)")
+            print(json.dumps(purge_trash(paths)))
+            return 0
+        days = None
+        if args.older_than is not None:
+            if not args.older_than.endswith("d") or not args.older_than[:-1].isdigit():
+                raise SystemExit("--older-than takes <N>d (days), e.g. 7d")
+            days = int(args.older_than[:-1])
+        entries = classify(paths, scope=args.scope, session_id=args.session_id,
+                           older_than_days=days)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    view = [{k: e[k] for k in ("path", "bytes", "reason")} for e in entries]
+    if not args.apply:
+        print(json.dumps({"dry_run": True, "scope": args.scope, "sweep": view,
+                          "total_bytes": sum(e["bytes"] for e in view)}))
+        return 0
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    res = apply_sweep(paths, entries, trash_ts=ts)
+    print(json.dumps({"dry_run": False, "scope": args.scope, **res}))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="omx", description="OMX experiment-analysis core")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1307,6 +1339,21 @@ def build_parser() -> argparse.ArgumentParser:
     pwga.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pwga.add_argument("--proposal", required=True, help="path to the approved wiki-gc proposal .md")
     pwga.set_defaults(func=_cmd_wiki_gc_apply)
+
+    pcl = sub.add_parser("clean",
+                         help="review-gated .omx cleanup: classify -> dry-run -> "
+                              "--apply moves to .omx/.trash (never rm; output "
+                              "trees are structurally unreachable)")
+    pcl.add_argument("--root", default=None, help="anchor; default: #13 ladder")
+    pcl.add_argument("--scope", default="session", choices=("session", "run", "all"))
+    pcl.add_argument("--session-id", default=None, dest="session_id")
+    pcl.add_argument("--older-than", default=None, dest="older_than",
+                     help="only sweep candidates older than <N>d (dir mtime)")
+    pcl.add_argument("--apply", action="store_true")
+    pcl.add_argument("--purge-trash", action="store_true", dest="purge_trash")
+    pcl.add_argument("--i-understand-permanent", action="store_true",
+                     dest="i_understand_permanent")
+    pcl.set_defaults(func=_cmd_clean)
 
     return p
 
