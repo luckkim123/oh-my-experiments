@@ -1001,6 +1001,19 @@ def _cmd_wiki_capture_flush(args) -> int:
     return 0
 
 
+def _cmd_wiki_promote_recipe(args) -> int:
+    """#15: promote a debugging page into .omx/recipes/ (reversible file
+    creation; the 3-question gate + human approval happen in the skill)."""
+    from omx_core.wiki.recipe import promote_recipe
+    try:
+        res = promote_recipe(OmxPaths(root=_resolved_root(args)), slug=args.slug,
+                             now=_now_iso(), name=args.name, force=args.force)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(res))
+    return 0
+
+
 def _cmd_wiki_query(args) -> int:
     paths = OmxPaths(root=_resolved_root(args))
     tags = [t.strip() for t in (args.tags or "").split(",") if t.strip()] or None
@@ -1482,6 +1495,15 @@ def build_parser() -> argparse.ArgumentParser:
                                "(SessionEnd rescue; always rc 0)")
     pwf.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pwf.set_defaults(func=_cmd_wiki_capture_flush)
+
+    pwp = wsub.add_parser("promote-recipe",
+                          help="#15: promote a high-value debugging page into "
+                               ".omx/recipes/<name>.md (human-gated in the skill)")
+    pwp.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    pwp.add_argument("--slug", required=True, help="source wiki page (category MUST be debugging)")
+    pwp.add_argument("--name", default=None, help="recipe filename (default: the slug)")
+    pwp.add_argument("--force", action="store_true", help="overwrite an existing recipe")
+    pwp.set_defaults(func=_cmd_wiki_promote_recipe)
 
     pwq = wsub.add_parser("query", help="keyword + tag search (tag>title>content, CJK-aware)")
     pwq.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")

@@ -69,6 +69,12 @@ Treat hits as PRIOR EVIDENCE feeding the diagnosis (a past confirmed cause is st
 evidence for that lane). If a prior probe was already tried, design a DIFFERENT
 discriminating probe. An empty result just means this is new ground.
 
+### Recipes (promoted procedures)
+
+Also list `.omx/recipes/` — a recipe matching the regression's symptom
+prescribes the discriminating checks a past diagnosis validated. Follow it as
+a checklist before inventing a new probe; cite it in the proposal.
+
 ## Act on engine-gap specs (close the engine self-specialization loop)
 
 exp-analyze records ENGINE-GAP SPECS — code-change specifications for the analysis

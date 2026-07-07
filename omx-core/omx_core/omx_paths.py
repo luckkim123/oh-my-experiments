@@ -248,6 +248,13 @@ class OmxPaths:
         """registry/.wiki-lock — file mutex for all wiki writes (fcntl)."""
         return self.omx_dir / "registry" / ".wiki-lock"
 
+    def recipes_dir(self) -> Path:
+        """Promoted diagnostic recipes (#15) — structured symptom->checks
+        checklists exp-analyze/exp-design read before diagnosis. NOT a gated
+        deliverable (report_guard does not cover it); the promoting session may
+        restructure a recipe after the verb creates it."""
+        return self.omx_dir / "recipes"
+
     # --- state.json (single global file) ---
     def state_json(self) -> Path:
         return self.omx_dir / "state.json"
