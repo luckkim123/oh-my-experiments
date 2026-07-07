@@ -45,6 +45,18 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.py", "capture_flush"],
+            "async": true
+          }
+        ]
+      }
     ]
   }
 }

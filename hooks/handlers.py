@@ -83,7 +83,41 @@ def route_emit(payload):
     }}
 
 
+# --- shared root resolution for omx_core-backed handlers ---------------------
+def _omx_root(payload) -> str:
+    """Resolve the .omx anchor from the hook payload's cwd via the #13 ladder.
+    Raises on failure — callers are fail-open and treat any raise as 'allow'."""
+    from omx_core.root import resolve_omx_root
+    cwd = payload.get("cwd")
+    if not isinstance(cwd, str) or not cwd:
+        raise ValueError("hook payload carries no usable cwd")
+    root, _source = resolve_omx_root(cwd=cwd)
+    return str(root)
+
+
+# --- capture_flush (spec 2.2): SessionEnd rescue --------------------------------
+def capture_flush(payload):
+    """Flush the produced-reports ledger into session-log wiki stubs.
+
+    Returns None ALWAYS: the platform ignores SessionEnd hook output entirely
+    (side effects only), so the flush's whole effect is the file-side capture.
+    Fail-open: no omx_core / no root / any error -> None, nothing written."""
+    try:
+        from datetime import datetime, timezone
+
+        from omx_core.omx_paths import OmxPaths
+        from omx_core.wiki.capture import flush_produced_reports
+
+        # naive-UTC now: capture writes wiki pages (the wiki's clock contract).
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+        flush_produced_reports(OmxPaths(root=_omx_root(payload)), now=now)
+    except Exception:
+        pass  # fail-open (D9): a broken flush degrades to no capture
+    return None
+
+
 HANDLERS = {
     "report_guard": report_guard,
     "route_emit": route_emit,
+    "capture_flush": capture_flush,
 }

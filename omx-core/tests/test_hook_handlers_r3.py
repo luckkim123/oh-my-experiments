@@ -75,3 +75,51 @@ def test_route_emit_through_runner():
     assert r.returncode == 0
     out = json.loads(r.stdout)
     assert out["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+
+
+# --- capture_flush (spec 2.2) ---
+
+def _stamped_report_root(tmp_path):
+    """Reuse the T3/T4 fixture chain to produce a root with a pending ledger."""
+    from omx_core import cli
+    prof = tmp_path / ".omx" / "profile"
+    prof.mkdir(parents=True)
+    (prof / "metrics.yaml").write_text(
+        "diagnostic_groups:\n  core:\n    - reward\nengine_markers:\n  - ENGINE-OK\n",
+        encoding="utf-8")
+    adir = (tmp_path / "experiments" / "rsl_rl" / "e2e" / "run1" / "analysis"
+            / "diagnose-20260707-000000")
+    adir.mkdir(parents=True)
+    report = adir / "report.md"
+    report.write_text(
+        "# Report\n\n## core\n\nreward improved. ENGINE-OK\n\n"
+        "[FINDING] reward improved by 2x\n"
+        "[EVIDENCE: code-exec — summary.json reward 0.5 -> 1.0]\n"
+        "[CONFIDENCE: HIGH]\n",
+        encoding="utf-8")
+    cli.main(["report-coverage", "--path", str(report), "--root", str(tmp_path)])
+    return tmp_path
+
+
+def test_capture_flush_flushes_ledger(tmp_path, capsys):
+    root = _stamped_report_root(tmp_path)
+    capsys.readouterr()
+    mod = _load_handlers()
+    out = mod.capture_flush({"cwd": str(root), "session_id": "whatever"})
+    assert out is None  # SessionEnd output is ignored by the platform
+    from omx_core.omx_paths import OmxPaths
+    from omx_core.wiki.storage import list_pages, read_page
+    paths = OmxPaths(root=str(root))
+    assert paths.produced_reports_ledger().read_text() == ""
+    pages = [read_page(paths, slug) for slug in list_pages(paths)]
+    assert any(p.category == "session-log" for p in pages)
+
+
+def test_capture_flush_empty_root_is_silent_none(tmp_path):
+    mod = _load_handlers()
+    assert mod.capture_flush({"cwd": str(tmp_path)}) is None
+
+
+def test_capture_flush_fails_open_on_garbage_cwd():
+    mod = _load_handlers()
+    assert mod.capture_flush({"cwd": 12345}) is None
