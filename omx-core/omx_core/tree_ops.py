@@ -31,14 +31,37 @@ def _skip_name(name: str) -> bool:
     return any(fnmatch.fnmatch(name, p) for p in _DEFAULT_IGNORE)
 
 
-def _iter_dirs(root: Path, max_depth: int):
-    """(dir, depth) below root; symlinks and default-ignored segments skipped."""
+def _is_run_candidate(d: Path, iroot: Path) -> bool:
+    """Same predicate codify_tree uses to detect a run: manifest.json OR a
+    symlink escaping the index tree (kept in one place so the walker's
+    non-descent guard below can never diverge from the detection logic)."""
+    if (d / "manifest.json").is_file():
+        return True
+    for child in sorted(d.iterdir()):
+        if child.is_symlink() and child.exists():
+            try:
+                child.resolve().relative_to(iroot.resolve())
+            except ValueError:
+                return True
+    return False
+
+
+def _iter_dirs(root: Path, max_depth: int, *, iroot: Path | None = None):
+    """(dir, depth) below root; symlinks and default-ignored segments skipped.
+
+    Once a dir qualifies as a run candidate (per _is_run_candidate), its
+    children are not yielded — mirrors tree.py::walk_runs's "never descend
+    into a detected run" guard (~line 334), so nested manifest.json under a
+    run (e.g. <run>/analysis/diagnose-<ts>/manifest.json) is never miscounted
+    as a deeper run. iroot is the index root the candidate predicate resolves
+    escaping-symlink targets against; omit it to disable the guard entirely."""
     def _scan(d: Path, depth: int):
         for child in sorted(d.iterdir()):
             if not child.is_dir() or child.is_symlink() or _skip_name(child.name):
                 continue
             yield child, depth
-            if depth < max_depth:
+            if depth < max_depth and not (iroot is not None
+                                          and _is_run_candidate(child, iroot)):
                 yield from _scan(child, depth + 1)
     yield from _scan(root, 1)
 
@@ -57,7 +80,7 @@ def codify_tree(base, *, index_root=None, data_root=None) -> tuple:
 
     # 1. Run candidates: manifest.json OR a symlink entry escaping the index tree.
     runs = []
-    for d, depth in _iter_dirs(iroot, _MAX_SCAN_DEPTH):
+    for d, depth in _iter_dirs(iroot, _MAX_SCAN_DEPTH, iroot=iroot):
         has_manifest = (d / "manifest.json").is_file()
         pointers = []
         for child in sorted(d.iterdir()):
@@ -124,7 +147,7 @@ def codify_tree(base, *, index_root=None, data_root=None) -> tuple:
     # 6. Alias census: symlinks at level dirs targeting a run candidate.
     run_paths = {r["path"].resolve() for r in runs}
     aliases = {}
-    level_dirs = [(iroot, 0)] + [(d, dep) for d, dep in _iter_dirs(iroot, max_l)]
+    level_dirs = [(iroot, 0)] + [(d, dep) for d, dep in _iter_dirs(iroot, max_l, iroot=iroot)]
     for d, depth in level_dirs:
         for child in sorted(d.iterdir()):
             if child.is_symlink() and child.exists() and child.resolve() in run_paths:
@@ -151,6 +174,15 @@ def codify_tree(base, *, index_root=None, data_root=None) -> tuple:
                            "matched": len(pointer_targets), "sampled": sampled,
                            "note": "common-ancestor inference; may sit deeper than "
                                    "the true root when only one branch was observed"}
+    # data.levels is never inferred (single-branch ambiguity, same as data_root
+    # above) — always emitted empty; flagged here so a nested data/log tree
+    # (e.g. logs/<exp>/<group>/<run_id>) doesn't false-positive tree-audit T12
+    # "unindexed run" on the first run before a human fills the real depth.
+    if droot_rel:
+        report["data_levels"] = {"value": [], "matched": 0, "sampled": sampled,
+                                 "note": "not inferred — fill trees.data.levels "
+                                         "before relying on tree-audit against "
+                                         "the data tree (see tree.yaml comment)"}
 
     # 8. Eval modes + requires.
     modes = set()
@@ -190,7 +222,10 @@ def codify_tree(base, *, index_root=None, data_root=None) -> tuple:
         f"    levels: {_yaml_list(levels)}" if levels else "    levels: []",
     ]
     if droot_rel:
-        lines += ["  data:", f"    root: {droot_rel}", "    levels: []"]
+        lines += ["  data:", f"    root: {droot_rel}",
+                  "    # levels not inferred (single-branch ambiguity) — fill "
+                  "these before relying on tree-audit against the data tree",
+                  "    levels: []"]
     lines += [
         "run_id:",
         f"  grammar: \"<label>[_<tag>]_<ts>\"",

@@ -57,6 +57,16 @@ project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.jso
 - **5 workspace-identifier leaks in shipped prose (D12).** Removed forbidden
   per-workspace identifiers from checked-in docs/skills text, now guarded by the new
   distribution-axiom test.
+- **`tree-codify` no longer descends into a detected run (final-review MUST-FIX F1).**
+  Its run-candidate walker was missing the "never descend into a detected run" guard
+  that `tree.py::walk_runs` already had, so a run's own `analysis/<sub>/manifest.json`
+  (e.g. an exp-analyze diagnose report) was miscounted as a deeper run, inflating the
+  depth census. The walker now shares the same non-descent guard.
+- **`tree-codify` flags un-inferred `data.levels` (final-review MUST-FIX F2).** Codify
+  always emitted `data: {levels: []}` with no signal that the levels were never
+  inferred, so the first `tree-audit` on a nested data/log tree could false-positive
+  an "unindexed run". Codify now surfaces a `data_levels` report hint and a review
+  comment in the generated `tree.yaml` telling the reviewer to fill it in.
 
 ### Notes / spec deviations
 
