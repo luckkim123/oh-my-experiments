@@ -64,3 +64,21 @@ def test_list_campaigns(tmp_path, capsys):
     assert main(["campaign-list", "--root", str(tmp_path)]) == 0
     out = json.loads(capsys.readouterr().out)
     assert [c["campaign_id"] for c in out["campaigns"]] == ["camp_a", "camp_b"]
+
+
+def test_campaign_status_vanished_plan_loud_fails(tmp_path):
+    # T11 (R2 final-review triage): a vanished plan.json must be OmxError
+    # (rc2 via the CLI), never a raw FileNotFoundError traceback.
+    import pytest
+    from omx_core.campaign import campaign_status
+    from omx_core.omx_paths import OmxError, OmxPaths
+    paths = OmxPaths(root=str(tmp_path))
+    # create a minimal campaign the way this test file's other tests do
+    # (reuse the module-level helper/fixture); then remove the plan:
+    cdir = paths.campaign_dir("camp1")
+    cdir.mkdir(parents=True)
+    (cdir / "plan.json").write_text("{}", encoding="utf-8")
+    (cdir / "ledger.jsonl").write_text("", encoding="utf-8")
+    (cdir / "plan.json").unlink()
+    with pytest.raises(OmxError, match="plan.json"):
+        campaign_status(paths, "camp1")
