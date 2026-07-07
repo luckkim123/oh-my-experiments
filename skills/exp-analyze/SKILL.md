@@ -542,6 +542,13 @@ the core never decides *what* to remove; you do, and a human approves.
 Never hand-delete or hand-merge wiki pages with Edit/Write/rm: that bypasses the lock,
 the index regeneration, the append-log, and the git-recovery guard.
 
+For non-trivial gc runs, dispatch the `wiki-curator` agent (read-only) instead
+of drafting the proposal in this session: it runs the gc/lint diagnosis, reads
+every flagged page, and returns the `kind: wiki-gc` proposal BODY. Write its
+output to the proposal file UNCHANGED (author != applier), get the human
+approval, then `omx wiki gc-apply` as usual. The two-phase gc path itself is
+unchanged — the curator replaces only the hand-drafting step.
+
 ## Completeness gate — the backstop (GAP 4); the PRE-WRITE checklist is the real fix
 
 The PRE-WRITE checklist ("Before drafting" above) is what prevents a skipped group.
