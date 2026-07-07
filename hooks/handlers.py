@@ -116,8 +116,68 @@ def capture_flush(payload):
     return None
 
 
+# --- compact_breadcrumb (spec 2.3): post-compaction durable-state pointer ----
+# Registered SessionStart matcher "compact" (PreCompact carries no
+# additionalContext channel — docs v2.1.202). READ-ONLY per D-R3-6: the skills
+# write the breadcrumbs; this handler only points the fresh context at them.
+_NOTES_FRESH_S = 48 * 3600
+
+
+def compact_breadcrumb(payload):
+    try:
+        if payload.get("source") != "compact":
+            return None
+        import time
+
+        from omx_core.omx_paths import OmxPaths
+        from omx_core.state import load_state
+
+        paths = OmxPaths(root=_omx_root(payload))
+        omx = paths.omx_dir
+        lines = []
+        try:
+            cutoff = time.time() - _NOTES_FRESH_S
+            fresh = [str(p) for p in sorted(omx.glob("scratch/*/notes.md"))
+                     if p.stat().st_mtime >= cutoff]
+            if fresh:
+                lines.append("scratch notes (analysis breadcrumb trail): "
+                             + ", ".join(fresh))
+        except OSError:
+            pass
+        try:
+            env = load_state(paths).get("active_loop")
+            if env:
+                lines.append(
+                    f"armed exp-loop: run {env.get('run_id')} iteration "
+                    f"{env.get('iteration')} deadline {env.get('deadline')}")
+        except Exception:
+            pass
+        try:
+            queued = sorted(p.parent.name for p in omx.glob("runs/*/pending-launch.json"))
+            if queued:
+                lines.append("pending launches awaiting HUMAN approval: "
+                             + ", ".join(queued))
+        except OSError:
+            pass
+        if not lines:
+            return None  # silence over noise
+        body = (
+            "<omx-durable-state> this session was just compacted — re-read: "
+            + " | ".join(lines)
+            + " — scratch notes are the analysis breadcrumb trail; pending "
+              "launches require the human gate; an armed loop is resumed only "
+              "per exp-loop SKILL. </omx-durable-state>")
+        return {"hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": body,
+        }}
+    except Exception:
+        return None  # fail-open (D9)
+
+
 HANDLERS = {
     "report_guard": report_guard,
     "route_emit": route_emit,
     "capture_flush": capture_flush,
+    "compact_breadcrumb": compact_breadcrumb,
 }

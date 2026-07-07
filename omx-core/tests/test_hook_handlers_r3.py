@@ -123,3 +123,69 @@ def test_capture_flush_empty_root_is_silent_none(tmp_path):
 def test_capture_flush_fails_open_on_garbage_cwd():
     mod = _load_handlers()
     assert mod.capture_flush({"cwd": 12345}) is None
+
+
+# --- compact_breadcrumb (spec 2.3) ---
+
+def _omx_skeleton(tmp_path):
+    (tmp_path / ".omx").mkdir()
+    return tmp_path
+
+
+def test_breadcrumb_ignores_non_compact_source(tmp_path):
+    mod = _load_handlers()
+    _omx_skeleton(tmp_path)
+    assert mod.compact_breadcrumb({"cwd": str(tmp_path), "source": "startup"}) is None
+
+
+def test_breadcrumb_empty_state_is_none(tmp_path):
+    mod = _load_handlers()
+    _omx_skeleton(tmp_path)
+    assert mod.compact_breadcrumb({"cwd": str(tmp_path), "source": "compact"}) is None
+
+
+def test_breadcrumb_lists_recent_notes_and_pending_launch(tmp_path):
+    mod = _load_handlers()
+    root = _omx_skeleton(tmp_path)
+    notes = root / ".omx" / "scratch" / "s-20260707-abc" / "notes.md"
+    notes.parent.mkdir(parents=True)
+    notes.write_text("breadcrumb", encoding="utf-8")
+    pl = root / ".omx" / "runs" / "run1" / "pending-launch.json"
+    pl.parent.mkdir(parents=True)
+    pl.write_text("{}", encoding="utf-8")
+    out = mod.compact_breadcrumb({"cwd": str(root), "source": "compact"})
+    hso = out["hookSpecificOutput"]
+    assert hso["hookEventName"] == "SessionStart"
+    ctx = hso["additionalContext"]
+    assert "<omx-durable-state>" in ctx
+    assert str(notes) in ctx
+    assert "run1" in ctx
+
+
+def test_breadcrumb_stale_notes_excluded(tmp_path):
+    import os
+    import time
+    mod = _load_handlers()
+    root = _omx_skeleton(tmp_path)
+    notes = root / ".omx" / "scratch" / "s-20260101-old" / "notes.md"
+    notes.parent.mkdir(parents=True)
+    notes.write_text("old", encoding="utf-8")
+    old = time.time() - 49 * 3600  # past the 48h window
+    os.utime(notes, (old, old))
+    assert mod.compact_breadcrumb({"cwd": str(root), "source": "compact"}) is None
+
+
+def test_breadcrumb_reports_armed_loop(tmp_path):
+    mod = _load_handlers()
+    root = _omx_skeleton(tmp_path)
+    from omx_core.omx_paths import OmxPaths
+    from omx_core.state import load_state, save_state
+    paths = OmxPaths(root=str(root))
+    state = load_state(paths)
+    state["active_loop"] = {"run_id": "run9", "deadline": "2026-07-08T00:00:00+00:00",
+                            "iteration": 3, "hard_cap": 50, "armed_at": "x",
+                            "adopted_session": None}
+    save_state(paths, state)
+    out = mod.compact_breadcrumb({"cwd": str(root), "source": "compact"})
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "run9" in ctx and "armed" in ctx
