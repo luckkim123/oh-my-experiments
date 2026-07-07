@@ -4,6 +4,33 @@ Claude-free pytest cannot prove the platform fires the events or honors the
 output schemas. Execute in a real Claude Code session on this repo and record
 observed results here (evidence for the spec's platform-contract assumptions):
 
+## CLI/handler-level pre-verification (controller, isolated temp root, 2026-07-07)
+
+Not a substitute for the platform-fire checks below — these confirm the CLI +
+handler LOGIC in isolation; the platform must still be observed to actually
+FIRE each event. Editable install confirmed live (omx_core loads from
+`omx-core/omx_core`, `omx` on PATH), so `pip install -e` re-run is a no-op.
+
+- [x] loop_gate LOGIC: `omx loop-arm --root <tmp> --run-id probe --max-runtime 600`
+      persists `<tmp>/.omx/state.json` with the 6-key envelope
+      `{run_id, armed_at, deadline(aware +00:00), iteration:0, hard_cap:50,
+      adopted_session:null}`; calling `loop_gate({cwd:<tmp>, session_id:sess-ABC})`
+      returned `decision: block`, the continuation contained the D4 sentence
+      ("NEVER execute a training launch"), and iteration incremented to 1
+      (proving the gate read the arm-written state). `omx loop-disarm` returned
+      `{was_armed:true, iteration:0, reason:done}`.
+- [x] kill switch LOGIC: `run_hook.py:62/67` — `OMX_DISABLE=1` short-circuits ALL
+      handlers to no-op; `OMX_SKIP_HOOKS=a,b` no-ops named handlers.
+- [x] route_emit / capture_flush / compact_breadcrumb handler RETURN values are
+      pytest-covered (test_hook_handlers_r3 / test_capture_flush / test_loop_gate);
+      what remains unproven is only the PLATFORM actually firing them (below).
+
+## Platform-fire checks (HUMAN-run in a fresh Claude Code session — controller CANNOT self-verify these)
+
+Each requires the platform to fire a real hook event and the session to observe
+the result; a controller cannot run these without trapping/mutating its own
+working session (arming the gate on itself, self-compacting, ending itself):
+
 - [ ] route_emit: a fresh prompt shows the <omx-routing> STAGE block.
 - [ ] loop_gate: `omx loop-arm --run-id probe --max-runtime 600` -> ending a
       turn is blocked with the continuation prompt (containing the D4
