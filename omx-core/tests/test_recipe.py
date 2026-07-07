@@ -2,6 +2,7 @@
 wiki page into a diagnostic recipe, with the query-log usage signal. The OMC
 3-question gate is prompt-side; the verb is a reversible file creation."""
 import json
+from pathlib import Path
 
 import pytest
 
@@ -73,8 +74,11 @@ def test_promote_writes_recipe_with_frontmatter(tmp_path):
     paths = _paths(tmp_path)
     slug = _add_debug_page(paths)
     res = promote_recipe(paths, slug=slug, now=NOW)
-    recipe = paths.recipes_dir() / f"{slug}.md"
-    assert res["recipe"] == str(recipe) and res["query_count"] == 0
+    expected = paths.recipes_dir() / (slug.removesuffix(".md") + ".md")
+    assert res["recipe"] == str(expected) and res["query_count"] == 0
+    assert not res["recipe"].endswith(".md.md")
+    assert Path(res["recipe"]).name.count(".md") == 1
+    recipe = expected
     text = recipe.read_text(encoding="utf-8")
     assert text.startswith("---")
     assert f"source_slug: {slug}" in text
@@ -114,4 +118,6 @@ def test_cli_promote_recipe(tmp_path, capsys):
     capsys.readouterr()
     rc = cli.main(["wiki", "promote-recipe", "--slug", slug, "--root", str(tmp_path)])
     out = json.loads(capsys.readouterr().out)
-    assert rc == 0 and out["query_count"] == 0 and out["recipe"].endswith(f"{slug}.md")
+    assert rc == 0 and out["query_count"] == 0
+    assert out["recipe"].endswith(slug.removesuffix(".md") + ".md")
+    assert not out["recipe"].endswith(".md.md")

@@ -42,7 +42,7 @@ def promote_recipe(paths: OmxPaths, *, slug: str, now: str, name=None,
         raise OmxError(
             f"promote-recipe only promotes category 'debugging' pages; "
             f"{slug!r} is {page.category!r}.")
-    recipe_name = name or slug
+    recipe_name = (name or slug).removesuffix(".md")
     target = paths.recipes_dir() / f"{recipe_name}.md"
     if target.exists() and not force:
         raise OmxError(f"recipe already exists: {target} (pass --force to overwrite)")
