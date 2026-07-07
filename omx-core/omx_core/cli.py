@@ -962,6 +962,15 @@ def _cmd_wiki_capture_session(args) -> int:
     return 0
 
 
+def _cmd_wiki_capture_flush(args) -> int:
+    """Session-end rescue: capture every ledger-recorded stamped report (spec 2.2).
+    ALWAYS rc 0 — this runs at SessionEnd where a loud-fail helps nobody."""
+    from omx_core.wiki.capture import flush_produced_reports
+    res = flush_produced_reports(OmxPaths(root=_resolved_root(args)), now=_now_iso())
+    print(json.dumps(res))
+    return 0
+
+
 def _cmd_wiki_query(args) -> int:
     paths = OmxPaths(root=_resolved_root(args))
     tags = [t.strip() for t in (args.tags or "").split(",") if t.strip()] or None
@@ -1416,6 +1425,13 @@ def build_parser() -> argparse.ArgumentParser:
     pwc.add_argument("--run-id", default=None, dest="run_id",
                      help="optional run id added as a tag")
     pwc.set_defaults(func=_cmd_wiki_capture_session)
+
+    pwf = wsub.add_parser("capture-flush",
+                          help="capture ALL ledger-recorded stamped reports as "
+                               "session-log stubs, then truncate the ledger "
+                               "(SessionEnd rescue; always rc 0)")
+    pwf.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    pwf.set_defaults(func=_cmd_wiki_capture_flush)
 
     pwq = wsub.add_parser("query", help="keyword + tag search (tag>title>content, CJK-aware)")
     pwq.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
