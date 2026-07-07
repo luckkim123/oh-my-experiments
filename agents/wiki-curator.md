@@ -26,9 +26,11 @@ Procedure:
      conclusion belongs in MERGE (fold + note), not DELETE.
 3. Output (your final message, nothing else): the DRAFT PROPOSAL BODY in
    exactly the gc-apply parser format — a `kind: wiki-gc` document with
-   `## DELETE` (`- slug: <slug>` lines) and `## MERGE` (`- slug: <loser>` /
-   `  into: <survivor>` / `  from: <what to fold>` blocks), each entry followed
-   by a one-line rationale comment, plus a 3-line summary at the top. The
+   `## DELETE` (`- slug: <slug>` lines) and `## MERGE` (a `- into: <survivor>`
+   line opens each merge entry, followed by one indented `-   <loser-slug>`
+   line per page to fold in — no `- slug:`/`from:` labels under MERGE), each
+   entry followed by a one-line rationale comment, plus a 3-line summary at
+   the top. The
    calling session writes this to a file UNCHANGED, shows the human, and only
    then runs `omx wiki gc-apply`. If nothing should be removed, say so — an
    empty gc is a valid verdict.
