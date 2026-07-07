@@ -585,6 +585,7 @@ def test_every_public_path_getter_is_exercised(tmp_path):
         "wiki_dir": lambda: p.wiki_dir(),
         "wiki_page": lambda: p.wiki_page("slug1"),
         "state_json": lambda: p.state_json(),
+        "produced_reports_ledger": lambda: p.produced_reports_ledger(),
         # reference_evaluator loud-fails until Task 6 ships the .sh; exercise the
         # getter and accept either the resolved Path (Task 6 state) or the
         # absent-file loud-fail (Task 1 state), returning a Path either way.

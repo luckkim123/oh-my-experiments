@@ -252,6 +252,12 @@ class OmxPaths:
     def state_json(self) -> Path:
         return self.omx_dir / "state.json"
 
+    def produced_reports_ledger(self) -> Path:
+        """Root-level append-only ledger of gate-stamped reports awaiting
+        session-end wiki capture (spec 2.2). NOT under scratch/ — the stamp
+        write-site (report-coverage) has no session id (D-R3-5)."""
+        return self.omx_dir / "state" / "produced-reports.jsonl"
+
     # --- packaged reference profiles (committed; outside .omx, ships with pkg) ---
     @property
     def reference_dir(self) -> Path:

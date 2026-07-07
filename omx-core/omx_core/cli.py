@@ -605,14 +605,26 @@ def _cmd_report_coverage(args) -> int:
             omx_version = importlib.metadata.version("omx-core")
         except importlib.metadata.PackageNotFoundError:
             omx_version = None
+        stamp_now = _now_iso()
         _integrity.stamp_report(
             path, gates_passed=[g for g, cond in (
                 ("coverage", True),
                 ("baseline-regression", baseline_text is not None),
                 ("cross-run-refs", cross_refs is not None),
             ) if cond],
-            now=_now_iso(), omx_version=omx_version)
+            now=stamp_now, omx_version=omx_version)
         out["stamped"] = True
+        # spec 2.2: record the stamped report for session-end wiki capture.
+        # Advisory — a ledger append failure must not fail the coverage verb.
+        try:
+            ledger = OmxPaths(root=_resolved_root(args)).produced_reports_ledger()
+            ledger.parent.mkdir(parents=True, exist_ok=True)
+            with open(ledger, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(
+                    {"report": str(Path(path).resolve()), "stamped_at": stamp_now}) + "\n")
+        except OSError as e:
+            print(f"WARNING: produced-reports ledger append failed: {e}",
+                  file=sys.stderr)
     print(json.dumps(out))
     if res.partial_groups:
         # Warn loudly to stderr so the analyst cannot silently miss sub-group fields.
