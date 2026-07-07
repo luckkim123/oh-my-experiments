@@ -60,6 +60,20 @@ start another analyze/design/eval pass). The deadline NEVER triggers a launch �
 it only stops analysis. With no `--max-runtime`, run exactly ONE iteration then
 stop and report (a single supervised pass is the safe default).
 
+### Arm the Stop-hook gate (persistent mode)
+
+Once the user approves the max-runtime, arm the gate so the session keeps
+cycling even when a turn ends early:
+
+    omx loop-arm --run-id <run_id> --max-runtime <seconds> --root <root>
+
+State this to the user when arming (ownership is intended, not incidental):
+**arming dedicates this session to the loop until `omx loop-disarm`** — every
+turn-end is continued by the gate, including off-topic turns. The gate
+self-expires at the deadline and after 50 blocked stops (hard cap), and
+`OMX_SKIP_HOOKS=loop_gate` / `OMX_DISABLE=1` silence it instantly. Arming
+fails loudly if a loop is already armed for this root — disarm first.
+
 ## One iteration
 
 ### 1. Analyze
@@ -153,6 +167,13 @@ git-guarded executor). NEVER run gc-apply automatically.
 If a deadline is set and `omx loop-status` says it has NOT passed AND there is a
 fresh candidate to analyze next, repeat from step 1. Otherwise STOP.
 
+When you decide to STOP (deadline passed, work done, or the user says stop),
+disarm the gate FIRST so the Stop hook lets the session rest:
+
+    omx loop-disarm --reason done --root <root>
+
+Deadline expiry needs no action — the gate self-disarms on the next stop.
+
 ## Hard constraints (never violate)
 
 - NEVER launch or start a training run. exp-loop only QUEUES launches via
@@ -177,5 +198,11 @@ Report, in the user's language, to the user:
 - that the next launch is QUEUED at `runs/<run_id>/pending-launch.json` as
   **pending approval — not launched**, and the exact training command they should
   run after approving.
+- Confirm the gate is disarmed: `omx loop-status --run-id <run_id> --root <root>`
+  must report `"armed": null`. A dangling armed loop hijacks the next session's
+  stops until its deadline.
+- If a campaign id is set for this work, optionally dispatch the
+  `campaign-auditor` agent (read-only) on the campaign ledger and surface its
+  findings to the user before closing out.
 
 This is the last skill in the OMX set. There is no successor loop to start.

@@ -19,6 +19,10 @@ import signal
 import sys
 
 _TIMEOUT_S = 3
+# Per-handler SIGALRM budget overrides (seconds). capture_flush may re-parse
+# several reports at session end; SessionEnd is registered async so a longer
+# budget cannot delay the user (spec 2.2). Everything else keeps the default.
+_BUDGETS = {"capture_flush": 20}
 _HAS_ALARM = hasattr(signal, "SIGALRM")
 
 
@@ -66,7 +70,7 @@ def main() -> int:
     try:
         if _HAS_ALARM:
             signal.signal(signal.SIGALRM, _on_alarm)
-            signal.alarm(_TIMEOUT_S)
+            signal.alarm(_BUDGETS.get(name, _TIMEOUT_S))
         payload = json.load(sys.stdin)
         handler = _handlers().get(name)
         if handler is None:

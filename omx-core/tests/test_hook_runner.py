@@ -72,3 +72,33 @@ def test_no_sigalrm_platform_is_fail_open(monkeypatch):
     monkeypatch.setattr(_sys, "argv", ["run_hook.py", "ping"])
     rc = mod.main()
     assert rc == 0  # fail-open; no AttributeError escaped from the guarded alarm(0)
+
+
+def test_budget_table_exists_with_capture_flush_20():
+    # T1: per-handler budget override table (spec 2.2) — default stays 3s.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("run_hook_budget", str(RUNNER))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod._TIMEOUT_S == 3
+    assert mod._BUDGETS == {"capture_flush": 20}
+
+
+def test_budget_override_lets_slow_handler_finish(monkeypatch):
+    # With the sleep handler given a budget above its 5s nap, it completes
+    # instead of being reaped by the default 3s alarm.
+    import importlib.util
+    import io
+    import json as _json
+    import sys as _sys
+    spec = importlib.util.spec_from_file_location("run_hook_budget2", str(RUNNER))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(mod, "_BUDGETS", {"sleep": mod._TIMEOUT_S + 5})
+    captured = io.StringIO()
+    monkeypatch.setattr(_sys, "stdin", io.StringIO(_json.dumps({"x": 1})))
+    monkeypatch.setattr(_sys, "stdout", captured)
+    monkeypatch.setattr(_sys, "argv", ["run_hook.py", "sleep"])
+    rc = mod.main()
+    assert rc == 0
+    assert _json.loads(captured.getvalue())["woke"] is True

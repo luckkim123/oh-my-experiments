@@ -69,6 +69,12 @@ Treat hits as PRIOR EVIDENCE feeding the diagnosis (a past confirmed cause is st
 evidence for that lane). If a prior probe was already tried, design a DIFFERENT
 discriminating probe. An empty result just means this is new ground.
 
+### Recipes (promoted procedures)
+
+Also list `.omx/recipes/` — a recipe matching the regression's symptom
+prescribes the discriminating checks a past diagnosis validated. Follow it as
+a checklist before inventing a new probe; cite it in the proposal.
+
 ## Act on engine-gap specs (close the engine self-specialization loop)
 
 exp-analyze records ENGINE-GAP SPECS — code-change specifications for the analysis
@@ -207,6 +213,25 @@ setup, IS the proposed next experiment. It is a PROPOSAL — never run it.
    print(p)
    PY
    ```
+
+## Step 5 — independent review (author != reviewer — spec 2.5)
+
+The proposal is NOT final until a fresh reviewer has seen it. After writing
+proposals/<id>.md, dispatch the `proposal-reviewer` agent (read-only) with the
+proposal path and the workspace root. It runs `omx proposal-lint` +
+`omx probe-novelty` first, then judges discrimination / one-variable /
+provenance, and returns `{"verdict": "approve"|"revise", ...}`.
+
+- `approve` -> present the proposal to the user as pending-approval (unchanged
+  hard gate: the HUMAN decides whether the experiment runs).
+- `revise` -> address every major issue by RE-WRITING the proposal through this
+  skill's Step 4 (a new proposal artifact, never a hand-edit of the reviewed
+  one), then re-dispatch the reviewer. Do not present a `revise`-verdict
+  proposal to the user as ready.
+
+Never self-approve: the session that authored the proposal must not skip the
+reviewer because the proposal "looks obviously right" — that is exactly the
+failure mode this step exists to stop.
 
 ## Hard constraints (never violate)
 

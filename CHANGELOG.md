@@ -4,6 +4,77 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.4.0] - 2026-07-07 — R3: full harnessization
+
+### Added
+
+- **`route_emit` UserPromptSubmit STAGE checkpoint.** A new hook fires on every
+  user prompt and injects the `<omx-routing>` STAGE block, the same routing
+  checkpoint pattern OMC's `omha` uses, re-implemented natively so OMX carries
+  its own routing signal without a cross-harness dependency.
+- **Produced-reports ledger + `wiki capture-flush` (SessionEnd rescue).** Every
+  report-coverage stamp now appends to a produced-reports ledger; a new
+  `SessionEnd` hook (`capture_flush`, async, fail-open) rescues any report a
+  session produced but never explicitly captured into the wiki, closing the
+  "session that skips curation evaporates" gap (audit #11's hook half — the
+  ledger was the data half, this is the flush mechanism).
+- **`compact_breadcrumb` post-compaction durable-state pointer (SessionStart
+  matcher `compact`).** `PreCompact` carries no `additionalContext` channel
+  (platform docs v2.1.202), so the breadcrumb is delivered one step later, on
+  the first post-compaction `SessionStart`, carrying a pointer to durable state
+  (e.g. a fresh scratch notes file) so continuity survives compaction.
+- **`loop-arm`/`loop-disarm` + `loop_gate` thin Stop gate.** A persistent
+  exp-loop can now arm a `Stop` hook that blocks a turn from ending with a
+  continuation prompt (the frozen D4 sentence — never an instruction to
+  launch), until the session disarms it or the arming envelope self-expires;
+  arming records session adoption (`state.json adopted_session`) so only the
+  arming session's stops are gated.
+- **Agents `proposal-reviewer` / `wiki-curator` / `campaign-auditor`** (all
+  read-only). `proposal-reviewer` is the judgment half of the exp-design
+  self-approval fix (the mechanical half was `proposal-lint`); `wiki-curator`
+  drafts gc merge/delete proposals in the parser's real grammar; `campaign-auditor`
+  checks ledger hygiene.
+- **`wiki promote-recipe` (#15) + `.omx/recipes/` consumption.** Turns a
+  debugging wiki page into a reusable diagnostic recipe file under
+  `.omx/recipes/`; skills consume recipes as a new lookup step.
+- **Per-handler hook budgets.** `hooks/run_hook.py` carries a per-handler
+  SIGALRM budget table (default 3s; `capture_flush` gets a longer budget since
+  it may re-parse reports, but the async `SessionEnd` dispatch means the budget
+  cannot delay the user — spec 2.2) instead of one fixed timeout for every hook.
+- **Registration-parity + import-safety contract tests.** New tests assert the
+  5 hook registrations in `.claude-plugin/plugin.json` match what `run_hook.py`
+  actually dispatches, and that `omx_core` stays importable without optional
+  heavy dependencies.
+
+### Fixed
+
+- **`campaign-status` on a vanished `plan.json` loud-fails as `OmxError` rc 2**
+  instead of a raw `FileNotFoundError` (T11 carry-over from R2).
+
+### Verification
+
+- omx-core full pytest suite green: 726 passed / 1 pre-existing skip (baseline
+  before this release commit was already at this count — the version bump /
+  CHANGELOG / README changes carry no test-affecting code).
+- `python3 scripts/sync_version.py` fans `0.4.0` from `plugin.json` to
+  `omx-core/pyproject.toml`; `test_version_sync.py` asserts the two stay in
+  sync so drift fails pytest going forward.
+- Live-acceptance checklist (`.superpowers/sdd/live-acceptance.md`) covers what
+  pytest structurally cannot: does the platform actually fire each of the 5
+  hook registrations and honor their contracts (STAGE injection, async
+  dispatch, Stop-gate block/continue, post-compaction breadcrumb, kill switch).
+  To be executed after plugin reinstall + `pip install -e`, per spec 3.
+
+### Notes
+
+- **Warn→hard promotions and campaign-planning semantics are re-earmarked to
+  R4.** Soak data was ~zero one day after R2 shipped, so there isn't enough
+  signal yet to promote any warn-only gate to a hard fail.
+- **D4 is unchanged.** Nothing in v0.4.0 — including the new `loop_gate`
+  continuation prompt — can fire a training launch; `omx queue-launch` remains
+  the only training-adjacent verb, and it only ever queues a pending-approval
+  artifact.
+
 ## [0.3.0] - 2026-07-06 — R2: tree governance
 
 ### Added

@@ -1,6 +1,6 @@
 {
   "name": "oh-my-experiments",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Experiment-analysis & design harness for RL/ML research. Analyze training runs, diagnose regressions, design the next experiment, and run a semi-autonomous analyze-design-eval loop. Self-contained: an omx CLI over .omx/ JSON state, with zero runtime dependency on other harnesses.",
   "author": {
     "name": "luckkim123"
@@ -31,6 +31,52 @@
             "type": "command",
             "command": "python3",
             "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.py", "report_guard"]
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.py", "route_emit"]
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.py", "capture_flush"],
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.py", "compact_breadcrumb"]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.py", "loop_gate"]
           }
         ]
       }

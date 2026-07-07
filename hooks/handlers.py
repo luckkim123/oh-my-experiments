@@ -52,4 +52,184 @@ def report_guard(payload):
     }}
 
 
-HANDLERS = {"report_guard": report_guard}
+# --- route_emit (spec 2.1): experiment-work STAGE checkpoint -----------------
+# Static, stdlib-only, omd route_emit.py MVP pattern: the hook only names the
+# stage vocabulary and the routing non-negotiables; procedure bodies live in
+# skills/*/SKILL.md so there is nothing here to drift. Size-capped by test
+# (<= 2 KiB) because this is paid on every prompt.
+_ROUTE_CHECKPOINT = (
+    "<omx-routing>\n"
+    "실험 분석·설계 작업(훈련 런 분석, 다음 실험 설계, 반자율 루프, 실험 지식/트리 관리)이면,\n"
+    "행동 전에 한 줄로 판정하라:\n"
+    "- 단계: exp-init(프로파일 부트스트랩) / exp-analyze(런 분석→report) / "
+    "exp-design(다음 실험 proposal) / exp-loop(반자율 analyze→design→eval 루프) / "
+    "wiki(실험 지식 add·query·gc) / tree(출력 트리 codify·audit·scaffold) / "
+    "recipe(진단 절차 승격·소비).\n"
+    "단일 단계면 그 스킬/verb 직접, 반복 사이클이면 exp-loop.\n"
+    "⚠️ 훈련 launch는 절대 자동 실행 금지 — `omx queue-launch`로 큐만 (사람 승인 게이트).\n"
+    "⚠️ report.md는 hand-parse 금지 — `omx report-parse` 경유.\n"
+    "⚠️ 결과 SSOT는 experiments 트리 — 결과를 다른 곳에 쓰지 말 것.\n\n"
+    "실험 작업이면, 판정을 응답 맨 앞 omha ROUTE 줄 바로 다음에 이 한 줄로 출력하라(누락 금지):\n"
+    "STAGE(exp) → <exp-init|exp-analyze|exp-design|exp-loop|wiki|tree|recipe> · <한 줄 근거>\n"
+    "실험 작업이 아니면 이 블록 전체 무시(STAGE 줄도 출력하지 말 것).\n"
+    "</omx-routing>"
+)
+
+
+def route_emit(payload):
+    return {"hookSpecificOutput": {
+        "hookEventName": "UserPromptSubmit",
+        "additionalContext": _ROUTE_CHECKPOINT,
+    }}
+
+
+# --- shared root resolution for omx_core-backed handlers ---------------------
+def _omx_root(payload) -> str:
+    """Resolve the .omx anchor from the hook payload's cwd via the #13 ladder.
+    Raises on failure — callers are fail-open and treat any raise as 'allow'."""
+    from omx_core.root import resolve_omx_root
+    cwd = payload.get("cwd")
+    if not isinstance(cwd, str) or not cwd:
+        raise ValueError("hook payload carries no usable cwd")
+    root, _source = resolve_omx_root(cwd=cwd)
+    return str(root)
+
+
+# --- capture_flush (spec 2.2): SessionEnd rescue --------------------------------
+def capture_flush(payload):
+    """Flush the produced-reports ledger into session-log wiki stubs.
+
+    Returns None ALWAYS: the platform ignores SessionEnd hook output entirely
+    (side effects only), so the flush's whole effect is the file-side capture.
+    Fail-open: no omx_core / no root / any error -> None, nothing written."""
+    try:
+        from datetime import datetime, timezone
+
+        from omx_core.omx_paths import OmxPaths
+        from omx_core.wiki.capture import flush_produced_reports
+
+        # naive-UTC now: capture writes wiki pages (the wiki's clock contract).
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+        flush_produced_reports(OmxPaths(root=_omx_root(payload)), now=now)
+    except Exception:
+        pass  # fail-open (D9): a broken flush degrades to no capture
+    return None
+
+
+# --- compact_breadcrumb (spec 2.3): post-compaction durable-state pointer ----
+# Registered SessionStart matcher "compact" (PreCompact carries no
+# additionalContext channel — docs v2.1.202). READ-ONLY per D-R3-6: the skills
+# write the breadcrumbs; this handler only points the fresh context at them.
+_NOTES_FRESH_S = 48 * 3600
+
+
+def compact_breadcrumb(payload):
+    try:
+        if payload.get("source") != "compact":
+            return None
+        import time
+
+        from omx_core.omx_paths import OmxPaths
+        from omx_core.state import load_state
+
+        paths = OmxPaths(root=_omx_root(payload))
+        omx = paths.omx_dir
+        lines = []
+        try:
+            cutoff = time.time() - _NOTES_FRESH_S
+            fresh = [str(p) for p in sorted(omx.glob("scratch/*/notes.md"))
+                     if p.stat().st_mtime >= cutoff]
+            if fresh:
+                lines.append("scratch notes (analysis breadcrumb trail): "
+                             + ", ".join(fresh))
+        except OSError:
+            pass
+        try:
+            env = load_state(paths).get("active_loop")
+            if env:
+                lines.append(
+                    f"armed exp-loop: run {env.get('run_id')} iteration "
+                    f"{env.get('iteration')} deadline {env.get('deadline')}")
+        except Exception:
+            pass
+        try:
+            queued = sorted(p.parent.name for p in omx.glob("runs/*/pending-launch.json"))
+            if queued:
+                lines.append("pending launches awaiting HUMAN approval: "
+                             + ", ".join(queued))
+        except OSError:
+            pass
+        if not lines:
+            return None  # silence over noise
+        body = (
+            "<omx-durable-state> this session was just compacted — re-read: "
+            + " | ".join(lines)
+            + " — scratch notes are the analysis breadcrumb trail; pending "
+              "launches require the human gate; an armed loop is resumed only "
+              "per exp-loop SKILL. </omx-durable-state>")
+        return {"hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": body,
+        }}
+    except Exception:
+        return None  # fail-open (D9)
+
+
+# --- loop_gate (spec 2.4): thin Stop gate for exp-loop persistent mode -------
+# D-R3-1: a dumb gate. It reads {armed, deadline, iteration, hard_cap,
+# adopted_session}, blocks with a FROZEN continuation prompt, and never makes
+# an analyze/design/eval decision — those live in skills/exp-loop/SKILL.md.
+# stop_hook_active is deliberately not consulted: repeated blocks across turns
+# ARE the loop; runaway is bounded by the mandatory deadline and hard_cap.
+_LOOP_CONTINUATION = (
+    "omx exp-loop iteration {iteration} (run {run_id}): continue the cycle per "
+    "skills/exp-loop/SKILL.md — analyze -> design -> eval -> decide -> log. "
+    "Queue any training launch with `omx queue-launch` for human approval; "
+    "NEVER execute a training launch yourself (D4). When the deadline passes "
+    "or the work is done, run `omx loop-disarm --reason done`."
+)
+
+
+def loop_gate(payload):
+    try:
+        from datetime import datetime, timezone
+
+        from omx_core.loop import deadline_passed, disarm_loop
+        from omx_core.omx_paths import OmxPaths
+        from omx_core.state import load_state, save_state
+
+        paths = OmxPaths(root=_omx_root(payload))
+        state = load_state(paths)
+        env = state.get("active_loop")
+        if not env:
+            return None
+        now = datetime.now(timezone.utc).isoformat()
+        if deadline_passed(env["deadline"], now):
+            disarm_loop(paths, reason="deadline")
+            return None
+        if env.get("iteration", 0) >= env.get("hard_cap", 50):
+            disarm_loop(paths, reason="hard_cap")
+            return None
+        sid = payload.get("session_id")
+        adopted = env.get("adopted_session")
+        if adopted and sid and adopted != sid:
+            return None  # another session's loop — pass through untouched
+        if not adopted and sid:
+            env["adopted_session"] = sid  # first blocked session owns the loop
+        env["iteration"] = env.get("iteration", 0) + 1
+        state["active_loop"] = env
+        save_state(paths, state)
+        return {"decision": "block",
+                "reason": _LOOP_CONTINUATION.format(
+                    iteration=env["iteration"], run_id=env["run_id"])}
+    except Exception:
+        return None  # fail-open (D9): a broken gate must never trap a session
+
+
+HANDLERS = {
+    "report_guard": report_guard,
+    "route_emit": route_emit,
+    "capture_flush": capture_flush,
+    "compact_breadcrumb": compact_breadcrumb,
+    "loop_gate": loop_gate,
+}

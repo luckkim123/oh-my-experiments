@@ -101,3 +101,48 @@ def read_pending_launch(paths: OmxPaths, run_id):
         return json.loads(target.read_text())
     except ValueError as e:
         raise OmxError(f"pending-launch.json for {run_id!r} is corrupt: {e}") from e
+
+
+LOOP_HARD_CAP_DEFAULT = 50
+
+
+def arm_loop(paths: OmxPaths, *, run_id, now_iso, max_runtime_s,
+             hard_cap=LOOP_HARD_CAP_DEFAULT) -> dict:
+    """Arm the Stop-hook loop gate (spec 2.4). ONE loop per root until R4's
+    concurrency lock; arming while armed loud-fails. `max_runtime_s` is
+    MANDATORY by construction — an armed gate always self-expires (the
+    staleness guard that lets workspace-scoped gating be safe). The caller
+    injects `now_iso`; the CLI passes the AWARE UTC clock (naive/aware mixes
+    make deadline_passed loud-fail, which would silently fail-open the gate)."""
+    from omx_core.state import load_state, save_state
+    rid = _require_nonempty(run_id, "run_id")
+    if not isinstance(hard_cap, int) or isinstance(hard_cap, bool) or hard_cap <= 0:
+        raise OmxError(f"hard_cap must be a positive int, got {hard_cap!r}.")
+    state = load_state(paths)
+    if state.get("active_loop"):
+        raise OmxError(
+            "a loop is already armed for this root "
+            f"({state['active_loop'].get('run_id')!r}); run `omx loop-disarm` first.")
+    envelope = {
+        "run_id": rid,
+        "armed_at": now_iso,
+        "deadline": compute_deadline(now_iso, max_runtime_s),
+        "iteration": 0,
+        "hard_cap": hard_cap,
+        "adopted_session": None,
+    }
+    state["active_loop"] = envelope
+    save_state(paths, state)
+    return envelope
+
+
+def disarm_loop(paths: OmxPaths, *, reason="cancel") -> dict:
+    """Clear the armed loop (idempotent). The gate's standing exit (spec 2.4)."""
+    from omx_core.state import load_state, save_state
+    state = load_state(paths)
+    env = state.get("active_loop")
+    if env is None:
+        return {"was_armed": False, "iteration": None, "reason": reason}
+    state["active_loop"] = None
+    save_state(paths, state)
+    return {"was_armed": True, "iteration": env.get("iteration"), "reason": reason}

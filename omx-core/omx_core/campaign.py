@@ -85,7 +85,12 @@ def campaign_status(paths: OmxPaths, campaign_id) -> dict:
         rid = e.get("run_id")
         if rid and rid not in runs:
             runs.append(rid)
-    plan = json.loads(paths.campaign_plan(campaign_id).read_text())
+    plan_path = paths.campaign_plan(campaign_id)
+    if not plan_path.is_file():
+        raise OmxError(
+            f"campaign {campaign_id!r} has no plan.json at {plan_path} — was it "
+            "initialized with `omx campaign-init`?")
+    plan = json.loads(plan_path.read_text())
     return {"campaign_id": campaign_id, "plan": plan, "counts": counts,
             "runs": runs, "last": events[-1] if events else None}
 

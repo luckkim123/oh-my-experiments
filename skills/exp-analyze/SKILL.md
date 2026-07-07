@@ -126,6 +126,13 @@ Read the returned `matches` (snippets + confidence) as CONTEXT, not as findings 
 copy. If `corrupt_pages` is non-empty, mention it (lint will flag them). An empty
 result is normal for a fresh workspace.
 
+### Recipes (promoted procedures) — check before diagnosing
+
+List `.omx/recipes/` (plain `ls`; no verb needed). If a recipe's symptom
+matches the anomaly under analysis, follow it as a CHECKLIST — run its checks
+in order and cite the recipe in the report. Recipes exist because a past
+session paid for this diagnosis already; skipping a matching recipe re-buys it.
+
 ## Session id (for scratch isolation, B2)
 
 Resolve once at start: `omx session-id --session-id "<claude session id if known>"`.
@@ -475,6 +482,17 @@ something specific by each:
 Lean toward `pattern`/`decision`/`reference` for facts that recur across runs; reserve
 `debugging` for reusable how-to. Do not over-record working preferences as findings.
 
+### Promote a recurring procedure into a recipe (#15 — human-gated)
+
+When THIS analysis re-used a debugging-category wiki page as a step-by-step
+procedure (not merely as context), consider promotion. Gate on OMC's three
+questions — not Googleable / workspace-specific / took real effort — and ASK
+THE USER before promoting. On approval:
+`omx wiki promote-recipe --slug <debugging-page> --root <root>` (the JSON
+reports `query_count` — cite it when asking). The recipe file may then be
+restructured (symptom -> checks -> plots -> decision) — it is not a gated
+deliverable.
+
 ## Record engine-gap specs — the analysis ENGINE specializes too (not just knowledge)
 
 The wiki captures more than findings ABOUT runs; it also captures how this workspace's
@@ -541,6 +559,13 @@ the core never decides *what* to remove; you do, and a human approves.
 
 Never hand-delete or hand-merge wiki pages with Edit/Write/rm: that bypasses the lock,
 the index regeneration, the append-log, and the git-recovery guard.
+
+For non-trivial gc runs, dispatch the `wiki-curator` agent (read-only) instead
+of drafting the proposal in this session: it runs the gc/lint diagnosis, reads
+every flagged page, and returns the `kind: wiki-gc` proposal BODY. Write its
+output to the proposal file UNCHANGED (author != applier), get the human
+approval, then `omx wiki gc-apply` as usual. The two-phase gc path itself is
+unchanged — the curator replaces only the hand-drafting step.
 
 ## Completeness gate — the backstop (GAP 4); the PRE-WRITE checklist is the real fix
 

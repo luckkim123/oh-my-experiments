@@ -605,14 +605,26 @@ def _cmd_report_coverage(args) -> int:
             omx_version = importlib.metadata.version("omx-core")
         except importlib.metadata.PackageNotFoundError:
             omx_version = None
+        stamp_now = _now_iso()
         _integrity.stamp_report(
             path, gates_passed=[g for g, cond in (
                 ("coverage", True),
                 ("baseline-regression", baseline_text is not None),
                 ("cross-run-refs", cross_refs is not None),
             ) if cond],
-            now=_now_iso(), omx_version=omx_version)
+            now=stamp_now, omx_version=omx_version)
         out["stamped"] = True
+        # spec 2.2: record the stamped report for session-end wiki capture.
+        # Advisory — a ledger append failure must not fail the coverage verb.
+        try:
+            ledger = OmxPaths(root=_resolved_root(args)).produced_reports_ledger()
+            ledger.parent.mkdir(parents=True, exist_ok=True)
+            with open(ledger, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(
+                    {"report": str(Path(path).resolve()), "stamped_at": stamp_now}) + "\n")
+        except OSError as e:
+            print(f"WARNING: produced-reports ledger append failed: {e}",
+                  file=sys.stderr)
     print(json.dumps(out))
     if res.partial_groups:
         # Warn loudly to stderr so the analyst cannot silently miss sub-group fields.
@@ -848,13 +860,43 @@ def _cmd_loop_status(args) -> int:
         pending = read_pending_launch(paths, args.run_id)
     except OmxError as e:
         raise SystemExit(str(e))
+    from omx_core.state import load_state
+    try:
+        armed = load_state(paths).get("active_loop")
+    except ValueError as e:
+        raise SystemExit(f"state.json is corrupt: {e}")
     print(json.dumps({
         "run_id": args.run_id,
         "now": now,
         "deadline": deadline,
         "deadline_passed": passed,
         "pending_launch": pending,
+        "armed": armed,
     }))
+    return 0
+
+
+def _cmd_loop_arm(args) -> int:
+    """Arm the Stop-hook loop gate (spec 2.4). AWARE UTC clock — never _now_iso()."""
+    from omx_core.loop import arm_loop
+    now = args.now or datetime.now(timezone.utc).isoformat()
+    try:
+        env = arm_loop(OmxPaths(root=_resolved_root(args)), run_id=args.run_id,
+                       now_iso=now, max_runtime_s=args.max_runtime,
+                       hard_cap=args.hard_cap)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(env))
+    return 0
+
+
+def _cmd_loop_disarm(args) -> int:
+    from omx_core.loop import disarm_loop
+    try:
+        out = disarm_loop(OmxPaths(root=_resolved_root(args)), reason=args.reason)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(out))
     return 0
 
 
@@ -944,6 +986,28 @@ def _cmd_wiki_capture_session(args) -> int:
             OmxPaths(root=_resolved_root(args)), now=_now_iso(),
             report_text=report.read_text(encoding="utf-8"),
             report_ref=str(report), run_id=args.run_id)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(res))
+    return 0
+
+
+def _cmd_wiki_capture_flush(args) -> int:
+    """Session-end rescue: capture every ledger-recorded stamped report (spec 2.2).
+    ALWAYS rc 0 — this runs at SessionEnd where a loud-fail helps nobody."""
+    from omx_core.wiki.capture import flush_produced_reports
+    res = flush_produced_reports(OmxPaths(root=_resolved_root(args)), now=_now_iso())
+    print(json.dumps(res))
+    return 0
+
+
+def _cmd_wiki_promote_recipe(args) -> int:
+    """#15: promote a debugging page into .omx/recipes/ (reversible file
+    creation; the 3-question gate + human approval happen in the skill)."""
+    from omx_core.wiki.recipe import promote_recipe
+    try:
+        res = promote_recipe(OmxPaths(root=_resolved_root(args)), slug=args.slug,
+                             now=_now_iso(), name=args.name, force=args.force)
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(res))
@@ -1382,6 +1446,26 @@ def build_parser() -> argparse.ArgumentParser:
                          "computed as now + max-runtime (the leaving-work ceiling)")
     pl.set_defaults(func=_cmd_loop_status)
 
+    pla = sub.add_parser("loop-arm",
+                         help="arm the Stop-hook loop gate: one loop per root, "
+                              "mandatory --max-runtime self-expiry (spec 2.4)")
+    pla.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    pla.add_argument("--run-id", required=True, dest="run_id")
+    pla.add_argument("--max-runtime", required=True, type=int, dest="max_runtime",
+                     help="seconds until the gate self-expires (MANDATORY)")
+    pla.add_argument("--hard-cap", type=int, default=50, dest="hard_cap",
+                     help="max blocked stops before the gate self-disarms (default 50)")
+    pla.add_argument("--now", default=None,
+                     help="ISO-8601 aware instant for deterministic tests; default: real UTC clock")
+    pla.set_defaults(func=_cmd_loop_arm)
+
+    pld = sub.add_parser("loop-disarm",
+                         help="clear the armed loop gate (idempotent; the standing exit)")
+    pld.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    pld.add_argument("--reason", default="cancel",
+                     choices=["done", "deadline", "cancel", "hard_cap"])
+    pld.set_defaults(func=_cmd_loop_disarm)
+
     pw = sub.add_parser("wiki", help="workspace knowledge wiki (keyword-indexed, no embeddings)")
     wsub = pw.add_subparsers(dest="wiki_cmd", required=True)
 
@@ -1404,6 +1488,22 @@ def build_parser() -> argparse.ArgumentParser:
     pwc.add_argument("--run-id", default=None, dest="run_id",
                      help="optional run id added as a tag")
     pwc.set_defaults(func=_cmd_wiki_capture_session)
+
+    pwf = wsub.add_parser("capture-flush",
+                          help="capture ALL ledger-recorded stamped reports as "
+                               "session-log stubs, then truncate the ledger "
+                               "(SessionEnd rescue; always rc 0)")
+    pwf.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    pwf.set_defaults(func=_cmd_wiki_capture_flush)
+
+    pwp = wsub.add_parser("promote-recipe",
+                          help="#15: promote a high-value debugging page into "
+                               ".omx/recipes/<name>.md (human-gated in the skill)")
+    pwp.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    pwp.add_argument("--slug", required=True, help="source wiki page (category MUST be debugging)")
+    pwp.add_argument("--name", default=None, help="recipe filename (default: the slug)")
+    pwp.add_argument("--force", action="store_true", help="overwrite an existing recipe")
+    pwp.set_defaults(func=_cmd_wiki_promote_recipe)
 
     pwq = wsub.add_parser("query", help="keyword + tag search (tag>title>content, CJK-aware)")
     pwq.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
