@@ -86,3 +86,74 @@ def test_cli_loop_status_reports_armed(tmp_path, capsys):
     rc = cli.main(["loop-status", "--run-id", "run1", "--root", str(tmp_path)])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out["armed"]["run_id"] == "run1"
+
+
+# --- T8: loop_gate handler cascade (spec 2.4) ---
+
+def _load_handlers():
+    spec = importlib.util.spec_from_file_location("omx_handlers_gate", str(HANDLERS_PATH))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _payload(tmp_path, sid="sess-A"):
+    return {"cwd": str(tmp_path), "session_id": sid}
+
+
+def test_gate_allows_when_not_armed(tmp_path):
+    (tmp_path / ".omx").mkdir()
+    assert _load_handlers().loop_gate(_payload(tmp_path)) is None
+
+
+def test_gate_blocks_adopts_and_increments(tmp_path):
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=10 ** 8)
+    out = _load_handlers().loop_gate(_payload(tmp_path, "sess-A"))
+    assert out["decision"] == "block"
+    assert "run1" in out["reason"] and "iteration 1" in out["reason"]
+    assert "NEVER execute a training launch" in out["reason"]  # D4, frozen
+    env = load_state(p)["active_loop"]
+    assert env["adopted_session"] == "sess-A" and env["iteration"] == 1
+
+
+def test_gate_ignores_other_sessions_after_adoption(tmp_path):
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=10 ** 8)
+    mod = _load_handlers()
+    mod.loop_gate(_payload(tmp_path, "sess-A"))
+    assert mod.loop_gate(_payload(tmp_path, "sess-B")) is None
+    assert load_state(p)["active_loop"]["iteration"] == 1  # untouched by sess-B
+
+
+def test_gate_expired_deadline_self_disarms(tmp_path):
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso="2020-01-01T00:00:00+00:00", max_runtime_s=1)
+    assert _load_handlers().loop_gate(_payload(tmp_path)) is None
+    assert load_state(p)["active_loop"] is None  # disarmed(reason=deadline)
+
+
+def test_gate_hard_cap_self_disarms(tmp_path):
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=10 ** 8, hard_cap=2)
+    mod = _load_handlers()
+    assert mod.loop_gate(_payload(tmp_path))["decision"] == "block"
+    assert mod.loop_gate(_payload(tmp_path))["decision"] == "block"
+    assert mod.loop_gate(_payload(tmp_path)) is None  # 3rd stop: cap reached
+    assert load_state(p)["active_loop"] is None
+
+
+def test_gate_mixed_clock_fails_open(tmp_path):
+    # A NAIVE deadline in the envelope (should be impossible via loop-arm) makes
+    # deadline_passed raise; the handler must fail-open (allow), never crash.
+    from omx_core.state import load_state as ls, save_state as ss
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=60)
+    state = ls(p)
+    state["active_loop"]["deadline"] = "2026-07-07T12:00:00"  # naive
+    ss(p, state)
+    assert _load_handlers().loop_gate(_payload(tmp_path)) is None
+
+
+def test_gate_fails_open_on_garbage_payload():
+    assert _load_handlers().loop_gate({"cwd": None}) is None

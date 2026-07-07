@@ -175,9 +175,61 @@ def compact_breadcrumb(payload):
         return None  # fail-open (D9)
 
 
+# --- loop_gate (spec 2.4): thin Stop gate for exp-loop persistent mode -------
+# D-R3-1: a dumb gate. It reads {armed, deadline, iteration, hard_cap,
+# adopted_session}, blocks with a FROZEN continuation prompt, and never makes
+# an analyze/design/eval decision — those live in skills/exp-loop/SKILL.md.
+# stop_hook_active is deliberately not consulted: repeated blocks across turns
+# ARE the loop; runaway is bounded by the mandatory deadline and hard_cap.
+_LOOP_CONTINUATION = (
+    "omx exp-loop iteration {iteration} (run {run_id}): continue the cycle per "
+    "skills/exp-loop/SKILL.md — analyze -> design -> eval -> decide -> log. "
+    "Queue any training launch with `omx queue-launch` for human approval; "
+    "NEVER execute a training launch yourself (D4). When the deadline passes "
+    "or the work is done, run `omx loop-disarm --reason done`."
+)
+
+
+def loop_gate(payload):
+    try:
+        from datetime import datetime, timezone
+
+        from omx_core.loop import deadline_passed, disarm_loop
+        from omx_core.omx_paths import OmxPaths
+        from omx_core.state import load_state, save_state
+
+        paths = OmxPaths(root=_omx_root(payload))
+        state = load_state(paths)
+        env = state.get("active_loop")
+        if not env:
+            return None
+        now = datetime.now(timezone.utc).isoformat()
+        if deadline_passed(env["deadline"], now):
+            disarm_loop(paths, reason="deadline")
+            return None
+        if env.get("iteration", 0) >= env.get("hard_cap", 50):
+            disarm_loop(paths, reason="hard_cap")
+            return None
+        sid = payload.get("session_id")
+        adopted = env.get("adopted_session")
+        if adopted and sid and adopted != sid:
+            return None  # another session's loop — pass through untouched
+        if not adopted and sid:
+            env["adopted_session"] = sid  # first blocked session owns the loop
+        env["iteration"] = env.get("iteration", 0) + 1
+        state["active_loop"] = env
+        save_state(paths, state)
+        return {"decision": "block",
+                "reason": _LOOP_CONTINUATION.format(
+                    iteration=env["iteration"], run_id=env["run_id"])}
+    except Exception:
+        return None  # fail-open (D9): a broken gate must never trap a session
+
+
 HANDLERS = {
     "report_guard": report_guard,
     "route_emit": route_emit,
     "capture_flush": capture_flush,
     "compact_breadcrumb": compact_breadcrumb,
+    "loop_gate": loop_gate,
 }
