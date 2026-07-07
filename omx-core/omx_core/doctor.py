@@ -14,13 +14,14 @@ _DEPS = ("numpy", "yaml", "matplotlib", "tensorboard", "pandas")
 
 
 def run_doctor(root=None, plugin_root=None) -> dict:
+    from omx_core.root import resolve_omx_root
     try:
         omx_version = importlib.metadata.version("omx-core")
     except importlib.metadata.PackageNotFoundError:
         omx_version = None
-    profile_present = None
-    if root is not None:
-        profile_present = (Path(root) / ".omx" / "profile" / "metrics.yaml").exists()
+    resolved, stage = resolve_omx_root(explicit=root)
+    profile_present = (Path(resolved) / ".omx" / "profile" / "metrics.yaml").exists()
+    tree_yaml_present = (Path(resolved) / ".omx" / "profile" / "tree.yaml").exists()
     hooks_installed = None
     if plugin_root is not None:
         hooks_installed = (Path(plugin_root) / "hooks" / "run_hook.py").exists()
@@ -29,6 +30,9 @@ def run_doctor(root=None, plugin_root=None) -> dict:
         "python_version": sys.version.split()[0],
         "omx_core_importable": True,  # we are running from it
         "deps": {name: importlib.util.find_spec(name) is not None for name in _DEPS},
+        "resolved_root": str(resolved),
+        "root_stage": stage,
         "profile_present": profile_present,
+        "tree_yaml_present": tree_yaml_present,
         "hooks_installed": hooks_installed,
     }

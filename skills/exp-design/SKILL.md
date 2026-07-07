@@ -94,7 +94,7 @@ file lives:
   adapter AND the workspace's pure post-processing source (metrics, plots, comparison,
   heavy-tail/divergence stats). A spec may also create a NEW analysis module if `[WHERE]`
   says so.
-- OFF LIMITS: omx core and skills (never edit the harness itself); and any
+- OFF LIMITS: the harness's own core and skills (never edit the harness itself); and any
   experiment-determining source — model / reward / training / env code, anything whose
   change would alter the results themselves. That is what the probe proposes, separately;
   it is NEVER an analysis-time edit. When unsure whether a file "reads" or "produces"
@@ -235,3 +235,5 @@ Tell the user where the proposal is
 hypothesis and the one-variable probe in 2-3 lines, and remind them it is
 **pending approval — not launched**. Do not start a loop or run anything; the
 analyze→design→eval loop is exp-loop's job (#6).
+- Append the adopted proposal to the campaign ledger:
+  `omx campaign-log --id <group> --event note --data '{"proposal": "<proposal_id>"}'`.

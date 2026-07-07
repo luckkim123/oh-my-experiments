@@ -277,3 +277,17 @@ def test_lint_near_duplicate_reports_each_pair_once(tmp_path):
     dups = [i for i in res["issues"] if i["type"] == "near-duplicate"]
     # 3 mutually-similar pages -> at most C(3,2)=3 unordered pairs, never 6 ordered
     assert 1 <= len(dups) <= 3
+
+
+def test_lint_honors_profile_quality_floor(tmp_path):
+    # M-4: lint and `wiki add` must share one floor. lint_wiki (not audit_wiki --
+    # that name doesn't exist in this module) gains a quality_floor override.
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Tiny note",
+                            content="short", tags=[], category="debugging",
+                            confidence="high", sources=[], quality_score=10)
+    res = lint.lint_wiki(p, now="2026-05-31T10:01:00", stale_days=30, max_page_size=10240)
+    assert any(i["type"] == "low-quality" for i in res["issues"])
+    res2 = lint.lint_wiki(p, now="2026-05-31T10:01:00", stale_days=30,
+                          max_page_size=10240, quality_floor=1)
+    assert not any(i["type"] == "low-quality" for i in res2["issues"])

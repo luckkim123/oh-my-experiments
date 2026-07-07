@@ -4,6 +4,81 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.3.0] - 2026-07-06 — R2: tree governance
+
+### Added
+
+- **tree.yaml typed-section schema + 5 tree verbs.** `tree-codify`/`tree-audit`/
+  `tree-scaffold`/`tree-alias`/`tree-index` give the output-tree layout a declared,
+  machine-checkable schema instead of prose convention: codify infers `tree.yaml` from
+  a census of an existing tree (pending approval), audit validates the tree against it
+  (report-only, `--strict` escalates to rc 2), scaffold mints a run skeleton or eval
+  leaf per the schema (refuses existing leaves), alias creates/re-points a declared
+  symlink atomically, and index regenerates a marker-guarded `INDEX.md`.
+- **`omx clean` (#22).** Review-gated `.omx` cleanup: classify → dry-run → `--apply`
+  moves candidates to `.omx/.trash` (never `rm`; output trees stay structurally
+  unreachable), with `--scope {session,run,all}`, `--older-than`, and a
+  `--purge-trash --i-understand-permanent` path for the one irreversible step.
+- **Root resolution ladder (#13).** Every verb's `--root` is now optional: absent, it
+  resolves via `OMX_STATE_DIR` → `.omx-workspace` marker → cwd search, with
+  `OMX_NO_ROOT_LADDER` to opt out and force explicit `--root`.
+- **Campaign ledger + 4 verbs (#28).** `campaign-init`/`campaign-log`/`campaign-status`/
+  `campaign-list` track a multi-run campaign's plan and event history (launched/kept/
+  discarded/eval/note) under `.omx/campaigns/<id>/`, keyed by the tree's group segment.
+- **`probe-novelty` ledger scan.** Extends the existing wiki+proposals novelty check to
+  also scan campaign and run ledgers for prior outcomes on the same probe family.
+- **Skill-to-CLI contract test (#25).** A test asserting every CLI verb a skill's
+  markdown names is a verb the parser actually registers, so a skill can no longer
+  drift ahead of (or behind) the CLI.
+- **Distribution-axiom test (D12).** Mechanizes the "no per-workspace identifier ships
+  in core" rule as a pytest guard over checked-in prose (README/CHANGELOG/skills/docs),
+  rather than leaving it as an unenforced convention.
+
+### Changed
+
+- **`--root` optional everywhere.** Default = the resolution ladder; implicit callers
+  that used to require an explicit `--root` now resolve one — previously some verbs
+  either errored or silently skipped profile lookups without one.
+- **`omx doctor`** reports `resolved_root`/`root_stage`/`tree_yaml_present` and computes
+  `profile_present` against the resolved root (not a hardcoded path).
+- **`wiki lint`** honors the profile's `wiki_quality_floor` override (M-4) instead of a
+  single hardcoded threshold.
+- **`probe-novelty --path`** is now the canonical flag; `--proposal` is kept as a
+  deprecated alias for backward compatibility (M-6).
+- **`omx init`** additionally writes the default `tree.yaml` when one is absent.
+- **`wiki sync-profile`** projects `tree.yaml` into the reserved `profile.md` view, and
+  re-syncs correctly on same-second mtime ties (previously a same-second write could be
+  skipped as apparently up to date).
+
+### Fixed
+
+- **`run_hook.py` Windows SIGALRM noise (M-5).** The hook runner no longer emits a
+  spurious warning on platforms without `SIGALRM`.
+- **5 workspace-identifier leaks in shipped prose (D12).** Removed forbidden
+  per-workspace identifiers from checked-in docs/skills text, now guarded by the new
+  distribution-axiom test.
+- **`tree-codify` no longer descends into a detected run (final-review MUST-FIX F1).**
+  Its run-candidate walker was missing the "never descend into a detected run" guard
+  that `tree.py::walk_runs` already had, so a run's own `analysis/<sub>/manifest.json`
+  (e.g. an exp-analyze diagnose report) was miscounted as a deeper run, inflating the
+  depth census. The walker now shares the same non-descent guard.
+- **`tree-codify` flags un-inferred `data.levels` (final-review MUST-FIX F2).** Codify
+  always emitted `data: {levels: []}` with no signal that the levels were never
+  inferred, so the first `tree-audit` on a nested data/log tree could false-positive
+  an "unindexed run". Codify now surfaces a `data_levels` report hint and a review
+  comment in the generated `tree.yaml` telling the reviewer to fill it in.
+
+### Notes / spec deviations
+
+- `tree-scaffold --under` replaces the spec's illustrative `--exp`/`--group` flags:
+  level *names* are per-workspace instance data, and D12 forbids baking per-level flag
+  names into core.
+- The sync-profile same-second fix uses a strict-inequality mtime skip instead of
+  compose-and-compare, because the projection embeds its own regeneration timestamp
+  (the up-to-date guarantee is unchanged, just the check is cheaper).
+- Wiki grammar v1 documents a dash-only-label limitation: an underscore-label writer
+  only weakens tag-presence checks, not correctness.
+
 ## [0.2.0] - 2026-07-06 — R1: precision core + minimal gates
 
 A structural gap between what exp-analyze/exp-design *specified* and what the harness

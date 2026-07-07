@@ -569,6 +569,7 @@ def test_every_public_path_getter_is_exercised(tmp_path):
     calls = {
         "profile_file": lambda: p.profile_file("metrics.yaml"),
         "seal_json": lambda: p.seal_json(),
+        "tree_yaml": lambda: p.tree_yaml(),
         "run_dir": lambda: p.run_dir(rid),
         "results_tsv": lambda: p.results_tsv(rid),
         "ledger_json": lambda: p.ledger_json(rid),
@@ -590,6 +591,9 @@ def test_every_public_path_getter_is_exercised(tmp_path):
         "reference_evaluator": lambda: _ref_eval_path(p),
         "checkpoint_pointer_json": lambda: p.checkpoint_pointer_json(rid),
         "pending_launch_json": lambda: p.pending_launch_json(rid),
+        "campaign_dir": lambda: p.campaign_dir("camp_a"),
+        "campaign_plan": lambda: p.campaign_plan("camp_a"),
+        "campaign_ledger": lambda: p.campaign_ledger("camp_a"),
         "analysis_dir": lambda: p.analysis_dir(out, rid, aid),
         "report_md": lambda: p.report_md(out, rid, aid),
         "report_ko_md": lambda: p.report_ko_md(out, rid, aid),

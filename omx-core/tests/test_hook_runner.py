@@ -53,3 +53,22 @@ def test_omx_skip_hooks_other_name_still_runs():
 def test_timeout_fails_open():
     r = _run("sleep", {"x": 1})
     assert r.returncode == 0 and r.stdout.strip() == ""
+
+
+def test_no_sigalrm_platform_is_fail_open(monkeypatch):
+    # M-5: with SIGALRM absent (Windows shape), the runner must neither register
+    # the alarm nor crash in the finally-cleanup -- rc 0, fail-open. Needs direct
+    # module state control (_HAS_ALARM=False), which the subprocess-based _run()
+    # helper above cannot express, so this one test imports run_hook.py directly.
+    import importlib.util
+    import io
+    import json as _json
+    import sys as _sys
+    spec = importlib.util.spec_from_file_location("run_hook_m5", str(RUNNER))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(mod, "_HAS_ALARM", False)
+    monkeypatch.setattr(_sys, "stdin", io.StringIO(_json.dumps({"hello": 1})))
+    monkeypatch.setattr(_sys, "argv", ["run_hook.py", "ping"])
+    rc = mod.main()
+    assert rc == 0  # fail-open; no AttributeError escaped from the guarded alarm(0)

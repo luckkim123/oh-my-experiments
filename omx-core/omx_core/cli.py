@@ -58,6 +58,15 @@ def _finite_clean(obj):
     return _finite_or_none(obj)
 
 
+def _resolved_root(args) -> str:
+    """--root else the #13 ladder (explicit > OMX_STATE_DIR > marker > git > cwd)."""
+    root = getattr(args, "root", None)
+    if root:
+        return root
+    from omx_core.root import resolve_omx_root
+    return str(resolve_omx_root()[0])
+
+
 _ADAPTERS = {
     "eval_summary": EvalSummaryAdapter,
     "csv_longform": LongFormCsvAdapter,
@@ -92,7 +101,9 @@ def _resolve_ingest_bounds(args):
     """Flag > profile ingest_limits > None (adapter default). D12 override slot."""
     max_scalars = getattr(args, "max_scalars", None)
     max_bytes = getattr(args, "max_bytes", None)
-    root = getattr(args, "root", None)
+    root = getattr(args, "root", None) or None
+    if root is None:
+        root = _resolved_root(args)
     if root and (max_scalars is None or max_bytes is None):
         try:
             limits = load_profile_metrics(root).get("ingest_limits", {}) or {}
@@ -199,7 +210,7 @@ def _cmd_profile_seal(args) -> int:
     """Record the approved evaluator/launch sha256 seal (#0)."""
     from omx_core.seal import write_seal
     try:
-        seal = write_seal(OmxPaths(root=args.root), now=_now_iso())
+        seal = write_seal(OmxPaths(root=_resolved_root(args)), now=_now_iso())
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(seal))
@@ -218,7 +229,7 @@ def _cmd_eval(args) -> int:
     """
     from omx_core.seal import check_seal
     if args.root:
-        st = check_seal(OmxPaths(root=args.root))
+        st = check_seal(OmxPaths(root=_resolved_root(args)))
         if st["status"] == "mismatch":
             raise SystemExit(
                 f"profile files modified since seal ({st['mismatched']}); run "
@@ -273,7 +284,7 @@ def _cmd_plot_summary_bar(args, res) -> int:
     pairs = sorted((r.axis, r.value) for r in recs_for_field if r.dr_level == dr)
     labels = [p[0] for p in pairs]
     values = [p[1] for p in pairs]
-    out = OmxPaths(root=args.root).scratch_plots(session_id=args.session_id) / f"{metric}__{view}.png"
+    out = OmxPaths(root=_resolved_root(args)).scratch_plots(session_id=args.session_id) / f"{metric}__{view}.png"
     bar_plot(labels, values, out, title=f"{metric} ({view}, dr={dr})")
     print(json.dumps({"plot": str(out), "metric": metric, "view": view,
                       "dr_level": dr, "n_axes": len(labels)}))
@@ -308,7 +319,7 @@ def _cmd_plot(args) -> int:
     y = downsample(res.series[args.series])
     step_key = f"_step/{args.series}"
     x = downsample(res.series[step_key]) if step_key in res.series else np.arange(len(y))
-    out = OmxPaths(root=args.root).scratch_plots(session_id=args.session_id) / f"{metric}__{view}.png"
+    out = OmxPaths(root=_resolved_root(args)).scratch_plots(session_id=args.session_id) / f"{metric}__{view}.png"
     line_plot(x, {args.series: y}, out, title=f"{metric} ({view})")
     print(json.dumps({"plot": str(out), "metric": metric, "view": view,
                       "n_points": int(len(y))}))
@@ -320,7 +331,7 @@ def _cmd_promote(args) -> int:
 
     --referenced may be repeated. Loud-fails (rc 2) if any referenced PNG is absent
     in scratch (promote_plots raises OmxError -> SystemExit)."""
-    paths = OmxPaths(root=args.root)
+    paths = OmxPaths(root=_resolved_root(args))
     scratch = paths.scratch_plots(session_id=args.session_id)
     dest = paths.analysis_dir(
         args.output_root, args.run_id, args.analysis_id, group=getattr(args, "group", None)
@@ -347,7 +358,7 @@ def _cmd_init(args) -> int:
             raise SystemExit(f"--metrics-json is not valid JSON: {e}")
     else:
         metrics = default_metrics()
-    paths = OmxPaths(root=args.root)
+    paths = OmxPaths(root=_resolved_root(args))
     try:
         written = bootstrap_profile(
             paths, profile_name=args.profile_name, metrics=metrics, force=args.force)
@@ -359,6 +370,103 @@ def _cmd_init(args) -> int:
         "written": [p.name for p in written],
         "pending_approval": True,
     }))
+    return 0
+
+
+def _cmd_tree_codify(args) -> int:
+    """Infer tree.yaml from an existing tree (census; pending approval; spec 2.2)."""
+    from omx_core.tree import load_tree_schema
+    from omx_core.tree_ops import codify_tree
+    root = _resolved_root(args)
+    target = OmxPaths(root=root).tree_yaml()
+    if target.exists() and not args.force:
+        raise SystemExit(
+            f"{target} exists; pass --force to regenerate (tree-codify owns replacement)")
+    try:
+        text, report = codify_tree(Path(root), index_root=args.index_root,
+                                   data_root=args.data_root)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    with atomic_path(target) as tmp:
+        Path(tmp).write_text(text, encoding="utf-8")
+    load_tree_schema(target)  # round-trip guard: loader must accept our own output
+    print(json.dumps({"written": str(target), "pending_approval": True,
+                      "report": report}))
+    return 0
+
+
+def _cmd_tree_audit(args) -> int:
+    """Walk the declared trees against tree.yaml; report-only (spec 2.3)."""
+    from omx_core.tree import load_tree_schema
+    from omx_core.tree_audit import audit_tree
+    root = _resolved_root(args)
+    try:
+        schema = load_tree_schema(OmxPaths(root=root).tree_yaml())
+        res = audit_tree(schema, Path(root))
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(res))
+    if args.strict and res["counts"]["error"] > 0:
+        raise SystemExit(f"tree-audit: {res['counts']['error']} error(s) under --strict")
+    return 0
+
+
+def _cmd_tree_scaffold(args) -> int:
+    """Mint a run skeleton or an eval leaf per tree.yaml (spec 2.4; D4-safe)."""
+    from omx_core.tree import load_tree_schema
+    from omx_core.tree_ops import scaffold_eval, scaffold_run
+    root = _resolved_root(args)
+    try:
+        schema = load_tree_schema(OmxPaths(root=root).tree_yaml())
+        if args.eval_for is not None:
+            if args.mode is None:
+                raise SystemExit("--mode is required with --eval-for")
+            ts = args.ts or datetime.now().strftime(schema.ts_format)
+            out = scaffold_eval(schema, Path(root), args.eval_for, args.mode,
+                                now_ts=ts)
+        else:
+            if args.run_id is None:
+                raise SystemExit("--run-id (or --eval-for) is required")
+            out = scaffold_run(schema, Path(root), args.run_id,
+                               under=args.under or "", data_dir=args.data_dir)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps({"created": str(out)}))
+    return 0
+
+
+def _cmd_tree_alias(args) -> int:
+    """Manage declared alias symlinks (atomic re-point; spec 2.5)."""
+    from omx_core.tree import load_tree_schema
+    from omx_core.tree_ops import list_aliases, set_alias
+    root = _resolved_root(args)
+    try:
+        schema = load_tree_schema(OmxPaths(root=root).tree_yaml())
+        if args.list:
+            print(json.dumps({"aliases": list_aliases(schema, Path(root))}))
+            return 0
+        if not args.name or not args.run:
+            raise SystemExit("--name and --run are required (or --list)")
+        print(json.dumps(set_alias(schema, Path(root), args.name, args.run,
+                                   scope_path=args.scope_path)))
+    except OmxError as e:
+        raise SystemExit(str(e))
+    return 0
+
+
+def _cmd_tree_index(args) -> int:
+    """Regenerate (or --check) the generated INDEX.md at the index root (spec 2.6)."""
+    from omx_core.tree import load_tree_schema
+    from omx_core.tree_ops import write_index
+    root = _resolved_root(args)
+    try:
+        schema = load_tree_schema(OmxPaths(root=root).tree_yaml())
+        res = write_index(schema, Path(root), check=args.check, adopt=args.adopt)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(res))
+    if args.check and res["stale"]:
+        raise SystemExit("INDEX.md is stale — rerun `omx tree-index` to regenerate")
     return 0
 
 
@@ -461,7 +569,7 @@ def _cmd_report_coverage(args) -> int:
                 f"--cross-run-refs must be a JSON list of ref objects, "
                 f"got {type(cross_refs).__name__}")
     try:
-        profile = load_profile_metrics(args.root)
+        profile = load_profile_metrics(_resolved_root(args))
         res = check_coverage(text, profile, min_coverage=args.min_coverage,
                              baseline_text=baseline_text)
         xref = check_cross_run_refs(text, cross_refs) if cross_refs is not None else None
@@ -622,13 +730,19 @@ def _cmd_probe_novelty(args) -> int:
     """Warn-only novelty scan (spec 3.10): wiki + past proposals. Never fails."""
     from omx_core.proposal import jaccard, probe_tokens
     from omx_core.wiki.query import query_wiki
+    if args.path and args.proposal:
+        raise SystemExit("pass only one of --path/--proposal")
+    if args.path:
+        args.proposal = args.path
+    if not args.proposal:
+        raise SystemExit("--path is required")
     if not os.path.exists(args.proposal):
         raise SystemExit(f"proposal not found: {args.proposal}")
     with open(args.proposal, encoding="utf-8") as fh:
         toks = probe_tokens(fh.read())
     top = " ".join(sorted(toks)[:8])
     try:
-        hits = query_wiki(OmxPaths(root=args.root), now=_now_iso(), text=top,
+        hits = query_wiki(OmxPaths(root=_resolved_root(args)), now=_now_iso(), text=top,
                           tags=None, category=None, limit=5)
     except OmxError:
         hits = {"matches": []}
@@ -642,11 +756,53 @@ def _cmd_probe_novelty(args) -> int:
                 j = jaccard(toks, probe_tokens(fh.read()))
             if j >= 0.3:
                 similar.append({"path": fp, "jaccard": round(j, 3)})
-    out = {"wiki_hits": hits.get("matches", []), "similar_proposals": similar}
+    ledger_hits = []
+    lp = OmxPaths(root=_resolved_root(args))
+    camp_root = lp.omx_dir / "campaigns"
+    if camp_root.is_dir():
+        for led in sorted(camp_root.glob("*/ledger.jsonl")):
+            for line in led.read_text(encoding="utf-8").splitlines():
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                # launched is in-flight and eval is non-terminal; only
+                # outcome-bearing events feed novelty warnings.
+                if ev.get("event") not in ("kept", "discarded", "note"):
+                    continue
+                text = " ".join([str(ev.get("run_id") or ""),
+                                 json.dumps(ev.get("data") or {})])
+                j = jaccard(toks, probe_tokens(text))
+                if j >= 0.3:
+                    ledger_hits.append({"source": str(led),
+                                        "event": ev.get("event"),
+                                        "run_id": ev.get("run_id"),
+                                        "jaccard": round(j, 3)})
+    runs_root = lp.omx_dir / "runs"
+    if runs_root.is_dir():
+        for lj in sorted(runs_root.glob("*/ledger.json")):
+            try:
+                led = json.loads(lj.read_text())
+            except ValueError:
+                continue
+            for e in led.get("entries", []):
+                j = jaccard(toks, probe_tokens(str(e.get("description") or "")))
+                if j >= 0.3:
+                    ledger_hits.append({"source": str(lj),
+                                        "event": e.get("decision"),
+                                        "run_id": lj.parent.name,
+                                        "jaccard": round(j, 3)})
+    out = {"wiki_hits": hits.get("matches", []), "similar_proposals": similar, "ledger_hits": ledger_hits}
     print(json.dumps(out))
     if similar:
         print(f"WARNING: probe family overlaps {len(similar)} past proposal(s) — "
               "check their outcome before re-trying it", file=sys.stderr)
+    if ledger_hits:
+        outcomes = {}
+        for h in ledger_hits:
+            outcomes[h["event"]] = outcomes.get(h["event"], 0) + 1
+        print(f"WARNING: probe family appears in ledger history ({outcomes}) — "
+              "check the recorded outcome before re-trying it", file=sys.stderr)
     return 0
 
 
@@ -655,7 +811,7 @@ def _cmd_queue_launch(args) -> int:
 
     NEVER launches — writes runs/<run_id>/pending-launch.json and prints it.
     queued_at is the real clock, injected here (the core stays time-pure)."""
-    paths = OmxPaths(root=args.root)
+    paths = OmxPaths(root=_resolved_root(args))
     now = datetime.now(timezone.utc).isoformat()
     try:
         queue_pending_launch(
@@ -679,7 +835,7 @@ def _cmd_loop_status(args) -> int:
       2. --max-runtime <seconds>: deadline = now + max_runtime via compute_deadline.
       3. Neither: deadline_passed is None (no ceiling check).
     """
-    paths = OmxPaths(root=args.root)
+    paths = OmxPaths(root=_resolved_root(args))
     now = args.now or datetime.now(timezone.utc).isoformat()
     deadline = args.deadline
     try:
@@ -718,7 +874,7 @@ def _now_iso() -> str:
 
 
 def _cmd_wiki_add(args) -> int:
-    paths = OmxPaths(root=args.root)
+    paths = OmxPaths(root=_resolved_root(args))
     if args.from_report is not None:
         report = Path(args.from_report)
         if not report.exists():
@@ -742,7 +898,7 @@ def _cmd_wiki_add(args) -> int:
     from omx_core.wiki.quality import QUALITY_FLOOR, score_page
     floor = QUALITY_FLOOR
     try:
-        floor = int(load_profile_metrics(args.root).get("wiki_quality_floor", floor))
+        floor = int(load_profile_metrics(_resolved_root(args)).get("wiki_quality_floor", floor))
     except OmxError:
         pass  # no profile yet — built-in floor (D12: override slot, generic default)
     score, reasons = score_page(content, tags, title=args.title)
@@ -785,7 +941,7 @@ def _cmd_wiki_capture_session(args) -> int:
               "rc2 promotion earmarked for 0.3.0", file=sys.stderr)
     try:
         res = capture_session(
-            OmxPaths(root=args.root), now=_now_iso(),
+            OmxPaths(root=_resolved_root(args)), now=_now_iso(),
             report_text=report.read_text(encoding="utf-8"),
             report_ref=str(report), run_id=args.run_id)
     except OmxError as e:
@@ -795,7 +951,7 @@ def _cmd_wiki_capture_session(args) -> int:
 
 
 def _cmd_wiki_query(args) -> int:
-    paths = OmxPaths(root=args.root)
+    paths = OmxPaths(root=_resolved_root(args))
     tags = [t.strip() for t in (args.tags or "").split(",") if t.strip()] or None
     try:
         res = _wiki_query.query_wiki(
@@ -808,11 +964,17 @@ def _cmd_wiki_query(args) -> int:
 
 
 def _cmd_wiki_lint(args) -> int:
-    paths = OmxPaths(root=args.root)
+    paths = OmxPaths(root=_resolved_root(args))
+    from omx_core.wiki.quality import QUALITY_FLOOR
+    floor = QUALITY_FLOOR
+    try:
+        floor = int(load_profile_metrics(_resolved_root(args)).get("wiki_quality_floor", floor))
+    except OmxError:
+        pass  # no profile yet — built-in floor (D12: override slot, generic default)
     try:
         res = _wiki_lint.lint_wiki(
             paths, now=_now_iso(), stale_days=args.stale_days,
-            max_page_size=args.max_page_size)
+            max_page_size=args.max_page_size, quality_floor=floor)
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(res))
@@ -820,7 +982,7 @@ def _cmd_wiki_lint(args) -> int:
 
 
 def _cmd_wiki_list(args) -> int:
-    paths = OmxPaths(root=args.root)
+    paths = OmxPaths(root=_resolved_root(args))
     out = {"pages": [], "corrupt_pages": []}
     for slug in _wiki_storage.list_pages(paths):
         try:
@@ -840,7 +1002,7 @@ def _cmd_wiki_read(args) -> int:
     via serialize_page; --no-frontmatter emits only the body. An absent slug
     loud-fails (SystemExit) rather than printing nothing, so callers can tell
     'page absent' from 'page empty'."""
-    paths = OmxPaths(root=args.root)
+    paths = OmxPaths(root=_resolved_root(args))
     try:
         page = _wiki_storage.read_page(paths, args.slug)
     except OmxError as e:
@@ -857,7 +1019,7 @@ def _cmd_wiki_read(args) -> int:
 def _cmd_wiki_sync_profile(args) -> int:
     from omx_core.wiki.sync import sync_profile_page
     try:
-        res = sync_profile_page(OmxPaths(root=args.root), now=_now_iso())
+        res = sync_profile_page(OmxPaths(root=_resolved_root(args)), now=_now_iso())
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(res))
@@ -867,7 +1029,7 @@ def _cmd_wiki_sync_profile(args) -> int:
 def _cmd_wiki_gc(args) -> int:
     """Read-only gc diagnosis: lint result + page metadata, as one JSON object for
     the skill to read. Touches nothing (the skill judges, gc-apply executes)."""
-    paths = OmxPaths(root=args.root)
+    paths = OmxPaths(root=_resolved_root(args))
     try:
         lint_res = _wiki_lint.lint_wiki(paths, now=_now_iso(),
                                         stale_days=args.stale_days,
@@ -898,13 +1060,100 @@ def _cmd_wiki_gc_apply(args) -> int:
     proposal = Path(args.proposal)
     if not proposal.exists():
         raise SystemExit(f"proposal not found: {proposal}")
-    paths = OmxPaths(root=args.root)
+    paths = OmxPaths(root=_resolved_root(args))
     try:
         plan = _wiki_gc.parse_gc_proposal(proposal.read_text(encoding="utf-8"))
-        res = _wiki_gc.apply_gc(paths, plan, now=_now_iso(), repo_root=args.root)
+        res = _wiki_gc.apply_gc(paths, plan, now=_now_iso(), repo_root=_resolved_root(args))
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(res))
+    return 0
+
+
+def _cmd_clean(args) -> int:
+    """#22 -- review-gated cleanup: dry-run by default; --apply trashes, never rm."""
+    from omx_core.clean import apply_sweep, classify, purge_trash
+    paths = OmxPaths(root=_resolved_root(args))
+    try:
+        if args.purge_trash:
+            if not args.i_understand_permanent:
+                raise SystemExit(
+                    "--purge-trash requires --i-understand-permanent (the second "
+                    "explicit confirm; this deletes the trash for real)")
+            print(json.dumps(purge_trash(paths)))
+            return 0
+        days = None
+        if args.older_than is not None:
+            if not args.older_than.endswith("d") or not args.older_than[:-1].isdigit():
+                raise SystemExit("--older-than takes <N>d (days), e.g. 7d")
+            days = int(args.older_than[:-1])
+        entries = classify(paths, scope=args.scope, session_id=args.session_id,
+                           older_than_days=days)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    view = [{k: e[k] for k in ("path", "bytes", "reason")} for e in entries]
+    if not args.apply:
+        print(json.dumps({"dry_run": True, "scope": args.scope, "sweep": view,
+                          "total_bytes": sum(e["bytes"] for e in view)}))
+        return 0
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    res = apply_sweep(paths, entries, trash_ts=ts)
+    print(json.dumps({"dry_run": False, "scope": args.scope, **res}))
+    return 0
+
+
+def _cmd_campaign_init(args) -> int:
+    from omx_core.campaign import init_campaign
+    paths = OmxPaths(root=_resolved_root(args))
+    extra = None
+    if args.plan is not None:
+        try:
+            extra = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise SystemExit(f"--plan file unreadable or not JSON: {e}")
+        if not isinstance(extra, dict):
+            raise SystemExit("--plan file must contain a JSON object")
+    try:
+        plan = init_campaign(paths, args.id, now=_now_iso(), goal=args.goal,
+                             baseline_run_id=args.baseline_run, extra=extra)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(plan))
+    return 0
+
+
+def _cmd_campaign_log(args) -> int:
+    from omx_core.campaign import append_event
+    paths = OmxPaths(root=_resolved_root(args))
+    data = None
+    if args.data is not None:
+        try:
+            data = json.loads(args.data)
+        except ValueError as e:
+            raise SystemExit(f"--data must parse as a JSON object: {e}")
+        if not isinstance(data, dict):
+            raise SystemExit("--data must parse as a JSON object (got a non-object)")
+    try:
+        rec = append_event(paths, args.id, now=_now_iso(), event=args.event,
+                           run_id=args.run, session_id=args.session_id, data=data)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(rec))
+    return 0
+
+
+def _cmd_campaign_status(args) -> int:
+    from omx_core.campaign import campaign_status
+    try:
+        print(json.dumps(campaign_status(OmxPaths(root=_resolved_root(args)), args.id)))
+    except OmxError as e:
+        raise SystemExit(str(e))
+    return 0
+
+
+def _cmd_campaign_list(args) -> int:
+    from omx_core.campaign import list_campaigns
+    print(json.dumps({"campaigns": list_campaigns(OmxPaths(root=_resolved_root(args)))}))
     return 0
 
 
@@ -961,11 +1210,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     psl = sub.add_parser("profile-seal",
                          help="seal .omx/profile/{evaluator.sh,launch.sh} sha256 at approval time (#0)")
-    psl.add_argument("--root", required=True)
+    psl.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     psl.set_defaults(func=_cmd_profile_seal)
 
     pp = sub.add_parser("plot", help="render a candidate curve PNG into scratch (Claude-free IO)")
-    pp.add_argument("--root", required=True, help="anchor dir under which .omx/ lives")
+    pp.add_argument("--root", default=None, help="anchor dir under which .omx/ lives; default: #13 ladder")
     pp.add_argument("--session-id", required=True, dest="session_id")
     pp.add_argument("--path", required=True, help="series source (npz/TB/wandb)")
     pp.add_argument("--format", required=True)
@@ -976,7 +1225,7 @@ def build_parser() -> argparse.ArgumentParser:
     pp.set_defaults(func=_cmd_plot)
 
     pm = sub.add_parser("promote-plots", help="B3: move report-referenced PNGs scratch->permanent")
-    pm.add_argument("--root", required=True, help="anchor dir under which .omx/ lives")
+    pm.add_argument("--root", default=None, help="anchor dir under which .omx/ lives; default: #13 ladder")
     pm.add_argument("--session-id", required=True, dest="session_id",
                     help="session id whose scratch/<sid>/plots/ holds the candidates")
     pm.add_argument("--output-root", required=True, dest="output_root")
@@ -990,13 +1239,69 @@ def build_parser() -> argparse.ArgumentParser:
     pm.set_defaults(func=_cmd_promote)
 
     pn = sub.add_parser("init", help="bootstrap .omx/profile/ from interview metrics (Claude-free)")
-    pn.add_argument("--root", required=True, help="anchor dir under which .omx/ lives (design H4)")
+    pn.add_argument("--root", default=None, help="anchor dir under which .omx/ lives (design H4); default: #13 ladder")
     pn.add_argument("--profile-name", default="isaaclab", dest="profile_name",
                     help="committed reference profile to seed evaluator.sh from")
     pn.add_argument("--metrics-json", default=None, dest="metrics_json",
                     help="metrics.yaml content as a JSON object; omitted = built-in defaults")
     pn.add_argument("--force", action="store_true", help="overwrite an existing profile")
     pn.set_defaults(func=_cmd_init)
+
+    ptc = sub.add_parser("tree-codify",
+                         help="infer .omx/profile/tree.yaml from an existing tree "
+                              "(census-based, pending approval)")
+    ptc.add_argument("--root", default=None, help="anchor; default: #13 ladder")
+    ptc.add_argument("--index-root", default=None, dest="index_root",
+                     help="index tree root relative to the anchor (default: experiments)")
+    ptc.add_argument("--data-root", default=None, dest="data_root",
+                     help="data tree root override (default: inferred from pointers)")
+    ptc.add_argument("--force", action="store_true",
+                     help="regenerate over an existing tree.yaml")
+    ptc.set_defaults(func=_cmd_tree_codify)
+
+    pta = sub.add_parser("tree-audit",
+                         help="validate the output trees against tree.yaml "
+                              "(report-only; --strict escalates errors to rc 2)")
+    pta.add_argument("--root", default=None, help="anchor; default: #13 ladder")
+    pta.add_argument("--strict", action="store_true",
+                     help="rc 2 when any error-severity violation is found")
+    pta.set_defaults(func=_cmd_tree_audit)
+
+    pts = sub.add_parser("tree-scaffold",
+                         help="mint a run skeleton or an eval leaf per tree.yaml "
+                              "(refuses existing leaves — F4 guard; never launches)")
+    pts.add_argument("--root", default=None, help="anchor; default: #13 ladder")
+    pts.add_argument("--run-id", default=None, dest="run_id")
+    pts.add_argument("--under", default=None,
+                     help="'/'-joined level values, e.g. fw/exp_a/camp_a")
+    pts.add_argument("--data-dir", default=None, dest="data_dir",
+                     help="training log dir the data_pointer symlink targets")
+    pts.add_argument("--eval-for", default=None, dest="eval_for",
+                     help="run spec (path or exact leaf) to mint an eval leaf under")
+    pts.add_argument("--mode", default=None, help="eval mode (must be in eval_modes)")
+    pts.add_argument("--ts", default=None, help="explicit timestamp (tests)")
+    pts.set_defaults(func=_cmd_tree_scaffold)
+
+    ptl = sub.add_parser("tree-alias",
+                         help="create/re-point a DECLARED alias symlink to a run "
+                              "(atomic; refuses undeclared names and dangling targets)")
+    ptl.add_argument("--root", default=None, help="anchor; default: #13 ladder")
+    ptl.add_argument("--name", default=None)
+    ptl.add_argument("--run", default=None, help="run spec (path or exact leaf)")
+    ptl.add_argument("--scope-path", default=None, dest="scope_path",
+                     help="explicit alias location (required when the scope "
+                          "level is optional and absent on the target)")
+    ptl.add_argument("--list", action="store_true")
+    ptl.set_defaults(func=_cmd_tree_alias)
+
+    pti = sub.add_parser("tree-index",
+                         help="regenerate the generated INDEX.md at the index root "
+                              "(marker-guarded; --check reports staleness as rc 2)")
+    pti.add_argument("--root", default=None, help="anchor; default: #13 ladder")
+    pti.add_argument("--check", action="store_true")
+    pti.add_argument("--adopt", action="store_true",
+                     help="overwrite an unmarked (hand-written) INDEX.md")
+    pti.set_defaults(func=_cmd_tree_index)
 
     prp = sub.add_parser("report-parse", help="parse exp-analyze report.md -> JSON findings (Claude-free)")
     prp.add_argument("--path", required=True, help="path to an exp-analyze report.md")
@@ -1012,7 +1317,7 @@ def build_parser() -> argparse.ArgumentParser:
         "report-coverage",
         help="lint report.md for diagnostic-group + engine-marker completeness (GAP 4; loud-fail)")
     prc.add_argument("--path", required=True, help="path to an exp-analyze report.md")
-    prc.add_argument("--root", required=True, help="workspace root holding .omx/profile/metrics.yaml")
+    prc.add_argument("--root", default=None, help="workspace root holding .omx/profile/metrics.yaml; default: #13 ladder")
     prc.add_argument(
         "--min-coverage", type=float, default=None, dest="min_coverage",
         help="strict mode: require this FRACTION (0<f<=1) of each group's tokens to be "
@@ -1048,15 +1353,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     ppn = sub.add_parser("probe-novelty",
                          help="warn-only: was this probe family already tried? (wiki + past proposals)")
-    ppn.add_argument("--root", required=True)
-    ppn.add_argument("--proposal", required=True)
+    ppn.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    ppn.add_argument("--path", default=None, help="proposal path (canonical flag)")
+    ppn.add_argument("--proposal", default=None, help="alias of --path (deprecated)")
     ppn.add_argument("--proposals-dir", default=None, dest="proposals_dir",
                      help="dir of past proposals/<id>.md to compare against")
     ppn.set_defaults(func=_cmd_probe_novelty)
 
     pq = sub.add_parser("queue-launch",
                         help="queue the next training launch as pending-approval (B8; never fires)")
-    pq.add_argument("--root", required=True)
+    pq.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pq.add_argument("--run-id", required=True)
     pq.add_argument("--proposal-id", required=True)
     pq.add_argument("--launch-delta", required=True)
@@ -1065,7 +1371,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     pl = sub.add_parser("loop-status",
                         help="report deadline-ceiling + pending-launch as JSON (Claude-free)")
-    pl.add_argument("--root", required=True)
+    pl.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pl.add_argument("--run-id", required=True)
     pl.add_argument("--deadline", default=None,
                     help="ISO-8601 deadline; omit to skip the ceiling check")
@@ -1080,7 +1386,7 @@ def build_parser() -> argparse.ArgumentParser:
     wsub = pw.add_subparsers(dest="wiki_cmd", required=True)
 
     pwa = wsub.add_parser("add", help="add/merge a page, OR --from-report to extract candidates")
-    pwa.add_argument("--root", required=True)
+    pwa.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pwa.add_argument("--title", default=None)
     pwa.add_argument("--category", default=None)
     pwa.add_argument("--tags", default=None, help="comma-separated")
@@ -1093,14 +1399,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     pwc = wsub.add_parser("capture-session",
                           help="write every report [FINDING] as a low-confidence session-log stub page (#11)")
-    pwc.add_argument("--root", required=True)
+    pwc.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pwc.add_argument("--from-report", required=True, dest="from_report")
     pwc.add_argument("--run-id", default=None, dest="run_id",
                      help="optional run id added as a tag")
     pwc.set_defaults(func=_cmd_wiki_capture_session)
 
     pwq = wsub.add_parser("query", help="keyword + tag search (tag>title>content, CJK-aware)")
-    pwq.add_argument("--root", required=True)
+    pwq.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pwq.add_argument("text", help="query text")
     pwq.add_argument("--tags", default=None, help="comma-separated tag filter")
     pwq.add_argument("--category", default=None)
@@ -1108,17 +1414,17 @@ def build_parser() -> argparse.ArgumentParser:
     pwq.set_defaults(func=_cmd_wiki_query)
 
     pwl = wsub.add_parser("lint", help="audit pages (orphan/stale/broken-ref/oversized), report-only")
-    pwl.add_argument("--root", required=True)
+    pwl.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pwl.add_argument("--stale-days", type=int, default=30, dest="stale_days")
     pwl.add_argument("--max-page-size", type=int, default=10240, dest="max_page_size")
     pwl.set_defaults(func=_cmd_wiki_lint)
 
     pwls = wsub.add_parser("list", help="catalog of pages (slug/title/category)")
-    pwls.add_argument("--root", required=True)
+    pwls.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pwls.set_defaults(func=_cmd_wiki_list)
 
     pwr = wsub.add_parser("read", help="print one page's full text by slug (loud-fail if absent)")
-    pwr.add_argument("--root", required=True)
+    pwr.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pwr.add_argument("--slug", required=True, help="page slug (with or without '.md')")
     pwr.add_argument("--no-frontmatter", action="store_true", dest="no_frontmatter",
                      help="emit only the body, omitting the '---' frontmatter block")
@@ -1126,12 +1432,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     pws = wsub.add_parser("sync-profile",
                           help="regenerate the reserved profile.md projection from .omx/profile/ (#17)")
-    pws.add_argument("--root", required=True)
+    pws.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pws.set_defaults(func=_cmd_wiki_sync_profile)
 
     pwg = wsub.add_parser("gc", help="read-only gc diagnosis (lint + page metadata as JSON); "
                                      "first step of the delete/merge path")
-    pwg.add_argument("--root", required=True)
+    pwg.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pwg.add_argument("--stale-days", type=int, default=30, dest="stale_days")
     pwg.add_argument("--max-page-size", type=int, default=10240, dest="max_page_size")
     pwg.set_defaults(func=_cmd_wiki_gc)
@@ -1140,9 +1446,52 @@ def build_parser() -> argparse.ArgumentParser:
                            help="apply an approved wiki-gc proposal (two-phase, git-guarded) -- "
                                 "THIS is how you delete/merge pages; there is no separate 'delete' "
                                 "subcommand by design (add is append-merge, removal is git-guarded gc)")
-    pwga.add_argument("--root", required=True)
+    pwga.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pwga.add_argument("--proposal", required=True, help="path to the approved wiki-gc proposal .md")
     pwga.set_defaults(func=_cmd_wiki_gc_apply)
+
+    pcl = sub.add_parser("clean",
+                         help="review-gated .omx cleanup: classify -> dry-run -> "
+                              "--apply moves to .omx/.trash (never rm; output "
+                              "trees are structurally unreachable)")
+    pcl.add_argument("--root", default=None, help="anchor; default: #13 ladder")
+    pcl.add_argument("--scope", default="session", choices=("session", "run", "all"))
+    pcl.add_argument("--session-id", default=None, dest="session_id")
+    pcl.add_argument("--older-than", default=None, dest="older_than",
+                     help="only sweep candidates older than <N>d (dir mtime)")
+    pcl.add_argument("--apply", action="store_true")
+    pcl.add_argument("--purge-trash", action="store_true", dest="purge_trash")
+    pcl.add_argument("--i-understand-permanent", action="store_true",
+                     dest="i_understand_permanent")
+    pcl.set_defaults(func=_cmd_clean)
+
+    pci = sub.add_parser("campaign-init", help="create .omx/campaigns/<id>/ "
+                         "(plan.json + empty ledger); id = the tree's group segment")
+    pci.add_argument("--root", default=None)
+    pci.add_argument("--id", required=True)
+    pci.add_argument("--goal", default=None)
+    pci.add_argument("--baseline-run", default=None, dest="baseline_run")
+    pci.add_argument("--plan", default=None, help="optional JSON file merged into plan.json")
+    pci.set_defaults(func=_cmd_campaign_init)
+
+    pcg = sub.add_parser("campaign-log", help="append one event to the campaign ledger")
+    pcg.add_argument("--root", default=None)
+    pcg.add_argument("--id", required=True)
+    pcg.add_argument("--event", required=True,
+                     choices=("launched", "kept", "discarded", "eval", "note"))
+    pcg.add_argument("--run", default=None)
+    pcg.add_argument("--data", default=None, help="JSON object payload")
+    pcg.add_argument("--session-id", default=None, dest="session_id")
+    pcg.set_defaults(func=_cmd_campaign_log)
+
+    pcs = sub.add_parser("campaign-status", help="aggregate one campaign's ledger")
+    pcs.add_argument("--root", default=None)
+    pcs.add_argument("--id", required=True)
+    pcs.set_defaults(func=_cmd_campaign_status)
+
+    pcll = sub.add_parser("campaign-list", help="list campaigns with event counts")
+    pcll.add_argument("--root", default=None)
+    pcll.set_defaults(func=_cmd_campaign_list)
 
     return p
 

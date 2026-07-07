@@ -84,7 +84,7 @@ def validate_run_id(value) -> str:
 
 
 def validate_group(value) -> str:
-    """Validate an optional run-grouping prefix (e.g. ``rsl_rl/albc_trpo_teacher/dr_harder``).
+    """Validate an optional run-grouping prefix (e.g. ``rsl_rl/exp_a_teacher/dr_sweep``).
 
     A *group* lets runs cluster under the output_root by experiment_name / purpose
     (``output_root/<group>/<run_id>/...``) instead of flat ``output_root/<run_id>/...``.
@@ -189,6 +189,12 @@ class OmxPaths:
         Not in _PROFILE_FILES: bootstrap never writes it; profile-seal owns it."""
         return self.profile_dir / "seal.json"
 
+    def tree_yaml(self) -> Path:
+        """profile/tree.yaml — the declarative tree schema (R2, D10).
+        Not in _PROFILE_FILES: `omx init` writes the generic default only when
+        absent; `omx tree-codify` owns replacement."""
+        return self.profile_dir / "tree.yaml"
+
     # --- runs/<run_id>/ (run-bound) ---
     def run_dir(self, run_id) -> Path:
         return self.omx_dir / "runs" / self._check_run_id(run_id)
@@ -278,6 +284,19 @@ class OmxPaths:
         this artifact and stops. The human reads it, approves, and launches by
         hand. Run-bound, sits beside the ledger trio."""
         return self.run_dir(run_id) / "pending-launch.json"
+
+    # --- campaigns/<campaign_id>/ (cross-run ledger, R2 #28) ---
+    def campaign_dir(self, campaign_id) -> Path:
+        """campaigns/<campaign_id>/ — campaign_id shares the run_id CHARSET
+        (single segment; it IS the tree's group segment, D-R2-5) but not the
+        profile run_id regex (a campaign is a group name, not a run)."""
+        return self.omx_dir / "campaigns" / validate_run_id(campaign_id)
+
+    def campaign_plan(self, campaign_id) -> Path:
+        return self.campaign_dir(campaign_id) / "plan.json"
+
+    def campaign_ledger(self, campaign_id) -> Path:
+        return self.campaign_dir(campaign_id) / "ledger.jsonl"
 
     # --- permanent output tree (output_root passed per-getter; design 10.1) ---
     # These live OUTSIDE .omx/. output_root originates from metrics.yaml and is

@@ -13,7 +13,7 @@ def test_init_default_creates_profile(tmp_path, capsys):
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out["profile_name"] == "isaaclab"
-    assert sorted(out["written"]) == ["evaluator.sh", "launch.sh", "metrics.yaml", "rules.md"]
+    assert sorted(out["written"]) == ["evaluator.sh", "launch.sh", "metrics.yaml", "rules.md", "tree.yaml"]
     paths = OmxPaths(root=tmp_path)
     assert paths.profile_file("metrics.yaml").exists()
 

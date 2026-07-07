@@ -9,7 +9,11 @@ def test_doctor_shape_no_root():
     assert out["omx_core_importable"] is True
     assert isinstance(out["python_version"], str)
     assert set(out["deps"]) == {"numpy", "yaml", "matplotlib", "tensorboard", "pandas"}
-    assert out["profile_present"] is None
+    # no explicit --root: the #13 ladder resolves one (git toplevel here, no
+    # profile bootstrapped), so profile_present is now a real bool, not None.
+    assert isinstance(out["resolved_root"], str)
+    assert isinstance(out["root_stage"], str)
+    assert out["profile_present"] is False
     assert out["hooks_installed"] is None
 
 
@@ -33,3 +37,11 @@ def test_cli_doctor(tmp_path, capsys):
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out["profile_present"] is False
+
+
+def test_doctor_reports_ladder_fields(tmp_path):
+    from omx_core.doctor import run_doctor
+    out = run_doctor(root=str(tmp_path))
+    assert out["resolved_root"] == str(tmp_path)
+    assert out["root_stage"] == "explicit"
+    assert out["tree_yaml_present"] is False

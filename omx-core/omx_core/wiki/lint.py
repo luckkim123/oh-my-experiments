@@ -143,7 +143,7 @@ def _near_duplicate_candidates(pages: dict) -> list:
 
 
 def lint_wiki(paths: OmxPaths, *, now: str, stale_days: int = 30,
-              max_page_size: int = 10240) -> dict:
+              max_page_size: int = 10240, quality_floor: int = QUALITY_FLOOR) -> dict:
     """Audit every page. Returns {issues:[{slug,severity,type,message}], stats:{...}}."""
     now_dt = _parse_iso(now)
     slugs = storage.list_pages(paths)
@@ -185,9 +185,9 @@ def lint_wiki(paths: OmxPaths, *, now: str, stale_days: int = 30,
         if page.confidence == "low":
             issues.append({"slug": slug, "severity": "info", "type": "low-confidence",
                            "message": "confidence is 'low'; review and strengthen or remove"})
-        if page.quality_score is not None and page.quality_score < QUALITY_FLOOR:
+        if page.quality_score is not None and page.quality_score < quality_floor:
             issues.append({"slug": slug, "severity": "info", "type": "low-quality",
-                           "message": f"quality_score {page.quality_score} < {QUALITY_FLOOR}"})
+                           "message": f"quality_score {page.quality_score} < {quality_floor}"})
 
     issues.extend(_contradiction_candidates(pages))
     issues.extend(_near_duplicate_candidates(pages))

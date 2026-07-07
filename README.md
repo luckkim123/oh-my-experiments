@@ -48,6 +48,16 @@ top, never the sole enforcement point):
 | `omx probe-novelty --root <dir> --proposal <path>` | Warn-only: was this probe family already tried (wiki + past proposals)? |
 | `omx wiki capture-session --root <dir> --from-report <report.md>` | Write every report `[FINDING]` as a low-confidence session-log stub. |
 | `omx wiki sync-profile --root <dir>` | Regenerate the reserved `profile.md` projection from `.omx/profile/`. |
+| `omx tree-codify --root <dir>` | Infer `.omx/profile/tree.yaml` from an existing tree (census-based, pending approval). |
+| `omx tree-audit --root <dir>` | Validate the output trees against `tree.yaml` (report-only; `--strict` escalates to rc 2). |
+| `omx tree-scaffold --root <dir> --under <path>` | Mint a run skeleton or eval leaf per `tree.yaml` (refuses existing leaves; never launches). |
+| `omx tree-alias --root <dir> --name <n> --run <spec>` | Create/re-point a declared alias symlink to a run (atomic; refuses undeclared names). |
+| `omx tree-index --root <dir>` | Regenerate the generated `INDEX.md` at the index root (marker-guarded; `--check` reports staleness). |
+| `omx clean --root <dir>` | Review-gated `.omx` cleanup: classify → dry-run → `--apply` moves to `.omx/.trash` (never `rm`). |
+| `omx campaign-init --root <dir> --id <id>` | Create `.omx/campaigns/<id>/` (plan.json + empty ledger). |
+| `omx campaign-log --root <dir> --id <id> --event <e>` | Append one event (launched/kept/discarded/eval/note) to the campaign ledger. |
+| `omx campaign-status --root <dir> --id <id>` | Aggregate one campaign's ledger. |
+| `omx campaign-list --root <dir>` | List campaigns with event counts. |
 
 `omx eval --root <dir>` additionally runs the profile-seal preflight when `--root` is
 given, warning (never hard-failing in R1) on a missing or drifted seal.
@@ -74,7 +84,7 @@ oh-my-experiments/
 ├── skills/                # exp-init / exp-analyze / exp-design / exp-loop
 ├── omx-core/              # pure-Python package + pyproject.toml
 │   ├── omx_core/          #   omx_paths · ingest/ · reduce/ · evaluator · decision · loop
-│   │                      #   · ledger · report · state · profile · wiki/ · cli
+│   │                      #   · ledger · report · state · profile (tree.yaml) · wiki/ · cli
 │   └── tests/             #   Claude-free unit tests (pytest)
 ├── cards/                 # omha tier-1 lane card (placeholder)
 └── docs/

@@ -45,11 +45,12 @@ page tagged `engine`/`adapter`, e.g. `training_log_analysis_engine_reference_ada
 (its `[DIAGNOSIS]` / `[TREND]` / changepoint / plateau / regime lines), not just in
 final scalars you read off the curve. Run it, e.g.:
 
-`ALBC_LOGS_ROOT=<logs/rsl_rl> python3 .omx/profile/analyze_training.py <run-path> --tier 3 --deep`
+`<project-env-vars> python3 .omx/profile/analyze_training.py <run-path> --tier 3 --deep`
+(the exact env vars are project-specific; they are documented in that project's `.omx/profile/`)
 
 Hand-extracting FINAL SCALARS from raw TB/wandb **instead of** running the engine is
 the exact anti-pattern this skill forbids (it is what produced a count-looks-fine but
-diagnosis-empty report; cf the `omx-route-must-invoke` discipline — declaring the omx
+diagnosis-empty report; cf the `omx-route-must-invoke` discipline — declaring this
 lane is a commitment to invoke the engine, not to hand-read curves). The engine's
 time-series diagnosis (phase/plateau onset, PELT changepoints, HMM regime, lead-lag)
 CANNOT be reconstructed from end-of-run values. If you deliberately choose not to run
@@ -337,16 +338,16 @@ but it BINDS hardest on re-analysis, where a prior report exists to measure agai
 ## Building the report (permanent tree, via the core — never hand-write paths)
 
 > **Grouped runs (purpose / experiment_name layer).** When a run lives under an extra
-> grouping layer — `<output_root>/<group>/<run_id>/` (e.g. `rsl_rl/albc_trpo_teacher/dr_harder`)
+> grouping layer — `<output_root>/<group>/<run_id>/` (e.g. `rsl_rl/exp_a_teacher/dr_sweep`)
 > rather than flat `<output_root>/<run_id>/` — pass that prefix as `--group <group>` to
 > `omx promote-plots` AND as the keyword arg `group="<group>"` to every `OmxPaths` getter
 > (`report_md` / `report_ko_md` / `manifest_json` / `analysis_dir`), so the report lands
 > BESIDE the run instead of in a phantom flat dir. Omit it for flat layouts (the default).
 > **MUST: the group must contain ALL path segments between output_root and run_id.** For
 > RSL-RL runs the framework subdir is part of the group — pass `rsl_rl/<exp_name>/<purpose>`
-> (e.g. `rsl_rl/albc_trpo_teacher/dr_harder`), NOT just `<exp_name>/<purpose>`. Omitting
+> (e.g. `rsl_rl/exp_a_teacher/dr_sweep`), NOT just `<exp_name>/<purpose>`. Omitting
 > the framework segment silently drops the report into a sibling tree
-> (`experiments/albc_trpo_teacher/...` instead of `experiments/rsl_rl/albc_trpo_teacher/...`).
+> (`experiments/exp_a_teacher/...` instead of `experiments/rsl_rl/exp_a_teacher/...`).
 > The group string is validated (alnum/_/- per segment, no traversal). The `omx wiki add
 > --from-report` path then becomes `<output_root>/<group>/<run_id>/analysis/<analysis_id>/report.md`.
 
@@ -403,7 +404,7 @@ but it BINDS hardest on re-analysis, where a prior report exists to measure agai
 - NEVER launch training or eval (no `launch.sh`, no live eval_dr). Analysis reads existing results only.
 - NEVER write a path by hand; every `.omx/`/output path comes from an `omx` verb or `omx_paths` getter, and every permanent-tree write goes through `atomic_path`/`atomic_dir`.
 - NEVER claim a number you did not get from code-exec. PNG vision is for SHAPE, not digits.
-- Candidate plots that the report doesn't reference are LEFT in scratch (omx clean sweeps them) — do not delete them yourself.
+- Candidate plots that the report doesn't reference are LEFT in scratch — do not delete them yourself. `omx clean --scope session` (dry-run) lists them; `--apply` moves them to `.omx/.trash/` only after the user approves.
 - Respond to the user in the user's language (the machine's locale language); keep report.md/code/markdown in English.
 - **D2 — report.md contains ONLY this run's analysis results.** Harness/engine-gap
   metadata, CLI-misuse notes, and metrics.yaml coverage checks do NOT belong in
@@ -627,6 +628,9 @@ Then leave breadcrumbs UNCONDITIONALLY — before any manual curation, run
 `omx wiki capture-session --root <root> --from-report <report.md> --run-id <run_id>`
 so every finding lands as a low-confidence session-log stub even if this session
 never curates (slug append-merge absorbs the duplicate when you DO curate).
+
+- Tree hygiene (report-only): `omx tree-audit --root <root>` — surface violations
+  to the user; never auto-fix the tree.
 
 Then STOP.
 Do not propose or launch a next experiment — that is exp-design's job (#5).

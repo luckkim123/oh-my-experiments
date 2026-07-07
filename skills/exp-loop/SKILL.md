@@ -12,7 +12,7 @@ argument-hint: "[--root <dir>] <run_id> [--max-runtime <seconds>]"
 
 ```
 analyze (exp-analyze) -> design (exp-design) -> evaluate candidate (omx eval)
-   -> keep/discard (omx decision via the core) -> log the iteration (ledger)
+   -> keep/discard (a decision via the core engine) -> log the iteration (ledger)
    -> queue the next launch (pending approval) -> STOP for human, or repeat
 ```
 
@@ -104,7 +104,17 @@ decision is `discard`, tell the user the exact `git revert`/`git checkout`
 command to unwind to `baseline_commit` (from `ledger.json`) — but do NOT run it
 unless they explicitly approve (minimum-change revert, repo rule).
 
+- On keep: `omx tree-alias --name latest --run <run_id>` — explicit only; no
+  alias is ever re-pointed automatically.
+- Record the decision in the campaign ledger: `omx campaign-log --id <group>
+  --event <kept|discarded> --run <run_id> [--data '{"reason": "..."}']`
+  (campaign id = the run's group segment; init once with `omx campaign-init`).
+
 ### 5. Queue the next launch (NEVER fire it — B8)
+Mint the run skeleton first: `omx tree-scaffold --run-id <id> --under <levels>
+[--data-dir <logs dir>]` — grammar/tag violations and existing leaves are
+refused at mint time (F8/F4); nothing is launched.
+
 The proposal from step 2 is the next experiment. Queue it for human approval:
 
 ```bash
