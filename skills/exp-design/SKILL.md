@@ -208,6 +208,25 @@ setup, IS the proposed next experiment. It is a PROPOSAL — never run it.
    PY
    ```
 
+## Step 5 — independent review (author != reviewer — spec 2.5)
+
+The proposal is NOT final until a fresh reviewer has seen it. After writing
+proposals/<id>.md, dispatch the `proposal-reviewer` agent (read-only) with the
+proposal path and the workspace root. It runs `omx proposal-lint` +
+`omx probe-novelty` first, then judges discrimination / one-variable /
+provenance, and returns `{"verdict": "approve"|"revise", ...}`.
+
+- `approve` -> present the proposal to the user as pending-approval (unchanged
+  hard gate: the HUMAN decides whether the experiment runs).
+- `revise` -> address every major issue by RE-WRITING the proposal through this
+  skill's Step 4 (a new proposal artifact, never a hand-edit of the reviewed
+  one), then re-dispatch the reviewer. Do not present a `revise`-verdict
+  proposal to the user as ready.
+
+Never self-approve: the session that authored the proposal must not skip the
+reviewer because the proposal "looks obviously right" — that is exactly the
+failure mode this step exists to stop.
+
 ## Hard constraints (never violate)
 
 - NEVER launch training or eval. exp-design only WRITES a proposal. No `launch.sh`,
