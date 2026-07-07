@@ -3,6 +3,22 @@
 > Next session / after compact: reading just this file + `docs/design/2026-05-30-omx-experiment-harness-design.md` (source of truth)
 > is enough to continue. The per-build-order execution plans are in `docs/superpowers/plans/`.
 
+## NEXT (2026-07-07)
+
+**R3 (v0.4.0, full harnessization) done on branch `feat/v0.4.0-r3`.** Route emit
+STAGE checkpoint, produced-reports ledger + capture-flush, compact breadcrumb,
+loop-arm/loop-disarm + thin Stop gate, 3 read-only agents (proposal-reviewer,
+wiki-curator, campaign-auditor), `wiki promote-recipe` + `.omx/recipes/`, and
+the T11 campaign-status fix. See `CHANGELOG.md` `[0.4.0]` for the full list.
+
+**Next = R4 (loop robustness):** lock #1, revert #5, marker #7, plateau #8,
+faults #9/#27, staleness #12, `loop-status --all` #16 — plus the warn→hard
+promotions and campaign-planning semantics re-earmarked from R3 (soak data was
+~zero one day after R2 shipped).
+
+The sections below (`## Current State (summary)` onward) are the original
+v0.1-era handoff — kept for history, superseded by the CHANGELOG for R1-R3.
+
 ## Current State (summary)
 
 Repo `<repo>`. **OMX v0.1 = all build-orders (#0~#8) DONE + #7 finalize/deploy + deployment verification complete (2026-05-31).** working tree clean, origin/main synced (0 unpushed).

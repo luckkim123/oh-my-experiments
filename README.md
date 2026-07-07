@@ -76,6 +76,34 @@ first, then judges what code cannot (evidence-to-claim correspondence, earned vs
 asserted confidence, narrative consistency), returning a verdict the calling session
 applies through the same RE-analysis path.
 
+## Hooks
+
+Five registrations in `.claude-plugin/plugin.json`, all dispatched through the
+single `hooks/run_hook.py` runner:
+
+| Event | Matcher | Handler | Role |
+|:--|:--|:--|:--|
+| `PreToolUse` | `Edit\|Write` | `report_guard` | Blocks hand-editing a gated `report.md`/`report.ko.md`. |
+| `UserPromptSubmit` | — | `route_emit` | Injects the `<omx-routing>` STAGE checkpoint on every prompt. |
+| `SessionEnd` | — | `capture_flush` (async) | Rescues any report produced but never explicitly captured into the wiki. |
+| `SessionStart` | `compact` | `compact_breadcrumb` | Carries a durable-state pointer into the first post-compaction prompt (`PreCompact` has no `additionalContext` channel). |
+| `Stop` | — | `loop_gate` | Thin gate for an armed exp-loop: blocks a turn from ending with a continuation prompt until disarmed or self-expired. |
+
+Hooks never hard-block on their own error: any exception, timeout, or malformed
+input exits 0 (fail-open), each handler has its own SIGALRM budget in
+`run_hook.py`, and `OMX_DISABLE=1` disables all omx hooks while
+`OMX_SKIP_HOOKS=<name>,<name>,...` disables named handlers only. Every
+guarantee a hook enforces is also carried by a loud-fail CLI verb (D9): a
+disabled or misfiring hook degrades to "not yet caught," never "not enforced."
+
+`loop_gate`'s continuation prompt never instructs a training launch, regardless
+of how the loop is armed (D4) — `omx queue-launch` remains the only
+training-adjacent verb, and it only ever writes a pending-approval artifact.
+
+Because pytest cannot exercise real platform hook firing, `.superpowers/sdd/live-acceptance.md`
+is the checklist a human runs after a plugin reinstall to confirm each
+registration actually fires and honors its contract.
+
 ## Layout
 
 ```
