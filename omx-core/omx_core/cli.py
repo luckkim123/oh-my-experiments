@@ -949,6 +949,44 @@ def _cmd_loop_mark_done(args) -> int:
     return 0
 
 
+def _cmd_loop_health(args) -> int:
+    """Circuit check over the run ledger (#8/#9). Thresholds come from the
+    profile (plateau_discards / fault_streak, D12 override slots) with the
+    named-constant fallbacks. Prints the health JSON; rc 2 when EITHER circuit
+    is tripped (the authoritative stop path, D-R4-4). Loud-fails if the ledger
+    is absent/corrupt (read_run_ledger)."""
+    from omx_core.ledger import read_run_ledger
+    from omx_core.loop import (FAULT_STREAK_DEFAULT, PLATEAU_DISCARDS_DEFAULT,
+                               loop_health)
+    paths = OmxPaths(root=_resolved_root(args))
+    plateau = PLATEAU_DISCARDS_DEFAULT
+    fault = FAULT_STREAK_DEFAULT
+    try:
+        prof = load_profile_metrics(_resolved_root(args))
+        plateau = int(prof.get("plateau_discards", plateau))
+        fault = int(prof.get("fault_streak", fault))
+    except OmxError:
+        pass  # no profile yet -> named-constant defaults (D12: override slot)
+    try:
+        ledger = read_run_ledger(paths, args.run_id)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    health = loop_health(ledger, plateau_discards=plateau, fault_streak=fault)
+    print(json.dumps(health))
+    if health["plateau_tripped"] or health["fault_tripped"]:
+        why = []
+        if health["plateau_tripped"]:
+            why.append(f"plateau: {health['consecutive_discards']} consecutive "
+                       f"discards (>= {plateau}, knob plateau_discards)")
+        if health["fault_tripped"]:
+            why.append(f"fault_circuit: {health['consecutive_faults']} consecutive "
+                       f"evaluator faults (>= {fault}, knob fault_streak)")
+        raise SystemExit("loop-health tripped — " + "; ".join(why)
+                         + ". Stop the loop (`omx loop-disarm --reason "
+                         "plateau|fault_circuit`).")
+    return 0
+
+
 def _now_stamp() -> str:
     # local wall-clock; deterministic format YYYYMMDD-HHMMSS
     import time
@@ -1527,6 +1565,13 @@ def build_parser() -> argparse.ArgumentParser:
                      choices=["done", "deadline", "cancel", "error"])
     plm.add_argument("--summary", default=None, help="one-line summary (e.g. 'iteration 3')")
     plm.set_defaults(func=_cmd_loop_mark_done)
+
+    plh = sub.add_parser("loop-health",
+                         help="circuit check over the run ledger (#8/#9): rc 2 "
+                              "when plateau/fault streak trips (authoritative stop)")
+    plh.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    plh.add_argument("--run-id", required=True, dest="run_id")
+    plh.set_defaults(func=_cmd_loop_health)
 
     pw = sub.add_parser("wiki", help="workspace knowledge wiki (keyword-indexed, no embeddings)")
     wsub = pw.add_subparsers(dest="wiki_cmd", required=True)

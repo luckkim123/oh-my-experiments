@@ -19,7 +19,7 @@ B6 hybrid revert (LOCKED schema, design §0.1 / §9 carry):
 """
 import json
 
-from omx_core.omx_paths import OmxPaths, atomic_path
+from omx_core.omx_paths import OmxError, OmxPaths, atomic_path
 
 # byte-identical to runtime.ts AUTORESEARCH_RESULTS_HEADER (line 146)
 RESULTS_HEADER = "iteration\tcommit\tpass\tscore\tstatus\tdescription\n"
@@ -161,3 +161,19 @@ def record_iteration(paths: OmxPaths, run_id, *, iteration, decision,
         "reason": decision["decision_reason"], "evaluator": ev or None,
         "notes": decision.get("notes", []),
     })
+
+
+def read_run_ledger(paths: OmxPaths, run_id) -> dict:
+    """Return the parsed ledger.json for a run. Loud-fail (OmxError) if the
+    ledger is absent (a loop that never recorded) or corrupt — the read half
+    that D-R4-2's writers finally justify. The circuits (loop_health) and the
+    staleness check consume this."""
+    target = paths.ledger_json(run_id)
+    if not target.exists():
+        raise OmxError(
+            f"no ledger for run {run_id!r} at {target}; seed it with "
+            "`omx run-seed` before recording iterations")
+    try:
+        return json.loads(target.read_text())
+    except ValueError as e:
+        raise OmxError(f"ledger.json for {run_id!r} is corrupt: {e}") from e

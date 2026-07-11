@@ -201,3 +201,44 @@ def disarm_loop(paths: OmxPaths, *, reason="cancel", now_iso=None) -> dict:
         return {"was_armed": True, "iteration": env.get("iteration"), "reason": reason}
 
     return with_file_lock(paths.state_lock(), _crit)
+
+
+PLATEAU_DISCARDS_DEFAULT = 5
+FAULT_STREAK_DEFAULT = 3
+
+
+def loop_health(ledger, *, plateau_discards=PLATEAU_DISCARDS_DEFAULT,
+                fault_streak=FAULT_STREAK_DEFAULT) -> dict:
+    """Circuit signals over the ledger tail (#8/#9, spec 2.6). PURE — no clock,
+    no IO; clock-safe by construction. Two independent tail runs from the most
+    recent entry backward:
+      - consecutive_discards: stops at the first keep/bootstrap
+      - consecutive_faults: stops at the first non-error evaluator status
+    Any keep resets the discard streak; the fault streak resets on any
+    non-error entry (a keep counts as non-error). Returns the streaks, the trip
+    flags against the thresholds, the iteration count, and the 1-based index of
+    the last keep (None if never)."""
+    entries = ledger.get("entries", []) if isinstance(ledger, dict) else []
+    last_kept_iteration = None
+    for i, e in enumerate(entries, start=1):
+        if e.get("decision") in ("keep", "bootstrap"):
+            last_kept_iteration = i
+    consecutive_discards = 0
+    for e in reversed(entries):
+        if e.get("decision") in ("keep", "bootstrap"):
+            break
+        consecutive_discards += 1
+    consecutive_faults = 0
+    for e in reversed(entries):
+        if (e.get("evaluator") or {}).get("status") == "error":
+            consecutive_faults += 1
+        else:
+            break
+    return {
+        "consecutive_discards": consecutive_discards,
+        "consecutive_faults": consecutive_faults,
+        "iterations": len(entries),
+        "last_kept_iteration": last_kept_iteration,
+        "plateau_tripped": consecutive_discards >= plateau_discards,
+        "fault_tripped": consecutive_faults >= fault_streak,
+    }
