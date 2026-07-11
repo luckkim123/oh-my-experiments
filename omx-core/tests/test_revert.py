@@ -59,6 +59,34 @@ def test_plan_non_repo_loud_fails(tmp_path):
         plan_revert(str(tmp_path), "abc", protected=[".omx/"])
 
 
+def test_plan_filters_unicode_named_allowlisted_paths(tmp_path):
+    """git quote-escapes non-ASCII names under --name-only (core.quotepath
+    default true); -z must be used so the protected prefix still matches."""
+    repo = tmp_path / "proj"
+    base = _init_repo(repo)
+    (repo / ".omx").mkdir()
+    (repo / ".omx" / "한글파일.json").write_text("{}")
+    _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "add unicode")
+    (repo / ".omx" / "한글파일.json").write_text('{"x": 1}')
+    _git(repo, "commit", "-aqm", "bump unicode")
+    plan = plan_revert(str(repo), base, protected=[".omx/"])
+    assert any("한글파일" in s for s in plan["skipped_allowlist"])
+    assert not any("한글파일" in s for s in plan["would_revert"])
+
+
+def test_plan_filters_quote_bearing_allowlisted_paths(tmp_path):
+    repo = tmp_path / "proj"
+    base = _init_repo(repo)
+    (repo / ".omx").mkdir()
+    (repo / ".omx" / 'a "quoted" file.json').write_text("{}")
+    _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "add quoted")
+    (repo / ".omx" / 'a "quoted" file.json').write_text('{"x": 1}')
+    _git(repo, "commit", "-aqm", "bump quoted")
+    plan = plan_revert(str(repo), base, protected=[".omx/"])
+    assert any("quoted" in s for s in plan["skipped_allowlist"])
+    assert not any("quoted" in s for s in plan["would_revert"])
+
+
 # --- apply_revert ---
 
 def test_apply_reverts_only_planned_paths(tmp_path):

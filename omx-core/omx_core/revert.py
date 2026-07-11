@@ -49,11 +49,14 @@ def plan_revert(cwd, sha, protected) -> dict:
     resolved = _run_git(cwd, ["rev-parse", "--verify", f"{sha}^{{commit}}"])
     if resolved.returncode != 0:
         raise OmxError(f"revert target {sha!r} does not resolve to a commit in {cwd!r}")
-    diff = _run_git(cwd, ["diff", "--name-only", sha])
+    # -z: NUL-delimited output, which git documents as disabling path quoting
+    # regardless of core.quotepath -- avoids the quote/octal-escape mangling
+    # that '--name-only' alone applies to non-ASCII or quote-bearing paths.
+    diff = _run_git(cwd, ["diff", "--name-only", "-z", sha])
     if diff.returncode != 0:
         raise OmxError(
             f"git diff against {sha!r} failed in {cwd!r}: {diff.stderr.strip()}")
-    changed = [ln for ln in diff.stdout.splitlines() if ln.strip()]
+    changed = [p for p in diff.stdout.split("\0") if p.strip()]
     would_revert, skipped = [], []
     for path in changed:
         (skipped if _is_protected(path, protected) else would_revert).append(path)
