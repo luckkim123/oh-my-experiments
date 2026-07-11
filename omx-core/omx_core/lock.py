@@ -65,7 +65,7 @@ def _lease_age_hours(lease: dict | None, lock_path: Path, now_iso: str) -> float
             now_dt = datetime.fromisoformat(now_iso)
             if (armed_dt.tzinfo is None) == (now_dt.tzinfo is None):
                 return (now_dt - armed_dt).total_seconds() / 3600.0
-        except ValueError:
+        except (ValueError, TypeError):
             pass
     # mtime fallback (corrupt lease, or armed_at/now tz mismatch): mtime is a
     # REAL-clock timestamp, so it must be compared against the real clock

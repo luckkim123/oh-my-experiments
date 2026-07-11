@@ -182,6 +182,19 @@ def test_acquire_corrupt_lease_uses_mtime_fallback(tmp_path):
         acquire_run_lease(p, "run1", session_id="s", now_iso=AWARE_NOW)
 
 
+def test_acquire_wrong_typed_armed_at_uses_mtime_fallback(tmp_path):
+    # A lease that is valid JSON but has a non-string armed_at (e.g. an int,
+    # reachable via a foreign/hand-edited/future-writer-bug lease) is also a
+    # corrupt lease by contract: it must degrade to the mtime fallback
+    # (TypeError from fromisoformat), not crash with an uncaught traceback.
+    p = OmxPaths(root=str(tmp_path))
+    p.run_dir("run1").mkdir(parents=True)
+    p.loop_lock("run1").write_text(
+        json.dumps({"session_id": "x", "armed_at": 123, "armed_by_pid": 1}))
+    with pytest.raises(OmxError):
+        acquire_run_lease(p, "run1", session_id="s", now_iso=AWARE_NOW)
+
+
 def test_acquire_old_corrupt_lease_is_reaped(tmp_path):
     # Backdate the corrupt lease's REAL mtime past stale_hours (os.utime) so the
     # mtime fallback (real-clock delta) actually measures ~(STALE+1)h of age and
