@@ -1241,6 +1241,61 @@ def _cmd_run_record(args) -> int:
     return 0
 
 
+def _cmd_revert_config(args) -> int:
+    """Two-phase config revert (#5, spec 2.8). Dry-run by default; mutation only
+    with --i-approve-revert. Resolves the sha from the run ledger (--to
+    baseline|last-kept|<sha>), builds the path-scoped allowlist (.omx/ under cwd
+    + the resolved root tree when inside cwd), and prints the plan / applies it.
+    Loud-fails: --cwd not a git repo, sha unresolvable, ledger absent."""
+    from pathlib import Path as _Path
+    from omx_core.ledger import read_run_ledger
+    from omx_core.revert import apply_revert, plan_revert
+    paths = OmxPaths(root=_resolved_root(args))
+    try:
+        ledger = read_run_ledger(paths, args.run_id)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    # resolve the target sha
+    if args.to == "baseline":
+        sha = ledger.get("baseline_commit")
+    elif args.to == "last-kept":
+        sha = ledger.get("last_kept_commit") or ledger.get("baseline_commit")
+    else:
+        sha = args.to  # explicit sha, verified inside plan_revert
+    if not sha:
+        raise SystemExit(
+            f"cannot resolve --to {args.to!r} for run {args.run_id!r} "
+            "(the ledger has no matching commit)")
+    # path-scoped allowlist: .omx relative to cwd, plus the resolved root tree
+    # when it lies inside cwd.
+    protected = [".omx/"]
+    cwd_res = _Path(args.cwd).resolve()
+    root_res = _Path(_resolved_root(args)).resolve()
+    try:
+        rel = root_res.relative_to(cwd_res)
+        if rel != _Path("."):  # root == cwd -> str(rel/".omx") is just ".omx/" (already in protected)
+            protected.append(str(rel / ".omx") + "/")
+    except ValueError:
+        pass  # root is not inside cwd -> the ".omx/" prefix already covers cwd's tree
+    try:
+        plan = plan_revert(args.cwd, sha, protected)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    if not args.i_approve_revert:
+        print(json.dumps({"dry_run": True, "target": sha, **plan}))
+        return 0
+    if not plan["would_revert"]:
+        print(json.dumps({"dry_run": False, "target": sha, "reverted": []}))
+        return 0
+    try:
+        apply_revert(args.cwd, sha, plan["would_revert"])
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps({"dry_run": False, "target": sha,
+                      "reverted": plan["would_revert"]}))
+    return 0
+
+
 def _now_stamp() -> str:
     # local wall-clock; deterministic format YYYYMMDD-HHMMSS
     import time
@@ -1865,6 +1920,18 @@ def build_parser() -> argparse.ArgumentParser:
     prc2.add_argument("--no-staleness-check", action="store_true", dest="no_staleness_check",
                       help="skip the git-ancestry staleness check (documented escape)")
     prc2.set_defaults(func=_cmd_run_record)
+
+    prv2 = sub.add_parser("revert-config",
+                          help="two-phase config revert to a run's baseline/last-kept "
+                               "commit (#5; dry-run default, --i-approve-revert applies)")
+    prv2.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    prv2.add_argument("--cwd", required=True, help="the project git repo to revert in")
+    prv2.add_argument("--run-id", required=True, dest="run_id")
+    prv2.add_argument("--to", default="baseline",
+                      help="baseline | last-kept | <sha> (default: baseline)")
+    prv2.add_argument("--i-approve-revert", action="store_true", dest="i_approve_revert",
+                      help="APPLY the revert (git checkout); without this it is dry-run only")
+    prv2.set_defaults(func=_cmd_revert_config)
 
     pw = sub.add_parser("wiki", help="workspace knowledge wiki (keyword-indexed, no embeddings)")
     wsub = pw.add_subparsers(dest="wiki_cmd", required=True)
