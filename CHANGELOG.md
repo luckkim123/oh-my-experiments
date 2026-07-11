@@ -4,6 +4,69 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.5.0] - 2026-07-11 — R4: loop robustness
+
+### Fixed
+
+- **The run-ledger writers `seed_ledger`/`record_iteration` had zero production
+  callers.** `exp-loop/SKILL.md` said "record through the ledger writer" while
+  naming no runnable command, so every headline R3/R4 item read a ledger that
+  nothing wrote (D-R4-2). `omx run-seed` / `omx run-record` finally expose them
+  and, being named `omx <verb>` tokens, fall under the #25 contract test at
+  last.
+- **The concurrency lease was redesigned from a `{pid, started_at}` sketch to a
+  session-keyed lease** after an opus critic pass — omx is a one-shot-CLI
+  architecture in which no process spans the loop, so a recorded pid is dead
+  before any assertion runs (critic C1). The gate self-disarm now releases the
+  lease unconditionally, because a pid-guarded lease could not be cleaned up by
+  whichever process ends the loop (critic C2).
+- `init_campaign`'s bare `plan.json` write is now atomic.
+
+### Added
+
+- **`omx_core/lock.py`** — generic fcntl `with_file_lock` (extracted from the
+  wiki lock, which now delegates) plus the session-keyed O_EXCL run lease with
+  age-only reaping. State-mutation locking now wraps `arm_loop`/`disarm_loop`/
+  `loop_gate`.
+- **`omx run-seed` / `omx run-record`** — the run-ledger write verbs
+  (lease-asserted + git-ancestry staleness-checked).
+- **`omx queue-launch --cwd`** records `queued_commit` provenance.
+- **Evaluator fault taxonomy** — `fault_class` on evaluator errors, decision-note
+  propagation, and an `omx eval` auto-appended debugging wiki stub.
+- **`omx loop-health`** — plateau/fault circuits with profile-overridable
+  thresholds, plus a best-effort `loop_gate` circuit backstop.
+- **Completion marker** — `runs/<run_id>/loop-status.json` (`mark_loop_done` +
+  `omx loop-mark-done`) and a `phase` field on `loop-status`.
+- **`omx loop-status --all`.**
+- **`omx revert-config`** — a two-phase, human-flag-gated config revert.
+- **`omx campaign-plan-add`** plus read-time plan/ledger reconciliation in
+  `campaign-status`.
+- Disarm-reason vocabulary grows to
+  `done|deadline|cancel|hard_cap|plateau|fault_circuit`.
+
+### Verification
+
+- omx-core full pytest suite green: 843 passed, 1 skipped in 20.18s.
+- Appended `.superpowers/sdd/live-acceptance.md` v0.5.0 section (to be executed
+  after plugin reinstall + `pip install -e`, per spec 3).
+
+### Notes
+
+- **Warn→hard promotions stay warn — re-earmarked to R5**, conditioned on a
+  real-data dogfood that has still never run (a 2026-07-11 sweep found zero
+  `.omx` roots on both machines, so soak data is literally zero).
+- **D4 is unchanged.** Nothing in v0.5.0 fires a training launch, and
+  `revert-config` (the one new mutating verb) is human-flag-gated
+  (`--i-approve-revert`) and never reachable from a hook.
+- `plugin.json` hooks are unchanged in R4 (no new hook events), so the
+  registration-parity contract tests stay green by construction; the #25 verb
+  contract test now also covers
+  `run-seed`/`run-record`/`loop-health`/`loop-mark-done`/`revert-config`/`campaign-plan-add`.
+- A whole-branch 4-lens review (commit `df2336a`) confirmed and fixed two
+  cross-task majors after T1-T13 landed: the campaign-status join key
+  (`proposal_id` now threaded through exp-loop's `campaign-log --data`) and the
+  `lock_stale_hours` profile override wiring.
+
 ## [0.4.0] - 2026-07-07 — R3: full harnessization
 
 ### Added

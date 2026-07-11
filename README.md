@@ -58,9 +58,33 @@ top, never the sole enforcement point):
 | `omx campaign-log --root <dir> --id <id> --event <e>` | Append one event (launched/kept/discarded/eval/note) to the campaign ledger. |
 | `omx campaign-status --root <dir> --id <id>` | Aggregate one campaign's ledger. |
 | `omx campaign-list --root <dir>` | List campaigns with event counts. |
+| `omx run-seed --root <dir> --run-id <id> --baseline-commit <sha> --keep-policy <p>` | Seed the run ledger with the baseline anchor (once — loud-fail if it exists). |
+| `omx run-record --root <dir> --run-id <id> --iteration <n> --decision <d> ...` | Record one loop iteration into the ledger; asserts the run-lease by session id and performs the git-ancestry staleness check. |
+| `omx loop-health --root <dir> --run-id <id>` | Circuit check over the run ledger: rc 2 when the plateau/fault streak trips (the authoritative stop). |
+| `omx loop-mark-done --root <dir> --run-id <id> --reason <r>` | Write the loop-completion marker for an unarmed single-pass flow (an armed loop marks automatically on disarm). |
+| `omx loop-status --run-id <id>` / `omx loop-status --all` | Report deadline-ceiling + pending-launch + `phase` (`done`/`running`/`died`/`idle`) as JSON, one run or every run under `runs/*/`. |
+| `omx revert-config --root <dir> --cwd <repo> --run-id <id> [--to baseline\|last-kept\|<sha>] [--i-approve-revert]` | Two-phase config revert to a run's baseline/last-kept commit; dry-run by default, applies only with `--i-approve-revert`. |
+| `omx campaign-plan-add --root <dir> --id <id> --proposal-id <id>` | Record a planned proposal into `plan.json`'s `planned` list (intent); status is derived at read time by `campaign-status`. |
 
 `omx eval --root <dir>` additionally runs the profile-seal preflight when `--root` is
 given, warning (never hard-failing in R1) on a missing or drifted seal.
+
+### Threshold overrides
+
+Some gates read optional override keys from `metrics.yaml` at the call boundary
+(the same pattern as `wiki_quality_floor`):
+
+| Key | Default | Read by |
+|:--|:--|:--|
+| `plateau_discards` | 5 | `omx loop-health` — consecutive discards before the plateau circuit trips. |
+| `fault_streak` | 3 | `omx loop-health` — consecutive evaluator faults before the fault circuit trips. |
+| `lock_stale_hours` | 2 | `omx_core.lock.acquire_run_lease` — age (by `armed_at`, mtime fallback for a corrupt lease) after which a run lease is reaped. |
+
+### Lease/marker file map
+
+- `runs/<run_id>/.loop-lock` — the session-keyed O_EXCL run lease (CLI-invocation ownership; reaped on age alone).
+- `runs/<run_id>/loop-status.json` — the loop-completion marker (`mark_loop_done`), folded into `loop-status`'s `phase` field.
+- `.omx/state/.state-lock` — the fcntl mutex guarding every `state.json` load-mutate-save critical section.
 
 ## Hooks and the report-reviewer agent
 
@@ -103,6 +127,13 @@ training-adjacent verb, and it only ever writes a pending-approval artifact.
 Because pytest cannot exercise real platform hook firing, `.superpowers/sdd/live-acceptance.md`
 is the checklist a human runs after a plugin reinstall to confirm each
 registration actually fires and honors its contract.
+
+The Stop gate now runs its state-mutation under the state mutex and carries a
+best-effort circuit backstop (plateau/`fault_circuit`) that fail-opens on any
+ledger-read error — the authoritative circuit stop is the `omx loop-health`
+verb + exp-loop step 4.5, not the gate. Separately, `revert-config` is dry-run
+by default and mutates only with `--i-approve-revert`; it is never reachable
+from a hook (D4).
 
 ## Layout
 
