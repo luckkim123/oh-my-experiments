@@ -136,6 +136,25 @@ def arm_loop(paths: OmxPaths, *, run_id, now_iso, max_runtime_s,
     return envelope
 
 
+def mark_loop_done(paths: OmxPaths, run_id, *, reason, summary, now_iso) -> dict:
+    """Atomically write runs/<run_id>/loop-status.json — the loop-completion
+    marker (R4 #7, D-R4-8). Overwrite is allowed: a re-run of a run id refreshes
+    the marker (history lives in the ledger, not here). `now_iso` is the AWARE
+    UTC instant the caller computes; `reason` is the disarm reason
+    (done|deadline|cancel|error|hard_cap|plateau|fault_circuit)."""
+    marker = {
+        "schema_version": 1,
+        "phase": "done",
+        "reason": reason,
+        "summary": summary,
+        "ended_at": now_iso,
+    }
+    target = paths.loop_marker_json(run_id)
+    with atomic_path(target) as tmp:
+        tmp.write_text(json.dumps(marker, indent=2, sort_keys=True))
+    return marker
+
+
 def disarm_loop(paths: OmxPaths, *, reason="cancel") -> dict:
     """Clear the armed loop (idempotent). The gate's standing exit (spec 2.4)."""
     from omx_core.state import load_state, save_state

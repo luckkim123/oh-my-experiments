@@ -861,10 +861,43 @@ def _cmd_loop_status(args) -> int:
     except OmxError as e:
         raise SystemExit(str(e))
     from omx_core.state import load_state
+    from omx_core.lock import read_run_lease
     try:
         armed = load_state(paths).get("active_loop")
     except ValueError as e:
         raise SystemExit(f"state.json is corrupt: {e}")
+
+    armed_here = bool(armed and armed.get("run_id") == args.run_id)
+    # When the caller gave no --deadline/--max-runtime, derive the ceiling from
+    # the armed envelope so `loop-status --run-id <r>` alone reports running vs
+    # died (the skill/tests call it that way).
+    if deadline is None and armed_here:
+        deadline = armed.get("deadline")
+        try:
+            passed = deadline_passed(deadline, now) if deadline else passed
+        except OmxError:
+            passed = None  # naive/aware mix in a hand-corrupted envelope -> unknown
+
+    # phase (spec 2.5): done -> running -> died -> idle, first match wins.
+    marker = None
+    mpath = paths.loop_marker_json(args.run_id)
+    if mpath.exists():
+        try:
+            marker = json.loads(mpath.read_text())
+        except ValueError:
+            marker = None
+    lease = read_run_lease(paths, args.run_id)
+    if marker is not None:
+        phase = "done"
+    elif armed_here and passed is not True:
+        phase = "running"
+    elif armed_here and passed is True:
+        phase = "died"          # armed, deadline passed, no marker
+    elif lease is not None and not armed_here:
+        phase = "died"          # orphan lease: a lease with no envelope naming the run
+    else:
+        phase = "idle"
+
     print(json.dumps({
         "run_id": args.run_id,
         "now": now,
@@ -872,6 +905,7 @@ def _cmd_loop_status(args) -> int:
         "deadline_passed": passed,
         "pending_launch": pending,
         "armed": armed,
+        "phase": phase,
     }))
     return 0
 
@@ -897,6 +931,21 @@ def _cmd_loop_disarm(args) -> int:
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(out))
+    return 0
+
+
+def _cmd_loop_mark_done(args) -> int:
+    """Write the loop-completion marker for an UNARMED single-pass flow (R4 #7).
+    The armed path writes it automatically via disarm_loop; this verb covers a
+    never-armed loop. AWARE UTC clock — never _now_iso()."""
+    from omx_core.loop import mark_loop_done
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        marker = mark_loop_done(OmxPaths(root=_resolved_root(args)), args.run_id,
+                                reason=args.reason, summary=args.summary or "", now_iso=now)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(marker))
     return 0
 
 
@@ -1465,6 +1514,16 @@ def build_parser() -> argparse.ArgumentParser:
     pld.add_argument("--reason", default="cancel",
                      choices=["done", "deadline", "cancel", "hard_cap"])
     pld.set_defaults(func=_cmd_loop_disarm)
+
+    plm = sub.add_parser("loop-mark-done",
+                         help="write the loop-completion marker for an UNARMED "
+                              "single-pass flow (armed loops mark on disarm)")
+    plm.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    plm.add_argument("--run-id", required=True, dest="run_id")
+    plm.add_argument("--reason", default="done",
+                     choices=["done", "deadline", "cancel", "error"])
+    plm.add_argument("--summary", default=None, help="one-line summary (e.g. 'iteration 3')")
+    plm.set_defaults(func=_cmd_loop_mark_done)
 
     pw = sub.add_parser("wiki", help="workspace knowledge wiki (keyword-indexed, no embeddings)")
     wsub = pw.add_subparsers(dest="wiki_cmd", required=True)
