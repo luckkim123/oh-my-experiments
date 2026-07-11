@@ -874,19 +874,95 @@ def _cmd_queue_launch(args) -> int:
     return 0
 
 
-def _cmd_loop_status(args) -> int:
-    """Report loop status as one JSON: whether the deadline ceiling passed and
-    what (if anything) is queued for launch. Claude-free; the skill reads this
-    to decide stop-or-continue. --now defaults to the real clock; pass it
-    explicitly for deterministic tests.
+def _run_phase(paths, run_id, *, armed, now, deadline_override=None):
+    """Derive (phase, lease, marker) for one run (spec 2.5/2.7). Pure read;
+    corrupt marker -> phase 'unknown' (the caller warns). `armed` is the
+    state's active_loop envelope (or None); `now` is the aware clock for the
+    deadline check. `deadline_override` (when not None) is a caller-resolved
+    deadline that WINS over the envelope's own deadline — the --run-id path
+    passes the flag-resolved deadline (explicit --deadline > --max-runtime >
+    envelope) so `phase`'s notion of 'passed' agrees with the response's
+    deadline_passed field; the --all path passes None (envelope deadline)."""
+    from omx_core.lock import read_run_lease
+    marker = None
+    unknown = False
+    mpath = paths.loop_marker_json(run_id)
+    if mpath.exists():
+        try:
+            marker = json.loads(mpath.read_text())
+        except (ValueError, OSError):
+            unknown = True
+    lease = read_run_lease(paths, run_id)
+    armed_here = bool(armed and armed.get("run_id") == run_id)
+    passed = None
+    effective_deadline = deadline_override or (armed.get("deadline") if armed_here else None)
+    if effective_deadline:
+        try:
+            passed = deadline_passed(effective_deadline, now)
+        except OmxError:
+            passed = None
+    if unknown:
+        phase = "unknown"
+    elif marker is not None:
+        phase = "done"
+    elif armed_here and passed is not True:
+        phase = "running"
+    elif armed_here and passed is True:
+        phase = "died"
+    elif lease is not None and not armed_here:
+        phase = "died"
+    else:
+        phase = "idle"
+    return phase, lease, marker
 
-    Deadline resolution order:
+
+def _cmd_loop_status(args) -> int:
+    """Report loop status. With --run-id: one run's deadline ceiling + pending
+    launch + phase. With --all (#16): every run under runs/*/ as
+    {run_id, phase, lease, marker, armed}. Claude-free.
+
+    Deadline resolution order (--run-id path):
       1. --deadline (explicit ISO-8601) takes precedence.
       2. --max-runtime <seconds>: deadline = now + max_runtime via compute_deadline.
       3. Neither: deadline_passed is None (no ceiling check).
     """
     paths = OmxPaths(root=_resolved_root(args))
     now = args.now or datetime.now(timezone.utc).isoformat()
+    from omx_core.state import load_state
+    try:
+        armed = load_state(paths).get("active_loop")
+    except ValueError as e:
+        raise SystemExit(f"state.json is corrupt: {e}")
+
+    if args.all:
+        runs_root = paths.omx_dir / "runs"
+        rows = []
+        run_ids = sorted(d.name for d in runs_root.iterdir()) if runs_root.is_dir() else []
+        for rid in run_ids:
+            try:
+                phase, lease, marker = _run_phase(paths, rid, armed=armed, now=now)
+            except Exception as e:
+                print(f"WARNING: loop-status --all: run {rid!r} unreadable: {e}",
+                      file=sys.stderr)
+                rows.append({"run_id": rid, "phase": "unknown", "lease": None,
+                             "marker": None, "armed": False})
+                continue
+            if phase == "unknown":
+                print(f"WARNING: loop-status --all: run {rid!r} has a corrupt "
+                      "marker (phase unknown)", file=sys.stderr)
+            rows.append({
+                "run_id": rid, "phase": phase,
+                "lease": ({"session_id": lease.get("session_id"),
+                           "armed_at": lease.get("armed_at")} if lease else None),
+                "marker": ({"reason": marker.get("reason"),
+                            "ended_at": marker.get("ended_at")} if marker else None),
+                "armed": bool(armed and armed.get("run_id") == rid),
+            })
+        print(json.dumps({"runs": rows,
+                          "armed_run": armed.get("run_id") if armed else None}))
+        return 0
+
+    # --run-id path (existing behavior + T3 phase)
     deadline = args.deadline
     try:
         if deadline is None and args.max_runtime is not None:
@@ -898,44 +974,10 @@ def _cmd_loop_status(args) -> int:
         pending = read_pending_launch(paths, args.run_id)
     except OmxError as e:
         raise SystemExit(str(e))
-    from omx_core.state import load_state
-    from omx_core.lock import read_run_lease
-    try:
-        armed = load_state(paths).get("active_loop")
-    except ValueError as e:
-        raise SystemExit(f"state.json is corrupt: {e}")
-
-    armed_here = bool(armed and armed.get("run_id") == args.run_id)
-    # When the caller gave no --deadline/--max-runtime, derive the ceiling from
-    # the armed envelope so `loop-status --run-id <r>` alone reports running vs
-    # died (the skill/tests call it that way).
-    if deadline is None and armed_here:
-        deadline = armed.get("deadline")
-        try:
-            passed = deadline_passed(deadline, now) if deadline else passed
-        except OmxError:
-            passed = None  # naive/aware mix in a hand-corrupted envelope -> unknown
-
-    # phase (spec 2.5): done -> running -> died -> idle, first match wins.
-    marker = None
-    mpath = paths.loop_marker_json(args.run_id)
-    if mpath.exists():
-        try:
-            marker = json.loads(mpath.read_text())
-        except (ValueError, OSError):
-            marker = None
-    lease = read_run_lease(paths, args.run_id)
-    if marker is not None:
-        phase = "done"
-    elif armed_here and passed is not True:
-        phase = "running"
-    elif armed_here and passed is True:
-        phase = "died"          # armed, deadline passed, no marker
-    elif lease is not None and not armed_here:
-        phase = "died"          # orphan lease: a lease with no envelope naming the run
-    else:
-        phase = "idle"
-
+    # pass the flag-resolved deadline (explicit --deadline > --max-runtime >
+    # envelope) so phase's 'passed' agrees with the deadline_passed field above.
+    phase, _lease, _marker = _run_phase(paths, args.run_id, armed=armed, now=now,
+                                        deadline_override=deadline)
     print(json.dumps({
         "run_id": args.run_id,
         "now": now,
@@ -1736,9 +1778,13 @@ def build_parser() -> argparse.ArgumentParser:
     pq.set_defaults(func=_cmd_queue_launch)
 
     pl = sub.add_parser("loop-status",
-                        help="report deadline-ceiling + pending-launch as JSON (Claude-free)")
+                        help="report deadline-ceiling + pending-launch + phase as JSON; "
+                             "--all reports every run (Claude-free)")
     pl.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
-    pl.add_argument("--run-id", required=True)
+    _pl_grp = pl.add_mutually_exclusive_group(required=True)
+    _pl_grp.add_argument("--run-id", default=None, help="report one run")
+    _pl_grp.add_argument("--all", action="store_true",
+                         help="report every run under runs/*/ (#16)")
     pl.add_argument("--deadline", default=None,
                     help="ISO-8601 deadline; omit to skip the ceiling check")
     pl.add_argument("--now", default=None,
