@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 
-from omx_core.omx_paths import OmxError, OmxPaths
+from omx_core.omx_paths import OmxError, OmxPaths, atomic_path
 
 
 class CampaignError(OmxError):
@@ -32,8 +32,32 @@ def init_campaign(paths: OmxPaths, campaign_id, *, now, goal=None,
     if extra:
         for k, v in extra.items():
             plan.setdefault(k, v)
-    paths.campaign_plan(campaign_id).write_text(json.dumps(plan, indent=2))
+    with atomic_path(paths.campaign_plan(campaign_id)) as tmp:
+        tmp.write_text(json.dumps(plan, indent=2))
     paths.campaign_ledger(campaign_id).touch()
+    return plan
+
+
+def plan_add(paths: OmxPaths, campaign_id, *, proposal_id, summary=None, now) -> dict:
+    """Append a planned proposal to plan.json's `planned` list (intent — D-R4-10).
+    plan.json is the replayable statement of what exp-design decided to try;
+    ledger.jsonl records what happened. Duplicate proposal_id loud-fails (a
+    proposal is planned once). Atomic rewrite. Returns the updated plan dict."""
+    plan_path = paths.campaign_plan(campaign_id)
+    if not plan_path.is_file():
+        raise CampaignError(
+            f"campaign {campaign_id!r} not initialized — run `omx campaign-init "
+            f"--id {campaign_id}` first")
+    plan = json.loads(plan_path.read_text())
+    planned = plan.setdefault("planned", [])
+    if any(e.get("proposal_id") == proposal_id for e in planned):
+        raise CampaignError(
+            f"proposal {proposal_id!r} already planned in campaign {campaign_id!r} "
+            "(a proposal is planned once)")
+    planned.append({"proposal_id": proposal_id, "summary": summary or "",
+                    "added_at": now})
+    with atomic_path(plan_path) as tmp:
+        tmp.write_text(json.dumps(plan, indent=2))
     return plan
 
 
@@ -91,7 +115,27 @@ def campaign_status(paths: OmxPaths, campaign_id) -> dict:
             f"campaign {campaign_id!r} has no plan.json at {plan_path} — was it "
             "initialized with `omx campaign-init`?")
     plan = json.loads(plan_path.read_text())
-    return {"campaign_id": campaign_id, "plan": plan, "counts": counts,
+    # derive per-proposal status at read time (D-R4-10): join `planned` against
+    # ledger events by data.proposal / data.proposal_id — status is NEVER
+    # written into plan.json (one SSOT per fact).
+    outcome = {}
+    for e in events:
+        data = e.get("data") or {}
+        pid = data.get("proposal") or data.get("proposal_id")
+        if pid:
+            outcome[pid] = e.get("event")  # last event wins
+    plan_view = []
+    for entry in plan.get("planned", []):
+        pid = entry.get("proposal_id")
+        ev = outcome.get(pid)
+        derived = ev if ev in ("kept", "discarded", "launched") else "planned"
+        plan_view.append({
+            "proposal_id": pid,
+            "summary": entry.get("summary", ""),
+            "added_at": entry.get("added_at"),
+            "derived_status": derived,
+        })
+    return {"campaign_id": campaign_id, "plan": plan_view, "counts": counts,
             "runs": runs, "last": events[-1] if events else None}
 
 

@@ -1617,6 +1617,18 @@ def _cmd_campaign_list(args) -> int:
     return 0
 
 
+def _cmd_campaign_plan_add(args) -> int:
+    from omx_core.campaign import plan_add
+    paths = OmxPaths(root=_resolved_root(args))
+    try:
+        plan = plan_add(paths, args.id, proposal_id=args.proposal_id,
+                        summary=args.summary, now=_now_iso())
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(plan))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="omx", description="OMX experiment-analysis core")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -2059,6 +2071,15 @@ def build_parser() -> argparse.ArgumentParser:
     pcll = sub.add_parser("campaign-list", help="list campaigns with event counts")
     pcll.add_argument("--root", default=None)
     pcll.set_defaults(func=_cmd_campaign_list)
+
+    pcp = sub.add_parser("campaign-plan-add",
+                         help="record a planned proposal into plan.json's `planned` "
+                              "list (intent; status is derived at read time)")
+    pcp.add_argument("--root", default=None)
+    pcp.add_argument("--id", required=True)
+    pcp.add_argument("--proposal-id", required=True, dest="proposal_id")
+    pcp.add_argument("--summary", default=None)
+    pcp.set_defaults(func=_cmd_campaign_plan_add)
 
     return p
 
