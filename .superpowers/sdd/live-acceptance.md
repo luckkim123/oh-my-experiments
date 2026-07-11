@@ -62,3 +62,19 @@ proven by pytest.
       not a pre-mark), closing the corresponding R3 checkbox (record here; do
       not edit the R3 list above — this line is the evidence). All other
       v0.5.0 boxes stay unchecked until run after plugin reinstall.
+
+## v0.6.0 (R5) live acceptance (append — R3/R4 checkboxes above are untouched)
+
+R5 adds two things worth a live/at-release check beyond pytest:
+
+- [ ] gate `ledger_corrupt` disarm: arm a loop, corrupt `runs/<run_id>/ledger.json`
+      (write `{invalid json`), then end three turns — the gate self-disarms with
+      reason `ledger_corrupt` (the completion marker records it) and the next stop
+      is allowed. Confirm the corrupt-probe counter survived across the three Stop
+      events (it must reach 3, not reset each turn). Then verify the mirror path:
+      record 5 real discards WHILE armed, corrupt the ledger, end a turn -> the
+      disarm reason is `plateau` (mirror-driven), not `ledger_corrupt`.
+- [ ] `omx card-check` at release: run `omx card-check` on a release machine with
+      omha installed. Against the current live card it returns rc 2 naming the
+      version drift (`card '0.1.0' != plugin '0.6.0'`). After the omha-repo card is
+      bumped to match, it returns rc 0. Record both observations here.

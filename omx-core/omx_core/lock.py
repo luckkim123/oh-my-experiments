@@ -49,7 +49,6 @@ def with_file_lock(lock_path, fn, *, timeout_s: float = 5.0, retry_s: float = 0.
 
 import json
 import os
-from datetime import datetime
 
 LOCK_STALE_HOURS = 2  # a lease older than this (by armed_at, mtime fallback) is reaped
 
@@ -61,12 +60,14 @@ def _lease_age_hours(lease: dict | None, lock_path: Path, now_iso: str) -> float
     armed_at = (lease or {}).get("armed_at")
     if armed_at:
         try:
-            armed_dt = datetime.fromisoformat(armed_at)
-            now_dt = datetime.fromisoformat(now_iso)
-            if (armed_dt.tzinfo is None) == (now_dt.tzinfo is None):
-                return (now_dt - armed_dt).total_seconds() / 3600.0
-        except (ValueError, TypeError):
-            pass
+            from omx_core import clock
+            # normalize BOTH sides (D-R5-5): a pre-R5 naive on-disk armed_at ages
+            # via real subtraction against the aware now, not the mtime fallback.
+            armed_dt = clock.parse_iso_utc(armed_at, "armed_at")
+            now_dt = clock.parse_iso_utc(now_iso, "now")
+            return (now_dt - armed_dt).total_seconds() / 3600.0
+        except OmxError:
+            pass  # corrupt/unparseable armed_at or now -> mtime fallback below
     # mtime fallback (corrupt lease, or armed_at/now tz mismatch): mtime is a
     # REAL-clock timestamp, so it must be compared against the real clock
     # (time.time()) — NOT the caller-injected now_iso, which is only valid for

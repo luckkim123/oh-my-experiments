@@ -28,6 +28,7 @@ from omx_core import integrity as _integrity
 from datetime import datetime, timezone
 
 from omx_core.loop import queue_pending_launch, read_pending_launch, deadline_passed, compute_deadline
+from omx_core import clock
 from omx_core.profile import bootstrap_profile, default_metrics
 from omx_core.report import parse_findings
 from omx_core.coverage import check_coverage, check_cross_run_refs
@@ -206,11 +207,24 @@ def _cmd_doctor(args) -> int:
     return 0
 
 
+def _cmd_card_check(args) -> int:
+    """Cross-repo card-currency guard (D-R5-4). rc 0 + {ok:true,...} on parity;
+    rc 2 + a failures list on drift; rc 2 actionable when the card or plugin.json
+    is unreachable. DETECTS only — updating the card is an omha-repo edit."""
+    from omx_core.cardcheck import run_card_check
+    try:
+        out = run_card_check(card_path=args.card, plugin_root=args.plugin_root)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(out))
+    return 0 if out["ok"] else 2
+
+
 def _cmd_profile_seal(args) -> int:
     """Record the approved evaluator/launch sha256 seal (#0)."""
     from omx_core.seal import write_seal
     try:
-        seal = write_seal(OmxPaths(root=_resolved_root(args)), now=_now_iso())
+        seal = write_seal(OmxPaths(root=_resolved_root(args)), now=clock.now_iso())
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(seal))
@@ -264,7 +278,7 @@ def _cmd_eval(args) -> int:
                 f"Ran at: {rec.get('ran_at')}\n"
                 f"Cwd: {args.cwd or os.getcwd()}\n")
             ingest_knowledge(
-                OmxPaths(root=_resolved_root(args)), now=_now_iso(),
+                OmxPaths(root=_resolved_root(args)), now=clock.now_iso_naive(),
                 title=f"evaluator fault {fault}", content=body,
                 tags=["auto-captured", "evaluator-fault", fault],
                 category="debugging", confidence="low", sources=[])
@@ -442,6 +456,7 @@ def _cmd_tree_scaffold(args) -> int:
         if args.eval_for is not None:
             if args.mode is None:
                 raise SystemExit("--mode is required with --eval-for")
+            # BY DESIGN local-naive: a human-facing directory NAME, never compared (D-R5-5).
             ts = args.ts or datetime.now().strftime(schema.ts_format)
             out = scaffold_eval(schema, Path(root), args.eval_for, args.mode,
                                 now_ts=ts)
@@ -626,7 +641,7 @@ def _cmd_report_coverage(args) -> int:
             omx_version = importlib.metadata.version("omx-core")
         except importlib.metadata.PackageNotFoundError:
             omx_version = None
-        stamp_now = _now_iso()
+        stamp_now = clock.now_iso()
         _integrity.stamp_report(
             path, gates_passed=[g for g, cond in (
                 ("coverage", True),
@@ -775,7 +790,7 @@ def _cmd_probe_novelty(args) -> int:
         toks = probe_tokens(fh.read())
     top = " ".join(sorted(toks)[:8])
     try:
-        hits = query_wiki(OmxPaths(root=_resolved_root(args)), now=_now_iso(), text=top,
+        hits = query_wiki(OmxPaths(root=_resolved_root(args)), now=clock.now_iso_naive(), text=top,
                           tags=None, category=None, limit=5)
     except OmxError:
         hits = {"matches": []}
@@ -848,7 +863,7 @@ def _cmd_queue_launch(args) -> int:
     D-R4-6); a non-repo cwd or missing git warns and omits the sha."""
     import subprocess
     paths = OmxPaths(root=_resolved_root(args))
-    now = datetime.now(timezone.utc).isoformat()
+    now = clock.now_iso()
     queued_commit = None
     if args.cwd:
         try:
@@ -927,7 +942,7 @@ def _cmd_loop_status(args) -> int:
       3. Neither: deadline_passed is None (no ceiling check).
     """
     paths = OmxPaths(root=_resolved_root(args))
-    now = args.now or datetime.now(timezone.utc).isoformat()
+    now = args.now or clock.now_iso()
     from omx_core.state import load_state
     try:
         armed = load_state(paths).get("active_loop")
@@ -991,9 +1006,9 @@ def _cmd_loop_status(args) -> int:
 
 
 def _cmd_loop_arm(args) -> int:
-    """Arm the Stop-hook loop gate (spec 2.4). AWARE UTC clock — never _now_iso()."""
+    """Arm the Stop-hook loop gate (spec 2.4). AWARE UTC clock via clock.now_iso()."""
     from omx_core.loop import arm_loop
-    now = args.now or datetime.now(timezone.utc).isoformat()
+    now = args.now or clock.now_iso()
     if args.now:
         # a naive --now would store a naive deadline that permanently trips the
         # gate's fail-open (deadline_passed raises on the mix, the gate swallows
@@ -1037,9 +1052,9 @@ def _cmd_loop_disarm(args) -> int:
 def _cmd_loop_mark_done(args) -> int:
     """Write the loop-completion marker for an UNARMED single-pass flow (R4 #7).
     The armed path writes it automatically via disarm_loop; this verb covers a
-    never-armed loop. AWARE UTC clock — never _now_iso()."""
+    never-armed loop. AWARE UTC clock via clock.now_iso()."""
     from omx_core.loop import mark_loop_done
-    now = datetime.now(timezone.utc).isoformat()
+    now = clock.now_iso()
     try:
         marker = mark_loop_done(OmxPaths(root=_resolved_root(args)), args.run_id,
                                 reason=args.reason, summary=args.summary or "", now_iso=now)
@@ -1323,17 +1338,9 @@ def _cmd_revert_config(args) -> int:
 
 def _now_stamp() -> str:
     # local wall-clock; deterministic format YYYYMMDD-HHMMSS
+    # BY DESIGN local-naive: scratch analysis-id naming, never compared (D-R5-5).
     import time
     return time.strftime("%Y%m%d-%H%M%S", time.localtime())
-
-
-def _now_iso() -> str:
-    """Wall-clock now as a NAIVE UTC ISO string (no tz offset).
-
-    The wiki stamps created/updated with this and lint subtracts naive-vs-naive;
-    a tz-aware value would make lint's stale-delta raise. Naive-everywhere is the
-    wiki's contract (loop.py's aware path is separate)."""
-    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
 
 def _cmd_wiki_add(args) -> int:
@@ -1371,7 +1378,7 @@ def _cmd_wiki_add(args) -> int:
         confidence = "low"
     try:
         res = _wiki_ingest.ingest_knowledge(
-            paths, now=_now_iso(), title=args.title, content=content,
+            paths, now=clock.now_iso_naive(), title=args.title, content=content,
             tags=tags, category=args.category, confidence=confidence,
             sources=[s.strip() for s in (args.sources or "").split(",") if s.strip()],
             quality_score=score, quality_reasons=reasons)
@@ -1380,6 +1387,23 @@ def _cmd_wiki_add(args) -> int:
     print(json.dumps({**res, "quality_score": score, "quality_forced_low": forced,
                       "quality_reasons": reasons}))
     return 0
+
+
+def _cmd_wiki_delete(args) -> int:
+    """Deprecation-as-runtime-redirect (#20, D-R5-2). There is no page delete:
+    the wiki is append-merge (INV-2) and removal is the git-guarded gc path.
+    ALWAYS loud-fails (rc 2) with a machine-readable JSON redirect naming the
+    real path; deletes NOTHING. The positional slug + --root are accepted and
+    ignored so a mistaken `omx wiki delete <slug>` reaches this redirect instead
+    of dying in argparse with a generic 'invalid choice'."""
+    root = _resolved_root(args)
+    raise SystemExit(json.dumps({
+        "error": "deprecated",
+        "reason": "wiki is append-merge (INV-2); removal is git-guarded gc",
+        "cli_replacement": (
+            f"omx wiki gc --root {root} … then omx wiki gc-apply "
+            f"--root {root} --proposal <approved-gc-proposal.md>"),
+    }))
 
 
 def _cmd_wiki_capture_session(args) -> int:
@@ -1404,7 +1428,7 @@ def _cmd_wiki_capture_session(args) -> int:
               "rc2 promotion earmarked for 0.3.0", file=sys.stderr)
     try:
         res = capture_session(
-            OmxPaths(root=_resolved_root(args)), now=_now_iso(),
+            OmxPaths(root=_resolved_root(args)), now=clock.now_iso_naive(),
             report_text=report.read_text(encoding="utf-8"),
             report_ref=str(report), run_id=args.run_id)
     except OmxError as e:
@@ -1417,7 +1441,7 @@ def _cmd_wiki_capture_flush(args) -> int:
     """Session-end rescue: capture every ledger-recorded stamped report (spec 2.2).
     ALWAYS rc 0 — this runs at SessionEnd where a loud-fail helps nobody."""
     from omx_core.wiki.capture import flush_produced_reports
-    res = flush_produced_reports(OmxPaths(root=_resolved_root(args)), now=_now_iso())
+    res = flush_produced_reports(OmxPaths(root=_resolved_root(args)), now=clock.now_iso_naive())
     print(json.dumps(res))
     return 0
 
@@ -1428,7 +1452,7 @@ def _cmd_wiki_promote_recipe(args) -> int:
     from omx_core.wiki.recipe import promote_recipe
     try:
         res = promote_recipe(OmxPaths(root=_resolved_root(args)), slug=args.slug,
-                             now=_now_iso(), name=args.name, force=args.force)
+                             now=clock.now_iso_naive(), name=args.name, force=args.force)
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(res))
@@ -1440,7 +1464,7 @@ def _cmd_wiki_query(args) -> int:
     tags = [t.strip() for t in (args.tags or "").split(",") if t.strip()] or None
     try:
         res = _wiki_query.query_wiki(
-            paths, now=_now_iso(), text=args.text, tags=tags,
+            paths, now=clock.now_iso_naive(), text=args.text, tags=tags,
             category=args.category, limit=args.limit)
     except OmxError as e:
         raise SystemExit(str(e))
@@ -1458,7 +1482,7 @@ def _cmd_wiki_lint(args) -> int:
         pass  # no profile yet — built-in floor (D12: override slot, generic default)
     try:
         res = _wiki_lint.lint_wiki(
-            paths, now=_now_iso(), stale_days=args.stale_days,
+            paths, now=clock.now_iso_naive(), stale_days=args.stale_days,
             max_page_size=args.max_page_size, quality_floor=floor)
     except OmxError as e:
         raise SystemExit(str(e))
@@ -1504,7 +1528,7 @@ def _cmd_wiki_read(args) -> int:
 def _cmd_wiki_sync_profile(args) -> int:
     from omx_core.wiki.sync import sync_profile_page
     try:
-        res = sync_profile_page(OmxPaths(root=_resolved_root(args)), now=_now_iso())
+        res = sync_profile_page(OmxPaths(root=_resolved_root(args)), now=clock.now_iso_naive())
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(res))
@@ -1516,7 +1540,7 @@ def _cmd_wiki_gc(args) -> int:
     the skill to read. Touches nothing (the skill judges, gc-apply executes)."""
     paths = OmxPaths(root=_resolved_root(args))
     try:
-        lint_res = _wiki_lint.lint_wiki(paths, now=_now_iso(),
+        lint_res = _wiki_lint.lint_wiki(paths, now=clock.now_iso_naive(),
                                         stale_days=args.stale_days,
                                         max_page_size=args.max_page_size)
     except OmxError as e:
@@ -1548,7 +1572,7 @@ def _cmd_wiki_gc_apply(args) -> int:
     paths = OmxPaths(root=_resolved_root(args))
     try:
         plan = _wiki_gc.parse_gc_proposal(proposal.read_text(encoding="utf-8"))
-        res = _wiki_gc.apply_gc(paths, plan, now=_now_iso(), repo_root=_resolved_root(args))
+        res = _wiki_gc.apply_gc(paths, plan, now=clock.now_iso_naive(), repo_root=_resolved_root(args))
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(res))
@@ -1581,6 +1605,7 @@ def _cmd_clean(args) -> int:
         print(json.dumps({"dry_run": True, "scope": args.scope, "sweep": view,
                           "total_bytes": sum(e["bytes"] for e in view)}))
         return 0
+    # BY DESIGN local-naive: .trash timestamp NAME, never compared (D-R5-5).
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     res = apply_sweep(paths, entries, trash_ts=ts)
     print(json.dumps({"dry_run": False, "scope": args.scope, **res}))
@@ -1599,7 +1624,7 @@ def _cmd_campaign_init(args) -> int:
         if not isinstance(extra, dict):
             raise SystemExit("--plan file must contain a JSON object")
     try:
-        plan = init_campaign(paths, args.id, now=_now_iso(), goal=args.goal,
+        plan = init_campaign(paths, args.id, now=clock.now_iso(), goal=args.goal,
                              baseline_run_id=args.baseline_run, extra=extra)
     except OmxError as e:
         raise SystemExit(str(e))
@@ -1619,7 +1644,7 @@ def _cmd_campaign_log(args) -> int:
         if not isinstance(data, dict):
             raise SystemExit("--data must parse as a JSON object (got a non-object)")
     try:
-        rec = append_event(paths, args.id, now=_now_iso(), event=args.event,
+        rec = append_event(paths, args.id, now=clock.now_iso(), event=args.event,
                            run_id=args.run, session_id=args.session_id, data=data)
     except OmxError as e:
         raise SystemExit(str(e))
@@ -1647,7 +1672,7 @@ def _cmd_campaign_plan_add(args) -> int:
     paths = OmxPaths(root=_resolved_root(args))
     try:
         plan = plan_add(paths, args.id, proposal_id=args.proposal_id,
-                        summary=args.summary, now=_now_iso())
+                        summary=args.summary, now=clock.now_iso())
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(plan))
@@ -1693,6 +1718,18 @@ def build_parser() -> argparse.ArgumentParser:
     pdoc.add_argument("--plugin-root", default=None, dest="plugin_root",
                       help="plugin dir to check hooks presence (default: $CLAUDE_PLUGIN_ROOT)")
     pdoc.set_defaults(func=_cmd_doctor)
+
+    pcc = sub.add_parser("card-check",
+                         help="cross-repo card-currency guard: card.version == "
+                              "plugin.json.version + every plugin skill mentioned "
+                              "in the card (run at release time; D-R5-4)")
+    pcc.add_argument("--card", default=None,
+                     help="omha card path (default: $OMX_CARD_PATH else "
+                          "~/.claude/plugins/marketplaces/heroacademia/cards/omx.json)")
+    pcc.add_argument("--plugin-root", default=None, dest="plugin_root",
+                     help="plugin dir holding .claude-plugin/plugin.json "
+                          "(default: $CLAUDE_PLUGIN_ROOT else the repo-root fallback)")
+    pcc.set_defaults(func=_cmd_card_check)
 
     pe = sub.add_parser("eval", help="run an evaluator command, parse {pass,score?} (Claude-free)")
     pe.add_argument("--command", required=True, help="shell command; LAST stdout line must be the JSON verdict")
@@ -1907,7 +1944,7 @@ def build_parser() -> argparse.ArgumentParser:
     pld.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pld.add_argument("--reason", default="cancel",
                      choices=["done", "deadline", "cancel", "hard_cap",
-                              "plateau", "fault_circuit"])
+                              "plateau", "fault_circuit", "ledger_corrupt"])
     pld.set_defaults(func=_cmd_loop_disarm)
 
     plm = sub.add_parser("loop-mark-done",
@@ -1916,7 +1953,7 @@ def build_parser() -> argparse.ArgumentParser:
     plm.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     plm.add_argument("--run-id", required=True, dest="run_id")
     # single-pass marker vocabulary (spec 2.5) — deliberately narrower than the
-    # six-value disarm-reason set (D-R4-11): hard_cap/plateau/fault_circuit only
+    # seven-value disarm-reason set (D-R4-11): hard_cap/plateau/fault_circuit only
     # arise from armed-gate flows, which mark via disarm_loop, never this verb.
     plm.add_argument("--reason", default="done",
                      choices=["done", "deadline", "cancel", "error"])
@@ -2056,6 +2093,14 @@ def build_parser() -> argparse.ArgumentParser:
     pwga.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pwga.add_argument("--proposal", required=True, help="path to the approved wiki-gc proposal .md")
     pwga.set_defaults(func=_cmd_wiki_gc_apply)
+
+    pwd = wsub.add_parser("delete",
+                          help="DEPRECATED: there is no page delete (append-merge, "
+                               "INV-2) — always errors with the gc/gc-apply redirect")
+    pwd.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    pwd.add_argument("slug", nargs="?", default=None,
+                     help="ignored — accepted only so a mistaken call reaches the redirect")
+    pwd.set_defaults(func=_cmd_wiki_delete)
 
     pcl = sub.add_parser("clean",
                          help="review-gated .omx cleanup: classify -> dry-run -> "

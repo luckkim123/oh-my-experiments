@@ -21,6 +21,14 @@ import json
 
 from omx_core.omx_paths import OmxError, OmxPaths, atomic_path
 
+
+class LedgerCorruptError(OmxError):
+    """A ledger.json that EXISTS but is not valid JSON. Distinct from an ABSENT
+    ledger (plain OmxError) so the loop gate can tell 'never recorded' (skip the
+    backstop) from 'so broken it cannot be read' (count toward a bounded stop) —
+    D-R5-6. Subclass of OmxError, so existing `except OmxError` sites still catch."""
+
+
 # byte-identical to runtime.ts AUTORESEARCH_RESULTS_HEADER (line 146)
 RESULTS_HEADER = "iteration\tcommit\tpass\tscore\tstatus\tdescription\n"
 
@@ -161,6 +169,32 @@ def record_iteration(paths: OmxPaths, run_id, *, iteration, decision,
         "reason": decision["decision_reason"], "evaluator": ev or None,
         "notes": decision.get("notes", []),
     })
+    # 5) health mirror (D-R5-6): when a loop is armed for THIS run_id, mirror the
+    # freshly-computed loop_health into the active_loop envelope so the gate's
+    # circuit backstop still has a signal even if a later read finds the ledger
+    # corrupt (corruption cannot rewind this last-healthy read). Runs AFTER the
+    # ledger writes above (never nested inside the state lock). record_iteration's
+    # sole caller (_cmd_run_record) holds no state lock, so wrapping the state
+    # load-mutate-save in with_file_lock here is reentrancy-safe.
+    from omx_core.lock import with_file_lock
+    from omx_core.loop import loop_health
+    from omx_core.state import load_state, save_state
+
+    def _mirror():
+        state = load_state(paths)
+        env = state.get("active_loop")
+        if not env or env.get("run_id") != run_id:
+            return  # no loop, or armed for a different run -> write nothing
+        health = loop_health(led)  # `led` is the ledger dict just written above
+        env["health_mirror"] = {
+            "consecutive_discards": health["consecutive_discards"],
+            "consecutive_faults": health["consecutive_faults"],
+            "at_iteration": iteration,
+        }
+        state["active_loop"] = env
+        save_state(paths, state)
+
+    with_file_lock(paths.state_lock(), _mirror)
 
 
 def read_run_ledger(paths: OmxPaths, run_id) -> dict:
@@ -176,4 +210,4 @@ def read_run_ledger(paths: OmxPaths, run_id) -> dict:
     try:
         return json.loads(target.read_text())
     except ValueError as e:
-        raise OmxError(f"ledger.json for {run_id!r} is corrupt: {e}") from e
+        raise LedgerCorruptError(f"ledger.json for {run_id!r} is corrupt: {e}") from e
