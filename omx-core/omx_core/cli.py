@@ -917,7 +917,7 @@ def _cmd_loop_arm(args) -> int:
     try:
         env = arm_loop(OmxPaths(root=_resolved_root(args)), run_id=args.run_id,
                        now_iso=now, max_runtime_s=args.max_runtime,
-                       hard_cap=args.hard_cap)
+                       hard_cap=args.hard_cap, session_id=args.session_id)
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(env))
@@ -1506,6 +1506,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help="max blocked stops before the gate self-disarms (default 50)")
     pla.add_argument("--now", default=None,
                      help="ISO-8601 aware instant for deterministic tests; default: real UTC clock")
+    pla.add_argument("--session-id", default=None, dest="session_id",
+                     help="omx session id claiming the run lease (the value "
+                          "`omx session-id` resolves); the lease guards ownership")
     pla.set_defaults(func=_cmd_loop_arm)
 
     pld = sub.add_parser("loop-disarm",

@@ -88,6 +88,99 @@ def test_cli_loop_status_reports_armed(tmp_path, capsys):
     assert rc == 0 and out["armed"]["run_id"] == "run1"
 
 
+# --- R4 T4: arm/disarm lease + marker wiring (spec 2.2) ---
+
+def test_arm_acquires_lease_keyed_by_session(tmp_path):
+    from omx_core.lock import read_run_lease
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=60, session_id="sess-A")
+    lease = read_run_lease(p, "run1")
+    assert lease is not None and lease["session_id"] == "sess-A"
+
+
+def test_arm_without_session_still_acquires_lease(tmp_path):
+    from omx_core.lock import read_run_lease
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=60)
+    lease = read_run_lease(p, "run1")
+    assert lease is not None and lease["session_id"] is None
+
+
+def test_arm_when_already_armed_loud_fails(tmp_path):
+    # the state envelope already holds a loop for this root -> the already-armed
+    # guard fires (this path never reaches the lease code; a DIFFERENT run_id is
+    # used so the guard, not the lease, is what trips).
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=60, session_id="sess-A")
+    with pytest.raises(OmxError) as ei:
+        arm_loop(p, run_id="run2", now_iso=NOW, max_runtime_s=60, session_id="sess-B")
+    assert "already armed" in str(ei.value)
+
+
+def test_arm_loud_fails_on_contended_lease(tmp_path):
+    # genuine lease contention: a young lease for run1 owned by sess-A exists with
+    # NO armed envelope (so the already-armed guard passes and _crit reaches
+    # acquire_run_lease), then arming run1 from sess-B must loud-fail naming the
+    # owning session sess-A.
+    from omx_core.lock import acquire_run_lease
+    p = _paths(tmp_path)
+    acquire_run_lease(p, "run1", session_id="sess-A", now_iso=NOW)  # young lease, no arm
+    with pytest.raises(OmxError) as ei:
+        arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=60, session_id="sess-B")
+    assert "sess-A" in str(ei.value)  # names the owning session
+
+
+def test_arm_clears_stale_marker(tmp_path):
+    # a re-arm of a run that previously finished must not leave a 'done' marker
+    from omx_core.loop import mark_loop_done
+    p = _paths(tmp_path)
+    mark_loop_done(p, "run1", reason="done", summary="old", now_iso=NOW)
+    assert p.loop_marker_json("run1").exists()
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=60, session_id="s")
+    assert not p.loop_marker_json("run1").exists()  # fresh loop => fresh marker slot
+
+
+def test_disarm_writes_marker_and_releases_lease(tmp_path):
+    from omx_core.lock import read_run_lease
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=60, session_id="sess-A")
+    out = disarm_loop(p, reason="done", now_iso=LATER)
+    assert out == {"was_armed": True, "iteration": 0, "reason": "done"}
+    # lease released unconditionally
+    assert read_run_lease(p, "run1") is None
+    # marker written for the armed run with the disarm reason + aware ended_at
+    marker = json.loads(p.loop_marker_json("run1").read_text())
+    assert marker["reason"] == "done" and marker["ended_at"] == LATER
+
+
+def test_disarm_computes_ended_at_when_none(tmp_path):
+    # the handler path passes no now_iso: disarm computes an aware-UTC instant
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=60, session_id="s")
+    disarm_loop(p, reason="cancel")  # now_iso defaults to None
+    marker = json.loads(p.loop_marker_json("run1").read_text())
+    assert marker["ended_at"].endswith("+00:00")  # aware UTC
+
+
+def test_disarm_unarmed_is_idempotent_no_marker(tmp_path):
+    p = _paths(tmp_path)
+    out = disarm_loop(p, reason="cancel")
+    assert out["was_armed"] is False
+    # nothing armed -> no marker written (there is no run to mark)
+    assert not (tmp_path / ".omx" / "runs").exists() or \
+        not any((tmp_path / ".omx" / "runs").glob("*/loop-status.json"))
+
+
+def test_cli_loop_arm_threads_session_id(tmp_path, capsys):
+    from omx_core import cli
+    from omx_core.lock import read_run_lease
+    rc = cli.main(["loop-arm", "--run-id", "run1", "--max-runtime", "3600",
+                   "--now", NOW, "--session-id", "sess-CLI", "--root", str(tmp_path)])
+    assert rc == 0
+    capsys.readouterr()
+    assert read_run_lease(_paths(tmp_path), "run1")["session_id"] == "sess-CLI"
+
+
 # --- T8: loop_gate handler cascade (spec 2.4) ---
 
 def _load_handlers():

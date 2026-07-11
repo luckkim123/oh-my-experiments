@@ -107,33 +107,52 @@ LOOP_HARD_CAP_DEFAULT = 50
 
 
 def arm_loop(paths: OmxPaths, *, run_id, now_iso, max_runtime_s,
-             hard_cap=LOOP_HARD_CAP_DEFAULT) -> dict:
-    """Arm the Stop-hook loop gate (spec 2.4). ONE loop per root until R4's
-    concurrency lock; arming while armed loud-fails. `max_runtime_s` is
-    MANDATORY by construction — an armed gate always self-expires (the
-    staleness guard that lets workspace-scoped gating be safe). The caller
-    injects `now_iso`; the CLI passes the AWARE UTC clock (naive/aware mixes
-    make deadline_passed loud-fail, which would silently fail-open the gate)."""
+             hard_cap=LOOP_HARD_CAP_DEFAULT, session_id=None) -> dict:
+    """Arm the Stop-hook loop gate (spec 2.4 + R4 #1). ONE loop per root; arming
+    while armed loud-fails. The whole load->check-armed->lease->write runs under
+    the state-file mutex so two concurrent arms cannot race (D-R4-3). A
+    per-run O_EXCL lease keyed by `session_id` is acquired inside the lock; if
+    the subsequent state write fails, the lease is released (try/finally). Any
+    stale completion marker for this run is unlinked (a re-arm = a fresh loop).
+    `max_runtime_s` is MANDATORY (an armed gate always self-expires); `now_iso`
+    is the caller-injected AWARE UTC clock (naive/aware mixes make
+    deadline_passed loud-fail, silently failing the gate open)."""
+    from omx_core.lock import acquire_run_lease, release_run_lease, with_file_lock
     from omx_core.state import load_state, save_state
     rid = _require_nonempty(run_id, "run_id")
     if not isinstance(hard_cap, int) or isinstance(hard_cap, bool) or hard_cap <= 0:
         raise OmxError(f"hard_cap must be a positive int, got {hard_cap!r}.")
-    state = load_state(paths)
-    if state.get("active_loop"):
-        raise OmxError(
-            "a loop is already armed for this root "
-            f"({state['active_loop'].get('run_id')!r}); run `omx loop-disarm` first.")
-    envelope = {
-        "run_id": rid,
-        "armed_at": now_iso,
-        "deadline": compute_deadline(now_iso, max_runtime_s),
-        "iteration": 0,
-        "hard_cap": hard_cap,
-        "adopted_session": None,
-    }
-    state["active_loop"] = envelope
-    save_state(paths, state)
-    return envelope
+
+    def _crit() -> dict:
+        state = load_state(paths)
+        if state.get("active_loop"):
+            raise OmxError(
+                "a loop is already armed for this root "
+                f"({state['active_loop'].get('run_id')!r}); run `omx loop-disarm` first.")
+        # lease first (loud-fails on another session's young lease), then write.
+        acquire_run_lease(paths, rid, session_id=session_id, now_iso=now_iso)
+        try:
+            # a re-arm must not read a prior 'done' marker (D-R4-8)
+            marker = paths.loop_marker_json(rid)
+            if marker.exists():
+                marker.unlink()
+            envelope = {
+                "run_id": rid,
+                "armed_at": now_iso,
+                "deadline": compute_deadline(now_iso, max_runtime_s),
+                "iteration": 0,
+                "hard_cap": hard_cap,
+                "adopted_session": None,
+            }
+            state["active_loop"] = envelope
+            save_state(paths, state)
+            return envelope
+        except BaseException:
+            release_run_lease(paths, rid)  # roll the lease back on a write failure
+            raise
+
+    from omx_core.lock import with_file_lock as _wfl  # explicit local alias
+    return _wfl(paths.state_lock(), _crit)
 
 
 def mark_loop_done(paths: OmxPaths, run_id, *, reason, summary, now_iso) -> dict:
@@ -155,13 +174,30 @@ def mark_loop_done(paths: OmxPaths, run_id, *, reason, summary, now_iso) -> dict
     return marker
 
 
-def disarm_loop(paths: OmxPaths, *, reason="cancel") -> dict:
-    """Clear the armed loop (idempotent). The gate's standing exit (spec 2.4)."""
+def disarm_loop(paths: OmxPaths, *, reason="cancel", now_iso=None) -> dict:
+    """Clear the armed loop (idempotent). The gate's standing exit (spec 2.4).
+    Under the state mutex: writes the completion marker for the armed run,
+    releases the lease UNCONDITIONALLY (whichever process disarms is
+    authoritatively ending the loop — critic C2, this is what lets a gate
+    self-disarm clean up), then nulls active_loop. `now_iso` defaults to an
+    aware-UTC instant computed here (the handler path passes none)."""
+    from datetime import datetime, timezone
+    from omx_core.lock import release_run_lease, with_file_lock
     from omx_core.state import load_state, save_state
-    state = load_state(paths)
-    env = state.get("active_loop")
-    if env is None:
-        return {"was_armed": False, "iteration": None, "reason": reason}
-    state["active_loop"] = None
-    save_state(paths, state)
-    return {"was_armed": True, "iteration": env.get("iteration"), "reason": reason}
+    ended_at = now_iso or datetime.now(timezone.utc).isoformat()
+
+    def _crit() -> dict:
+        state = load_state(paths)
+        env = state.get("active_loop")
+        if env is None:
+            return {"was_armed": False, "iteration": None, "reason": reason}
+        rid = env.get("run_id")
+        if rid:
+            mark_loop_done(paths, rid, reason=reason,
+                           summary=f"iteration {env.get('iteration')}", now_iso=ended_at)
+            release_run_lease(paths, rid)  # unconditional
+        state["active_loop"] = None
+        save_state(paths, state)
+        return {"was_armed": True, "iteration": env.get("iteration"), "reason": reason}
+
+    return with_file_lock(paths.state_lock(), _crit)
