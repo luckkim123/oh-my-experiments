@@ -1382,6 +1382,23 @@ def _cmd_wiki_add(args) -> int:
     return 0
 
 
+def _cmd_wiki_delete(args) -> int:
+    """Deprecation-as-runtime-redirect (#20, D-R5-2). There is no page delete:
+    the wiki is append-merge (INV-2) and removal is the git-guarded gc path.
+    ALWAYS loud-fails (rc 2) with a machine-readable JSON redirect naming the
+    real path; deletes NOTHING. The positional slug + --root are accepted and
+    ignored so a mistaken `omx wiki delete <slug>` reaches this redirect instead
+    of dying in argparse with a generic 'invalid choice'."""
+    root = _resolved_root(args)
+    raise SystemExit(json.dumps({
+        "error": "deprecated",
+        "reason": "wiki is append-merge (INV-2); removal is git-guarded gc",
+        "cli_replacement": (
+            f"omx wiki gc --root {root} … then omx wiki gc-apply "
+            f"--root {root} --proposal <approved-gc-proposal.md>"),
+    }))
+
+
 def _cmd_wiki_capture_session(args) -> int:
     """Write session-log stub pages from a report's [FINDING] blocks (#11, spec 3.7).
 
@@ -2056,6 +2073,14 @@ def build_parser() -> argparse.ArgumentParser:
     pwga.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pwga.add_argument("--proposal", required=True, help="path to the approved wiki-gc proposal .md")
     pwga.set_defaults(func=_cmd_wiki_gc_apply)
+
+    pwd = wsub.add_parser("delete",
+                          help="DEPRECATED: there is no page delete (append-merge, "
+                               "INV-2) — always errors with the gc/gc-apply redirect")
+    pwd.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    pwd.add_argument("slug", nargs="?", default=None,
+                     help="ignored — accepted only so a mistaken call reaches the redirect")
+    pwd.set_defaults(func=_cmd_wiki_delete)
 
     pcl = sub.add_parser("clean",
                          help="review-gated .omx cleanup: classify -> dry-run -> "
