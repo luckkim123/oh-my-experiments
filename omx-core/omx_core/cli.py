@@ -822,14 +822,31 @@ def _cmd_queue_launch(args) -> int:
     """Queue the next training launch as a pending-approval artifact (B8).
 
     NEVER launches — writes runs/<run_id>/pending-launch.json and prints it.
-    queued_at is the real clock, injected here (the core stays time-pure)."""
+    queued_at is the real clock, injected here (the core stays time-pure). With
+    --cwd a git repo, records queued_commit = HEAD for launch provenance (#12,
+    D-R4-6); a non-repo cwd or missing git warns and omits the sha."""
+    import subprocess
     paths = OmxPaths(root=_resolved_root(args))
     now = datetime.now(timezone.utc).isoformat()
+    queued_commit = None
+    if args.cwd:
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(args.cwd), "rev-parse", "HEAD"],
+                capture_output=True, text=True, check=False)
+            if proc.returncode == 0 and proc.stdout.strip():
+                queued_commit = proc.stdout.strip()
+            else:
+                print(f"WARNING: could not record queued_commit (--cwd {args.cwd!r} "
+                      "is not a git repo or has no HEAD)", file=sys.stderr)
+        except (FileNotFoundError, OSError):
+            print("WARNING: could not record queued_commit (git unavailable)",
+                  file=sys.stderr)
     try:
         queue_pending_launch(
             paths, args.run_id,
             proposal_id=args.proposal_id, launch_delta=args.launch_delta,
-            gpu_gate=args.gpu_gate, queued_at=now)
+            gpu_gate=args.gpu_gate, queued_at=now, queued_commit=queued_commit)
         print(json.dumps(read_pending_launch(paths, args.run_id)))
     except OmxError as e:
         raise SystemExit(str(e))
@@ -1692,6 +1709,9 @@ def build_parser() -> argparse.ArgumentParser:
     pq.add_argument("--proposal-id", required=True)
     pq.add_argument("--launch-delta", required=True)
     pq.add_argument("--gpu-gate", required=True)
+    pq.add_argument("--cwd", default=None,
+                    help="training git repo; when given, records queued_commit = HEAD "
+                         "for launch provenance (#12)")
     pq.set_defaults(func=_cmd_queue_launch)
 
     pl = sub.add_parser("loop-status",
