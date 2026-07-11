@@ -109,3 +109,100 @@ def test_run_record_carries_command_and_stdout(tmp_path):
     assert "echo" in rec["command"]
     assert "pass" in rec["stdout"]
     assert "ran_at" in rec
+
+
+# --- R4 T9: fault_class on the four error branches (#9) ---
+
+from omx_core.evaluator import run_evaluator
+
+
+def test_fault_class_nonzero_exit(tmp_path):
+    rec = run_evaluator("exit 3", cwd=str(tmp_path))
+    assert rec["status"] == "error"
+    assert rec["fault_class"] == "nonzero_exit"
+    assert rec["parse_error"] == "evaluator exited non-zero"  # shape uniformity
+
+
+def test_fault_class_empty_stdout(tmp_path):
+    rec = run_evaluator("true", cwd=str(tmp_path))  # rc 0, no stdout
+    assert rec["status"] == "error"
+    assert rec["fault_class"] == "empty_stdout"
+
+
+def test_fault_class_unparseable(tmp_path):
+    rec = run_evaluator("echo not-json", cwd=str(tmp_path))
+    assert rec["status"] == "error"
+    assert rec["fault_class"] == "unparseable"
+
+
+def test_fault_class_timeout(tmp_path):
+    rec = run_evaluator("sleep 5", cwd=str(tmp_path), timeout=1)
+    assert rec["status"] == "error"
+    assert rec["fault_class"] == "timeout"
+
+
+def test_success_record_has_no_fault_class(tmp_path):
+    rec = run_evaluator('echo \'{"pass": true}\'', cwd=str(tmp_path))
+    assert rec["status"] == "pass"
+    assert "fault_class" not in rec
+
+
+# --- R4 T9: omx eval error auto-appends a debugging wiki stub (#27) ---
+
+def test_eval_error_appends_wiki_stub(tmp_path, capsys):
+    from omx_core import cli
+    from omx_core.omx_paths import OmxPaths
+    from omx_core.wiki.storage import list_pages
+    # a sealed profile is needed so --root doesn't rc-2 on the seal preflight;
+    # build the minimal profile + seal the way the seal tests do, OR pass a root
+    # with a profile whose seal is ABSENT (eval warns but proceeds). Absent-seal
+    # is simplest: create .omx/profile/evaluator.sh so check_seal returns absent.
+    prof = tmp_path / ".omx" / "profile"
+    prof.mkdir(parents=True)
+    (prof / "evaluator.sh").write_text("#!/bin/sh\nexit 3\n")
+    capsys.readouterr()
+    rc = cli.main(["eval", "--command", "exit 3", "--cwd", str(tmp_path),
+                   "--root", str(tmp_path)])
+    assert rc == 1  # evaluator-broke rc is unchanged
+    paths = OmxPaths(root=str(tmp_path))
+    pages = list_pages(paths)
+    assert any("evaluator_fault_nonzero_exit" in s or "evaluator-fault-nonzero_exit" in s
+               for s in pages), pages
+
+
+def test_eval_error_stub_capture_is_idempotent(tmp_path, capsys):
+    from omx_core import cli
+    from omx_core.omx_paths import OmxPaths
+    from omx_core.wiki.storage import list_pages
+    prof = tmp_path / ".omx" / "profile"
+    prof.mkdir(parents=True)
+    (prof / "evaluator.sh").write_text("#!/bin/sh\nexit 3\n")
+    for _ in range(2):
+        cli.main(["eval", "--command", "exit 3", "--cwd", str(tmp_path),
+                  "--root", str(tmp_path)])
+    capsys.readouterr()
+    paths = OmxPaths(root=str(tmp_path))
+    fault_pages = [s for s in list_pages(paths) if "nonzero_exit" in s]
+    assert len(fault_pages) == 1  # append-merge: recurrence strengthens ONE page
+
+
+def test_eval_error_capture_failure_is_nonfatal(tmp_path, capsys, monkeypatch):
+    # a capture exception must NOT change the eval rc (grading never breaks on
+    # knowledge plumbing). Poison ingest_knowledge to raise.
+    from omx_core import cli
+    import omx_core.wiki.ingest as ingest_mod
+    prof = tmp_path / ".omx" / "profile"
+    prof.mkdir(parents=True)
+    (prof / "evaluator.sh").write_text("#!/bin/sh\nexit 3\n")
+
+    def _boom(*a, **k):
+        raise RuntimeError("wiki down")
+
+    monkeypatch.setattr(ingest_mod, "ingest_knowledge", _boom)
+    capsys.readouterr()
+    rc = cli.main(["eval", "--command", "exit 3", "--cwd", str(tmp_path),
+                   "--root", str(tmp_path)])
+    assert rc == 1  # still the evaluator-broke rc; the capture failure is swallowed
+    # the swallowed failure must still surface a warning on stderr — a
+    # load-bearing assertion (no `or True` escape) on the exact warn substring.
+    assert "evaluator-fault wiki capture failed" in capsys.readouterr().err.lower()

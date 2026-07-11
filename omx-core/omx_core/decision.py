@@ -67,8 +67,11 @@ def decide_outcome(keep_policy: str, last_kept_score, evaluation) -> dict:
             f"decide_outcome keep_policy must be normalized to one of {list(_VALID)}, "
             f"got {keep_policy!r} (call parse_keep_policy first).")
     if evaluation is None or evaluation.get("status") == "error":
-        return _d("discard", "evaluator error", False, evaluation,
-                  "candidate discarded because evaluator errored or crashed")
+        fault = (evaluation or {}).get("fault_class")
+        note = "candidate discarded because evaluator errored or crashed"
+        if fault:
+            note = f"candidate discarded because evaluator errored ({fault})"
+        return _d("discard", "evaluator error", False, evaluation, note)
     if not evaluation.get("pass"):
         return _d("discard", "evaluator reported failure", False, evaluation,
                   "candidate discarded because evaluator pass=false")

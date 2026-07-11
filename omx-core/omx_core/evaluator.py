@@ -91,6 +91,7 @@ def run_evaluator(command: str, cwd, *, timeout: int = 600) -> dict:
             "stdout": (e.stdout or "") if isinstance(e.stdout, str) else "",
             "stderr": (e.stderr or "") if isinstance(e.stderr, str) else "",
             "parse_error": f"timeout after {timeout}s",
+            "fault_class": "timeout",
         }
     stdout = (proc.stdout or "").strip()
     stderr = (proc.stderr or "").strip()
@@ -98,6 +99,8 @@ def run_evaluator(command: str, cwd, *, timeout: int = 600) -> dict:
         return {
             "command": command, "ran_at": ran_at, "status": "error",
             "exit_code": proc.returncode, "stdout": stdout, "stderr": stderr,
+            "parse_error": "evaluator exited non-zero",
+            "fault_class": "nonzero_exit",
         }
     last = _last_nonempty_line(stdout)
     if last is None:
@@ -105,6 +108,7 @@ def run_evaluator(command: str, cwd, *, timeout: int = 600) -> dict:
             "command": command, "ran_at": ran_at, "status": "error",
             "exit_code": proc.returncode, "stdout": stdout, "stderr": stderr,
             "parse_error": "evaluator produced no parseable stdout line",
+            "fault_class": "empty_stdout",
         }
     try:
         parsed = parse_evaluator_result(last)
@@ -113,6 +117,7 @@ def run_evaluator(command: str, cwd, *, timeout: int = 600) -> dict:
             "command": command, "ran_at": ran_at, "status": "error",
             "exit_code": proc.returncode, "stdout": stdout, "stderr": stderr,
             "parse_error": str(e),
+            "fault_class": "unparseable",
         }
     record = {
         "command": command, "ran_at": ran_at,

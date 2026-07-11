@@ -249,6 +249,27 @@ def _cmd_eval(args) -> int:
             raise SystemExit(str(e))
         out["decision"] = decide_outcome(policy, args.last_kept_score, rec)
     print(json.dumps(_finite_clean(out), allow_nan=False))
+    # R4 #27: on an evaluator error, auto-append a low-confidence debugging wiki
+    # stub keyed by fault class (append-merge -> recurrence strengthens ONE
+    # page). Only with --root (needs a resolvable .omx); NEVER fatal — grading
+    # must not break on knowledge plumbing.
+    if rec.get("status") == "error" and args.root:
+        try:
+            from omx_core.wiki.ingest import ingest_knowledge
+            fault = rec.get("fault_class") or "unknown"
+            body = (
+                f"Command: {rec.get('command')}\n"
+                f"Exit code: {rec.get('exit_code')}\n"
+                f"Parse error: {rec.get('parse_error')}\n"
+                f"Ran at: {rec.get('ran_at')}\n"
+                f"Cwd: {args.cwd or os.getcwd()}\n")
+            ingest_knowledge(
+                OmxPaths(root=_resolved_root(args)), now=_now_iso(),
+                title=f"evaluator fault {fault}", content=body,
+                tags=["auto-captured", "evaluator-fault", fault],
+                category="debugging", confidence="low", sources=[])
+        except Exception as e:  # never fatal (D-R4-5)
+            print(f"WARNING: evaluator-fault wiki capture failed: {e}", file=sys.stderr)
     return 0 if rec["status"] in ("pass", "fail") else 1
 
 
