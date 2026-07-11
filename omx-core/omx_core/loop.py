@@ -169,8 +169,8 @@ def mark_loop_done(paths: OmxPaths, run_id, *, reason, summary, now_iso) -> dict
     """Atomically write runs/<run_id>/loop-status.json — the loop-completion
     marker (R4 #7, D-R4-8). Overwrite is allowed: a re-run of a run id refreshes
     the marker (history lives in the ledger, not here). `now_iso` is the AWARE
-    UTC instant the caller computes; `reason` is the disarm reason
-    (done|deadline|cancel|error|hard_cap|plateau|fault_circuit)."""
+    UTC instant the caller computes; `reason` is the disarm reason (eight values:
+    done|deadline|cancel|error|hard_cap|plateau|fault_circuit|ledger_corrupt)."""
     marker = {
         "schema_version": 1,
         "phase": "done",

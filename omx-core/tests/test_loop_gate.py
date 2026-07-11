@@ -375,3 +375,105 @@ def test_cli_loop_arm_rejects_naive_now(tmp_path, capsys):
                    "--now", "2026-07-07T10:00:00", "--root", str(tmp_path)])
     assert rc == 2
     assert "timezone-AWARE" in capsys.readouterr().err
+
+
+# --- R5 T5: corrupt-ledger circuit backstop (D-R5-6) ---
+
+def _corrupt_ledger(p, run_id="run1"):
+    target = p.ledger_json(run_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("{not valid json")
+
+
+def test_gate_absent_ledger_still_silent(tmp_path):
+    # absent ledger (never recorded) -> backstop skipped, gate blocks normally,
+    # NO probe counter written (absence is not corruption).
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=10 ** 8, session_id="s")
+    out = _load_handlers().loop_gate(_payload(tmp_path))
+    assert out["decision"] == "block"
+    assert "ledger_probe_failures" not in (load_state(p)["active_loop"] or {})
+
+
+def test_gate_corrupt_ledger_increments_and_persists(tmp_path):
+    # one corrupt probe -> counter = 1, PERSISTED (survives the Stop event), gate
+    # still blocks (1 < 3).
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=10 ** 8, session_id="s")
+    _corrupt_ledger(p)
+    out = _load_handlers().loop_gate(_payload(tmp_path))
+    assert out["decision"] == "block"
+    assert load_state(p)["active_loop"]["ledger_probe_failures"] == 1
+
+
+def test_gate_three_corrupt_probes_disarm_ledger_corrupt(tmp_path):
+    # three consecutive corrupt Stop-cycles -> disarm with reason 'ledger_corrupt'.
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=10 ** 8, session_id="s")
+    _corrupt_ledger(p)
+    mod = _load_handlers()
+    assert mod.loop_gate(_payload(tmp_path))["decision"] == "block"   # 1
+    assert mod.loop_gate(_payload(tmp_path))["decision"] == "block"   # 2
+    assert mod.loop_gate(_payload(tmp_path)) is None                  # 3 -> disarm
+    assert load_state(p)["active_loop"] is None
+    marker = json.loads(p.loop_marker_json("run1").read_text())
+    assert marker["reason"] == "ledger_corrupt"
+
+
+def test_gate_healthy_probe_resets_counter_and_persists(tmp_path):
+    # counter climbs to 2, then a healthy ledger read resets it to 0 (persisted:
+    # a stale 2 must not survive a healthy probe).
+    from omx_core.ledger import seed_ledger, append_ledger_entry
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=10 ** 8, session_id="s")
+    _corrupt_ledger(p)
+    mod = _load_handlers()
+    mod.loop_gate(_payload(tmp_path))                                 # counter 1
+    mod.loop_gate(_payload(tmp_path))                                 # counter 2
+    # replace the corrupt ledger with a healthy one (1 discard, no trip)
+    p.ledger_json("run1").unlink()
+    seed_ledger(p, "run1", baseline_commit="abc", keep_policy="pass_only")
+    append_ledger_entry(p, "run1", {"decision": "discard",
+                                    "evaluator": {"status": "fail"}})
+    assert mod.loop_gate(_payload(tmp_path))["decision"] == "block"   # healthy -> reset
+    assert load_state(p)["active_loop"]["ledger_probe_failures"] == 0
+
+
+def test_gate_mirror_trips_plateau_when_ledger_corrupt(tmp_path):
+    # a healthy record left a mirror showing a plateau streak, THEN the ledger
+    # went corrupt: the gate consults the mirror on the corrupt path and disarms
+    # with the usual 'plateau' reason (corruption cannot rewind the mirror).
+    from omx_core.ledger import seed_ledger, record_iteration
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=10 ** 8, session_id="s")
+    seed_ledger(p, "run1", baseline_commit="abc", keep_policy="pass_only")
+    # 5 discards recorded WHILE armed -> record_iteration mirrors a plateau streak
+    for i in range(5):
+        record_iteration(p, "run1", iteration=i,
+                         decision={"decision": "discard", "keep": False,
+                                   "evaluator": {"status": "fail"},
+                                   "decision_reason": "manual record", "notes": []},
+                         candidate_checkpoint=f"m{i}.pt", candidate_commit=f"c{i}",
+                         description="d")
+    _corrupt_ledger(p)   # now the ledger is unreadable
+    assert _load_handlers().loop_gate(_payload(tmp_path)) is None
+    marker = json.loads(p.loop_marker_json("run1").read_text())
+    assert marker["reason"] == "plateau"   # mirror-driven, not ledger_corrupt
+
+
+def test_cli_loop_disarm_accepts_ledger_corrupt_reason(tmp_path, capsys):
+    from omx_core import cli
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=60, session_id="s")
+    capsys.readouterr()
+    rc = cli.main(["loop-disarm", "--reason", "ledger_corrupt", "--root", str(tmp_path)])
+    assert rc == 0
+
+
+def test_cli_loop_mark_done_rejects_ledger_corrupt(tmp_path):
+    # loop-mark-done stays narrow (done|deadline|cancel|error) — ledger_corrupt is
+    # an armed-gate-only reason (critic F6).
+    from omx_core import cli
+    rc = cli.main(["loop-mark-done", "--run-id", "run1", "--reason", "ledger_corrupt",
+                   "--root", str(tmp_path)])
+    assert rc == 2   # argparse choices reject it

@@ -237,29 +237,58 @@ def loop_gate(payload):
             # hard_cap), and every self-disarm branch intentionally runs from any
             # session (R3 crash-recovery precedent), so the backstop is allowed to
             # disarm regardless of which session owns the loop.
+            from omx_core.loop import (FAULT_STREAK_DEFAULT,
+                                       PLATEAU_DISCARDS_DEFAULT, loop_health)
+            plateau_discards = PLATEAU_DISCARDS_DEFAULT
+            fault_streak = FAULT_STREAK_DEFAULT
             try:
-                from omx_core.ledger import read_run_ledger
-                from omx_core.loop import (FAULT_STREAK_DEFAULT,
-                                           PLATEAU_DISCARDS_DEFAULT,
-                                           loop_health)
-                plateau_discards = PLATEAU_DISCARDS_DEFAULT
-                fault_streak = FAULT_STREAK_DEFAULT
-                try:
-                    from omx_core.profile import load_profile_metrics
-                    prof = load_profile_metrics(paths.root)
-                    plateau_discards = int(prof.get("plateau_discards", plateau_discards))
-                    fault_streak = int(prof.get("fault_streak", fault_streak))
-                except Exception:
-                    pass  # no profile yet -> named-constant defaults (D12: override slot)
+                from omx_core.profile import load_profile_metrics
+                prof = load_profile_metrics(paths.root)
+                plateau_discards = int(prof.get("plateau_discards", plateau_discards))
+                fault_streak = int(prof.get("fault_streak", fault_streak))
+            except Exception:
+                pass  # no profile yet -> named-constant defaults (D12: override slot)
+
+            def _tripped(health):
+                if health["consecutive_discards"] >= plateau_discards:
+                    return "plateau"
+                if health["consecutive_faults"] >= fault_streak:
+                    return "fault_circuit"
+                return None
+
+            # D-R5-6: narrow the exception handling. ABSENT ledger -> skip silently
+            # (normal before the first record). CORRUPT ledger -> count it toward a
+            # bounded stop, but FIRST consult the last-healthy mirror (corruption
+            # cannot rewind it). Any OTHER exception keeps today's blanket fail-open.
+            from omx_core.ledger import (LedgerCorruptError, read_run_ledger)
+            try:
                 health = loop_health(read_run_ledger(paths, env["run_id"]),
                                      plateau_discards=plateau_discards,
                                      fault_streak=fault_streak)
-                if health["plateau_tripped"]:
-                    return _disarm_inline("plateau")
-                if health["fault_tripped"]:
-                    return _disarm_inline("fault_circuit")
+                # healthy read: reset the corrupt-probe counter (persist — a stale
+                # count must not survive a healthy probe).
+                if env.get("ledger_probe_failures"):
+                    env["ledger_probe_failures"] = 0
+                    state["active_loop"] = env
+                    save_state(paths, state)
+                reason = _tripped(health)
+                if reason:
+                    return _disarm_inline(reason)
+            except LedgerCorruptError:
+                # mirror consult first: a mirrored streak trips the usual reason.
+                mirror = env.get("health_mirror")
+                if mirror:
+                    reason = _tripped(mirror)
+                    if reason:
+                        return _disarm_inline(reason)
+                # else: count the corrupt probe, PERSIST it, and stop at 3.
+                env["ledger_probe_failures"] = env.get("ledger_probe_failures", 0) + 1
+                state["active_loop"] = env
+                save_state(paths, state)
+                if env["ledger_probe_failures"] >= 3:
+                    return _disarm_inline("ledger_corrupt")
             except Exception:
-                pass  # backstop fail-open: a broken/absent ledger never traps the gate
+                pass  # blanket fail-open for any non-corrupt failure (D9 untouched)
             sid = payload.get("session_id")
             adopted = env.get("adopted_session")
             if adopted and sid and adopted != sid:

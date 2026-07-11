@@ -149,3 +149,67 @@ def test_record_iteration_writes_all_three_artifacts(tmp_path):
     # atomic: no .tmp leftovers in the run dir
     leftovers = [f.name for f in p.run_dir("run01").iterdir() if f.name.endswith(".tmp")]
     assert leftovers == []
+
+
+# --- R5 T5: absent-vs-corrupt split + health mirror (D-R5-6) ---
+
+def test_read_run_ledger_absent_raises_plain_omxerror(tmp_path):
+    from omx_core.omx_paths import OmxError
+    from omx_core.ledger import read_run_ledger, LedgerCorruptError
+    p = OmxPaths(tmp_path)
+    with pytest.raises(OmxError) as ei:
+        read_run_ledger(p, "run1")
+    # absence is NOT corruption: a plain OmxError, never the corrupt subtype
+    assert not isinstance(ei.value, LedgerCorruptError)
+    assert "no ledger" in str(ei.value)
+
+
+def test_read_run_ledger_corrupt_raises_ledger_corrupt(tmp_path):
+    from omx_core.ledger import read_run_ledger, LedgerCorruptError
+    p = OmxPaths(tmp_path)
+    target = p.ledger_json("run1")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("{not valid json")
+    with pytest.raises(LedgerCorruptError):
+        read_run_ledger(p, "run1")
+
+
+def test_ledger_corrupt_is_omxerror_subclass():
+    from omx_core.omx_paths import OmxError
+    from omx_core.ledger import LedgerCorruptError
+    assert issubclass(LedgerCorruptError, OmxError)
+
+
+def test_record_iteration_writes_health_mirror_when_armed(tmp_path):
+    # a loop armed for run1 -> record_iteration mirrors loop_health into the
+    # active_loop envelope AFTER the ledger writes.
+    from omx_core.loop import arm_loop
+    from omx_core.ledger import seed_ledger, record_iteration
+    from omx_core.state import load_state
+    p = OmxPaths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso="2026-07-11T10:00:00+00:00",
+             max_runtime_s=10 ** 8, session_id="s")
+    seed_ledger(p, "run1", baseline_commit="abc", keep_policy="pass_only")
+    record_iteration(p, "run1", iteration=0,
+                     decision={"decision": "discard", "keep": False, "evaluator": None,
+                               "decision_reason": "manual record", "notes": []},
+                     candidate_checkpoint="m0.pt", candidate_commit="c0",
+                     description="d")
+    mirror = load_state(p)["active_loop"]["health_mirror"]
+    assert mirror["consecutive_discards"] == 1
+    assert mirror["consecutive_faults"] == 0
+    assert mirror["at_iteration"] == 0
+
+
+def test_record_iteration_no_mirror_when_not_armed(tmp_path):
+    # no loop armed (or armed for a DIFFERENT run) -> record writes no mirror.
+    from omx_core.ledger import seed_ledger, record_iteration
+    from omx_core.state import load_state
+    p = OmxPaths(tmp_path)
+    seed_ledger(p, "run1", baseline_commit="abc", keep_policy="pass_only")
+    record_iteration(p, "run1", iteration=0,
+                     decision={"decision": "keep", "keep": True, "evaluator": None,
+                               "decision_reason": "manual record", "notes": []},
+                     candidate_checkpoint="m0.pt", candidate_commit="c0",
+                     description="d")
+    assert load_state(p).get("active_loop") is None   # nothing armed -> no envelope
