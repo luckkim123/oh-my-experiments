@@ -241,8 +241,21 @@ def loop_gate(payload):
             # disarm regardless of which session owns the loop.
             try:
                 from omx_core.ledger import read_run_ledger
-                from omx_core.loop import loop_health
-                health = loop_health(read_run_ledger(paths, env["run_id"]))
+                from omx_core.loop import (FAULT_STREAK_DEFAULT,
+                                           PLATEAU_DISCARDS_DEFAULT,
+                                           loop_health)
+                plateau_discards = PLATEAU_DISCARDS_DEFAULT
+                fault_streak = FAULT_STREAK_DEFAULT
+                try:
+                    from omx_core.profile import load_profile_metrics
+                    prof = load_profile_metrics(paths.root)
+                    plateau_discards = int(prof.get("plateau_discards", plateau_discards))
+                    fault_streak = int(prof.get("fault_streak", fault_streak))
+                except Exception:
+                    pass  # no profile yet -> named-constant defaults (D12: override slot)
+                health = loop_health(read_run_ledger(paths, env["run_id"]),
+                                     plateau_discards=plateau_discards,
+                                     fault_streak=fault_streak)
                 if health["plateau_tripped"]:
                     return _disarm_inline("plateau")
                 if health["fault_tripped"]:
