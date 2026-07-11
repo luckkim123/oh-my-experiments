@@ -7,9 +7,7 @@ injected by callers (CLI), keeping this module unit-testable without a clock.
 """
 from __future__ import annotations
 
-import fcntl
 import re
-import time
 from pathlib import Path
 
 from omx_core.omx_paths import OmxPaths, atomic_path
@@ -237,21 +235,14 @@ def append_log(paths: OmxPaths, *, now: str, operation: str, pages: list, summar
 def with_wiki_lock(paths: OmxPaths, fn, *, timeout_s: float = 5.0, retry_s: float = 0.05):
     """Run `fn` while holding an exclusive fcntl lock on registry/.wiki-lock.
     All wiki WRITES go through this so concurrent sessions never corrupt the wiki.
-    Loud-fail (WikiError) if the lock cannot be acquired within timeout_s."""
-    lock_path = paths.wiki_lock()
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    deadline = time.monotonic() + timeout_s
-    with open(lock_path, "a", encoding="utf-8") as fh:
-        while True:
-            try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise WikiError(
-                        f"wiki lock busy after {timeout_s}s ({lock_path}); another session holds it")
-                time.sleep(retry_s)
-        try:
-            return fn()
-        finally:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    Loud-fail (WikiError) if the lock cannot be acquired within timeout_s.
+
+    Delegates to the generic omx_core.lock.with_file_lock (D-R4-3); the OmxError
+    it raises on timeout is re-raised as WikiError so wiki callers keep catching
+    the wiki base (behavior-preserving extraction)."""
+    from omx_core.lock import with_file_lock
+    from omx_core.omx_paths import OmxError
+    try:
+        return with_file_lock(paths.wiki_lock(), fn, timeout_s=timeout_s, retry_s=retry_s)
+    except OmxError as e:
+        raise WikiError(str(e)) from e
