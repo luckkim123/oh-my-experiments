@@ -122,6 +122,16 @@ def acquire_run_lease(paths, run_id, *, session_id, now_iso,
         pass
     # contended: reap-or-fail
     existing = read_run_lease(paths, run_id)
+    if existing is None:
+        # the lease vanished between our EEXIST and this read (e.g. a
+        # concurrent release_run_lease/disarm won the narrow window) — there
+        # is nothing to reap or report as "owned"; retry the create once,
+        # same as the reaper-race retry below.
+        try:
+            _write_lease(lock_path, payload)
+            return payload
+        except FileExistsError:
+            existing = read_run_lease(paths, run_id)
     age = _lease_age_hours(existing, lock_path, now_iso)
     if age <= stale_hours:
         owner = (existing or {}).get("session_id")

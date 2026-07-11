@@ -211,6 +211,36 @@ def test_acquire_old_corrupt_lease_is_reaped(tmp_path):
     assert lease["session_id"] == "s"
 
 
+def test_acquire_retries_when_lease_vanishes_during_contended_read(tmp_path, monkeypatch):
+    # Race: our O_EXCL create hits EEXIST, but a concurrent release_run_lease
+    # (e.g. another thread's disarm) unlinks the lease before we read it back.
+    # read_run_lease then returns None for a lease that no longer exists — this
+    # must self-heal by retrying the create, not loud-fail with a confusing
+    # "owned by session None" message.
+    import omx_core.lock as lock_mod
+
+    p = OmxPaths(root=str(tmp_path))
+    acquire_run_lease(p, "run1", session_id="sess-A", now_iso=AWARE_NOW)
+
+    real_read = lock_mod.read_run_lease
+    calls = {"n": 0}
+
+    def fake_read(paths, run_id):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # simulate the concurrent release winning the window
+            release_run_lease(paths, run_id)
+            return None
+        return real_read(paths, run_id)
+
+    monkeypatch.setattr(lock_mod, "read_run_lease", fake_read)
+
+    lease = acquire_run_lease(p, "run1", session_id="sess-B",
+                              now_iso="2026-07-11T10:05:00+00:00")
+    assert lease["session_id"] == "sess-B"
+    assert read_run_lease(p, "run1")["session_id"] == "sess-B"
+
+
 def test_release_is_unconditional(tmp_path):
     p = OmxPaths(root=str(tmp_path))
     acquire_run_lease(p, "run1", session_id="sess-A", now_iso=AWARE_NOW)
