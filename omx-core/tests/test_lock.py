@@ -82,3 +82,135 @@ def test_with_file_lock_releases_on_exception(tmp_path):
         with_file_lock(lock, boom)
     # the lock is free again: a fresh acquire returns immediately
     assert with_file_lock(lock, lambda: "free") == "free"
+
+
+# --- T2: omx_paths lease/lock/marker getters ---
+
+from omx_core.omx_paths import OmxPaths
+
+
+def test_loop_lock_path(tmp_path):
+    p = OmxPaths(root=str(tmp_path))
+    assert p.loop_lock("run1") == tmp_path / ".omx" / "runs" / "run1" / ".loop-lock"
+
+
+def test_state_lock_path(tmp_path):
+    p = OmxPaths(root=str(tmp_path))
+    assert p.state_lock() == tmp_path / ".omx" / "state" / ".state-lock"
+
+
+def test_loop_marker_path(tmp_path):
+    p = OmxPaths(root=str(tmp_path))
+    assert p.loop_marker_json("run1") == tmp_path / ".omx" / "runs" / "run1" / "loop-status.json"
+
+
+# --- T2: run-lease primitives (spec 2.1 / 3) ---
+
+from omx_core.lock import (
+    LOCK_STALE_HOURS,
+    acquire_run_lease,
+    read_run_lease,
+    release_run_lease,
+)
+
+AWARE_NOW = "2026-07-11T10:00:00+00:00"
+
+
+def test_lock_stale_hours_default_is_2():
+    assert LOCK_STALE_HOURS == 2
+
+
+def test_acquire_writes_session_keyed_payload(tmp_path):
+    p = OmxPaths(root=str(tmp_path))
+    lease = acquire_run_lease(p, "run1", session_id="sess-A", now_iso=AWARE_NOW)
+    assert lease["session_id"] == "sess-A"
+    assert lease["armed_at"] == AWARE_NOW
+    assert isinstance(lease["armed_by_pid"], int)
+    # the lease file exists and round-trips
+    on_disk = read_run_lease(p, "run1")
+    assert on_disk["session_id"] == "sess-A"
+
+
+def test_acquire_mkdirs_run_dir_when_absent(tmp_path):
+    # arm can precede tree scaffolding — ENOENT on the parent is not a failure.
+    p = OmxPaths(root=str(tmp_path))
+    assert not p.run_dir("fresh").exists()
+    acquire_run_lease(p, "fresh", session_id="s", now_iso=AWARE_NOW)
+    assert p.loop_lock("fresh").is_file()
+
+
+def test_acquire_young_other_session_loud_fails(tmp_path):
+    p = OmxPaths(root=str(tmp_path))
+    acquire_run_lease(p, "run1", session_id="sess-A", now_iso=AWARE_NOW)
+    with pytest.raises(OmxError) as ei:
+        acquire_run_lease(p, "run1", session_id="sess-B",
+                          now_iso="2026-07-11T10:30:00+00:00")  # +30min, still young
+    msg = str(ei.value)
+    assert "sess-A" in msg and "run1" in msg  # names the owning session + run
+
+
+def test_acquire_young_same_session_still_loud_fails(tmp_path):
+    # arm-twice: even the SAME session cannot double-claim a young lease (the
+    # arm_loop already-armed path surfaces here as a loud fail).
+    p = OmxPaths(root=str(tmp_path))
+    acquire_run_lease(p, "run1", session_id="sess-A", now_iso=AWARE_NOW)
+    with pytest.raises(OmxError):
+        acquire_run_lease(p, "run1", session_id="sess-A",
+                          now_iso="2026-07-11T10:05:00+00:00")
+
+
+def test_acquire_reaps_stale_lease(tmp_path):
+    # A lease older than stale_hours is reaped and re-claimed by the new session.
+    p = OmxPaths(root=str(tmp_path))
+    acquire_run_lease(p, "run1", session_id="sess-old", now_iso="2026-07-11T00:00:00+00:00")
+    lease = acquire_run_lease(p, "run1", session_id="sess-new",
+                              now_iso="2026-07-11T10:00:00+00:00")  # +10h > 2h
+    assert lease["session_id"] == "sess-new"
+    assert read_run_lease(p, "run1")["session_id"] == "sess-new"
+
+
+def test_acquire_corrupt_lease_uses_mtime_fallback(tmp_path):
+    # A corrupt (unparseable) lease is a stale-CANDIDATE, never insta-reaped:
+    # it is reaped only if its file mtime is older than stale_hours. A FRESH
+    # corrupt lease (mtime = real now) must therefore still block. The mtime
+    # fallback compares against the REAL clock (time.time()), so this holds
+    # regardless of what fictional now_iso the caller injects.
+    p = OmxPaths(root=str(tmp_path))
+    p.run_dir("run1").mkdir(parents=True)
+    p.loop_lock("run1").write_text("{not json")  # corrupt, real mtime = now
+    with pytest.raises(OmxError):
+        acquire_run_lease(p, "run1", session_id="s", now_iso=AWARE_NOW)
+
+
+def test_acquire_old_corrupt_lease_is_reaped(tmp_path):
+    # Backdate the corrupt lease's REAL mtime past stale_hours (os.utime) so the
+    # mtime fallback (real-clock delta) actually measures ~(STALE+1)h of age and
+    # reaps it. This exercises the fallback for the right reason — the outcome is
+    # independent of the injected now_iso.
+    import os
+    p = OmxPaths(root=str(tmp_path))
+    p.run_dir("run1").mkdir(parents=True)
+    lock = p.loop_lock("run1")
+    lock.write_text("{corrupt")
+    old = time.time() - (LOCK_STALE_HOURS + 1) * 3600
+    os.utime(lock, (old, old))
+    lease = acquire_run_lease(p, "run1", session_id="s", now_iso=AWARE_NOW)
+    assert lease["session_id"] == "s"
+
+
+def test_release_is_unconditional(tmp_path):
+    p = OmxPaths(root=str(tmp_path))
+    acquire_run_lease(p, "run1", session_id="sess-A", now_iso=AWARE_NOW)
+    # a DIFFERENT process/session releases it — no owner check (D-R4-3 / critic C2)
+    assert release_run_lease(p, "run1") == {"released": True}
+    assert read_run_lease(p, "run1") is None
+
+
+def test_release_unheld_returns_false(tmp_path):
+    p = OmxPaths(root=str(tmp_path))
+    assert release_run_lease(p, "run1") == {"released": False}
+
+
+def test_read_run_lease_absent_is_none(tmp_path):
+    p = OmxPaths(root=str(tmp_path))
+    assert read_run_lease(p, "run1") is None
