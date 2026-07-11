@@ -1010,8 +1010,8 @@ def _cmd_run_seed(args) -> int:
     if target.exists():
         try:
             already_seeded = json.loads(target.read_text()).get("baseline_commit") is not None
-        except ValueError:
-            already_seeded = True  # corrupt ledger: don't silently clobber it
+        except (OSError, ValueError):
+            already_seeded = True  # corrupt or race-vanished ledger: don't silently clobber it
         if already_seeded:
             raise SystemExit(
                 f"ledger for run {args.run_id!r} already exists; seeding is once "
