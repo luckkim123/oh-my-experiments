@@ -65,6 +65,24 @@ def test_absent_plugin_json_is_actionable(tmp_path):
     assert "plugin.json" in str(ei.value)
 
 
+def test_malformed_card_is_actionable_rc2(tmp_path, capsys):
+    card = tmp_path / "omx.json"
+    card.write_text("{not json")
+    rc = cli.main(["card-check", "--card", str(card),
+                   "--plugin-root", str(_plugin(tmp_path))])
+    err = capsys.readouterr().err
+    assert rc == 2 and "not valid JSON" in err
+
+
+def test_malformed_plugin_json_is_actionable_rc2(tmp_path, capsys):
+    plugin_root = _plugin(tmp_path)
+    (plugin_root / ".claude-plugin" / "plugin.json").write_text("{not json")
+    rc = cli.main(["card-check", "--card", str(_card(tmp_path)),
+                   "--plugin-root", str(plugin_root)])
+    err = capsys.readouterr().err
+    assert rc == 2 and "not valid JSON" in err
+
+
 def test_cli_card_check_rc0_on_parity(tmp_path, capsys):
     rc = cli.main(["card-check", "--card", str(_card(tmp_path)),
                    "--plugin-root", str(_plugin(tmp_path))])

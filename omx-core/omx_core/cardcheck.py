@@ -65,9 +65,15 @@ def run_card_check(*, card_path=None, plugin_root=None) -> dict:
             "(card-check runs at release time, where the card must be reachable)")
     plugin_json = resolve_plugin_json(plugin_root)
 
-    card = json.loads(card_path.read_text(encoding="utf-8"))
-    plugin = json.loads(plugin_json.read_text(encoding="utf-8"))
     card_text = card_path.read_text(encoding="utf-8")
+    try:
+        card = json.loads(card_text)
+    except ValueError as e:
+        raise OmxError(f"card at {card_path} is not valid JSON: {e}") from e
+    try:
+        plugin = json.loads(plugin_json.read_text(encoding="utf-8"))
+    except ValueError as e:
+        raise OmxError(f"plugin.json at {plugin_json} is not valid JSON: {e}") from e
 
     failures = []
     cv, pv = card.get("version"), plugin.get("version")

@@ -56,6 +56,9 @@ corrupted ledger).
   aware `now`), every parse-and-compare normalizes via `clock.parse_iso_utc()`.
   A pre-R5 naive on-disk lease now ages via real subtraction, not the mtime
   fallback. A grep-guard test forbids stray inline clocks.
+- `card-check`: malformed card/plugin.json now loud-fails rc 2 with an
+  actionable message instead of a raw JSONDecodeError (final whole-branch
+  review finding).
 
 ### Changed
 
@@ -66,8 +69,8 @@ corrupted ledger).
 
 ### Verification
 
-- omx-core full pytest suite green: **892 passed, 1 skipped** (843 baseline + 49
-  new across T1-T6).
+- omx-core full pytest suite green: **894 passed, 1 skipped** (843 baseline + 51
+  new across T1-T6, incl. final-review coverage).
 - `omx card-check` was run at release time (see Notes) — it FAILS against the
   stale live card, which is the intended signal.
 - Appended `.superpowers/sdd/live-acceptance.md` v0.6.0 section (gate

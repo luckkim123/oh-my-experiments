@@ -1953,7 +1953,7 @@ def build_parser() -> argparse.ArgumentParser:
     plm.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     plm.add_argument("--run-id", required=True, dest="run_id")
     # single-pass marker vocabulary (spec 2.5) — deliberately narrower than the
-    # six-value disarm-reason set (D-R4-11): hard_cap/plateau/fault_circuit only
+    # seven-value disarm-reason set (D-R4-11): hard_cap/plateau/fault_circuit only
     # arise from armed-gate flows, which mark via disarm_loop, never this verb.
     plm.add_argument("--reason", default="done",
                      choices=["done", "deadline", "cancel", "error"])
