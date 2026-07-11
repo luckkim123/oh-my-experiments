@@ -105,12 +105,14 @@ def test_read_pending_launch_loud_fails_on_corrupt_json(tmp_path):
         read_pending_launch(p, "run-7")
 
 
-def test_deadline_passed_loud_fails_on_naive_vs_aware():
-    # one aware, one naive -> a clean OmxError, NOT a raw TypeError traceback
-    with pytest.raises(OmxError):
-        deadline_passed("2026-05-30T12:00:00", "2026-05-30T12:00:01+00:00")
-    with pytest.raises(OmxError):
-        deadline_passed("2026-05-30T12:00:00+00:00", "2026-05-30T12:00:01")
+def test_deadline_passed_normalizes_naive_vs_aware():
+    # D-R5-5: _parse_iso now delegates to clock.parse_iso_utc, which attaches
+    # UTC to a naive value, so a naive/aware mix is normalized to two aware
+    # datetimes rather than loud-failing. The both-or-neither-aware guard in
+    # deadline_passed STAYS as defense-in-depth but is unreachable from this
+    # public str/str API post-unification (verified: both sides parse aware).
+    assert deadline_passed("2026-05-30T12:00:00", "2026-05-30T12:00:01+00:00") is True
+    assert deadline_passed("2026-05-30T12:00:00+00:00", "2026-05-30T12:00:01") is True
 
 
 def test_deadline_passed_both_naive_still_works():

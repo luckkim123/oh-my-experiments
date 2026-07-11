@@ -16,12 +16,12 @@ from omx_core.omx_paths import OmxError, OmxPaths, atomic_path
 
 
 def _parse_iso(value, label: str) -> datetime:
-    if not isinstance(value, str) or not value.strip():
-        raise OmxError(f"{label} must be a non-empty ISO-8601 string, got {value!r}.")
-    try:
-        return datetime.fromisoformat(value)
-    except ValueError as e:
-        raise OmxError(f"{label} is not a valid ISO-8601 timestamp: {value!r}.") from e
+    """Delegate to the unified normalizing parse (D-R5-5). parse_iso_utc attaches
+    UTC to a naive value, so after clock unification deadline_passed's two sides
+    are aware by construction; its both-or-neither-aware loud-fail STAYS as
+    defense-in-depth against a hand-corrupted naive-only envelope."""
+    from omx_core import clock
+    return clock.parse_iso_utc(value, label)
 
 
 def compute_deadline(now_iso: str, max_runtime_s: int) -> str:
@@ -191,10 +191,10 @@ def disarm_loop(paths: OmxPaths, *, reason="cancel", now_iso=None) -> dict:
     authoritatively ending the loop — critic C2, this is what lets a gate
     self-disarm clean up), then nulls active_loop. `now_iso` defaults to an
     aware-UTC instant computed here (the handler path passes none)."""
-    from datetime import datetime, timezone
+    from omx_core import clock
     from omx_core.lock import release_run_lease, with_file_lock
     from omx_core.state import load_state, save_state
-    ended_at = now_iso or datetime.now(timezone.utc).isoformat()
+    ended_at = now_iso or clock.now_iso()
 
     def _crit() -> dict:
         state = load_state(paths)

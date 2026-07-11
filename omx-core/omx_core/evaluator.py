@@ -12,6 +12,7 @@ the decision tree turns it into 'discard', never crashing the loop).
 import json
 
 from omx_core.omx_paths import OmxError
+from omx_core import clock
 
 
 class EvaluatorError(OmxError):
@@ -51,12 +52,7 @@ def parse_evaluator_result(raw: str) -> dict:
 
 
 import subprocess
-from datetime import datetime, timezone
 from pathlib import Path
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _last_nonempty_line(text: str):
@@ -77,7 +73,7 @@ def run_evaluator(command: str, cwd, *, timeout: int = 600) -> dict:
     tree turns it into 'discard' (evaluator-error). The pure parser still loud-fails;
     this runner catches that and records it. Mirrors runtime.ts:586-636.
     """
-    ran_at = _now_iso()
+    ran_at = clock.now_iso()
     cwd = str(Path(cwd))
     try:
         proc = subprocess.run(

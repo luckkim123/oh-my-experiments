@@ -103,13 +103,12 @@ def capture_flush(payload):
     (side effects only), so the flush's whole effect is the file-side capture.
     Fail-open: no omx_core / no root / any error -> None, nothing written."""
     try:
-        from datetime import datetime, timezone
-
+        from omx_core import clock
         from omx_core.omx_paths import OmxPaths
         from omx_core.wiki.capture import flush_produced_reports
 
         # naive-UTC now: capture writes wiki pages (the wiki's clock contract).
-        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+        now = clock.now_iso_naive()
         flush_produced_reports(OmxPaths(root=_omx_root(payload)), now=now)
     except Exception:
         pass  # fail-open (D9): a broken flush degrades to no capture
@@ -192,8 +191,7 @@ _LOOP_CONTINUATION = (
 
 def loop_gate(payload):
     try:
-        from datetime import datetime, timezone
-
+        from omx_core import clock
         from omx_core.lock import release_run_lease, with_file_lock
         from omx_core.loop import deadline_passed, mark_loop_done
         from omx_core.omx_paths import OmxPaths
@@ -216,7 +214,7 @@ def loop_gate(payload):
                 # the disarm's side effects (marker + lease release) inline.
                 rid = env.get("run_id")
                 if rid:
-                    now2 = datetime.now(timezone.utc).isoformat()
+                    now2 = clock.now_iso()
                     mark_loop_done(paths, rid, reason=reason,
                                    summary=f"iteration {env.get('iteration')}",
                                    now_iso=now2)
@@ -225,7 +223,7 @@ def loop_gate(payload):
                 save_state(paths, state)
                 return None
 
-            now = datetime.now(timezone.utc).isoformat()
+            now = clock.now_iso()
             if deadline_passed(env["deadline"], now):
                 return _disarm_inline("deadline")
             if env.get("iteration", 0) >= env.get("hard_cap", 50):
