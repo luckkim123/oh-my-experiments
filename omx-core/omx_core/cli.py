@@ -207,6 +207,19 @@ def _cmd_doctor(args) -> int:
     return 0
 
 
+def _cmd_card_check(args) -> int:
+    """Cross-repo card-currency guard (D-R5-4). rc 0 + {ok:true,...} on parity;
+    rc 2 + a failures list on drift; rc 2 actionable when the card or plugin.json
+    is unreachable. DETECTS only — updating the card is an omha-repo edit."""
+    from omx_core.cardcheck import run_card_check
+    try:
+        out = run_card_check(card_path=args.card, plugin_root=args.plugin_root)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(out))
+    return 0 if out["ok"] else 2
+
+
 def _cmd_profile_seal(args) -> int:
     """Record the approved evaluator/launch sha256 seal (#0)."""
     from omx_core.seal import write_seal
@@ -1705,6 +1718,18 @@ def build_parser() -> argparse.ArgumentParser:
     pdoc.add_argument("--plugin-root", default=None, dest="plugin_root",
                       help="plugin dir to check hooks presence (default: $CLAUDE_PLUGIN_ROOT)")
     pdoc.set_defaults(func=_cmd_doctor)
+
+    pcc = sub.add_parser("card-check",
+                         help="cross-repo card-currency guard: card.version == "
+                              "plugin.json.version + every plugin skill mentioned "
+                              "in the card (run at release time; D-R5-4)")
+    pcc.add_argument("--card", default=None,
+                     help="omha card path (default: $OMX_CARD_PATH else "
+                          "~/.claude/plugins/marketplaces/heroacademia/cards/omx.json)")
+    pcc.add_argument("--plugin-root", default=None, dest="plugin_root",
+                     help="plugin dir holding .claude-plugin/plugin.json "
+                          "(default: $CLAUDE_PLUGIN_ROOT else the repo-root fallback)")
+    pcc.set_defaults(func=_cmd_card_check)
 
     pe = sub.add_parser("eval", help="run an evaluator command, parse {pass,score?} (Claude-free)")
     pe.add_argument("--command", required=True, help="shell command; LAST stdout line must be the JSON verdict")
