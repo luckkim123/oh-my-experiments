@@ -884,7 +884,7 @@ def _cmd_loop_status(args) -> int:
     if mpath.exists():
         try:
             marker = json.loads(mpath.read_text())
-        except ValueError:
+        except (ValueError, OSError):
             marker = None
     lease = read_run_lease(paths, args.run_id)
     if marker is not None:
