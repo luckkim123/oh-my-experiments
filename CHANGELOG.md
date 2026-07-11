@@ -4,6 +4,98 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.6.0] - 2026-07-11 — R5: packaging residue
+
+Two incidents motivate this round. The omha routing **card has said 0.1.0 with a
+pre-wiki description across five releases** — `test_version_sync` guards the
+in-repo plugin.json↔pyproject fan-out, but nothing watched the cross-repo copy.
+And R4's plan-verification surfaced a **critical clock-mix**: a naive `_now_iso`
+in cli vs an aware one in the evaluator, with "AWARE UTC — never `_now_iso()`"
+comments scattered at every gate call site as the standing root cause. R5 closes
+both, plus the durability/hygiene residue every earlier round deferred and the
+one non-dogfood-conditioned loop residual (a circuit backstop that survives a
+corrupted ledger).
+
+### Added
+
+- **`omx card-check`** — the cross-repo card-currency guard (D-R5-4). Checks
+  `card.version == plugin.json.version` and that every plugin skill's bare name
+  appears in the card. Card ladder `--card` → `OMX_CARD_PATH` → default; plugin
+  ladder `--plugin-root` → `CLAUDE_PLUGIN_ROOT` → repo-root fallback (its own
+  resolution — `doctor` has none). Detects only; updating the omha card is an
+  omha-repo edit, surfaced not pushed. **Run at release time** (below).
+- **`omx wiki delete`** — a deprecation-as-runtime-redirect stub (#20): always
+  rc 2 with a JSON redirect naming `gc`/`gc-apply` and echoing the caller's
+  `--root`. Deletes nothing (INV-2); the append-merge invariant is preserved.
+- **`omx_core/clock.py`** — one timestamp helper: `now_iso` (aware UTC),
+  `now_iso_naive` (the wiki's naive format), `parse_iso_utc` (a normalizing
+  loud-fail parse). `cli._now_iso` and `evaluator._now_iso` are deleted.
+- **Skill-budget regression test (#18)** — a glob-discovered pytest ceiling
+  (per-file < 56 KiB, corpus < 128 KiB) so `exp-analyze/SKILL.md`'s growth
+  cannot silently balloon the per-invocation context.
+
+### Fixed
+
+- **fsync durability in the atomic-write choke point (#21).** `atomic_path`
+  now fsyncs the tmp file before `os.replace` and the parent directory after;
+  `atomic_dir` fsyncs the parent directory after the directory rename. Every
+  writer routes through these, so a power loss in the write window can no longer
+  lose a committed ledger row. The `tree_ops.py` alias symlink swap is
+  deliberately NOT migrated (a symlink has no file data to lose; its pid-suffixed
+  tmp guards a real unserialized race).
+- **A corrupted ledger no longer disables its own circuit backstop (D-R5-6).**
+  `record_iteration` mirrors `loop_health` into the armed loop's envelope; the
+  Stop gate now splits an *absent* ledger (skip, as before) from a *corrupt* one
+  (`LedgerCorruptError`), consulting the last-healthy mirror and, failing that,
+  counting corrupt probes toward a bounded 3-strike `ledger_corrupt` disarm (the
+  counter is `save_state`d so it survives the Stop event). The fail-open
+  invariant (D9) is untouched — R5 narrows one failure class into a counted stop.
+- **The naive/aware `_now_iso` clock-mix (R4's critical finding) is unified.**
+  Every non-wiki instant is aware-UTC via `clock.now_iso()`, every wiki instant
+  is naive via `clock.now_iso_naive()` (the wiki's `ingest` still rejects an
+  aware `now`), every parse-and-compare normalizes via `clock.parse_iso_utc()`.
+  A pre-R5 naive on-disk lease now ages via real subtraction, not the mtime
+  fallback. A grep-guard test forbids stray inline clocks.
+
+### Changed
+
+- Disarm-reason vocabulary grows to seven:
+  `done|deadline|cancel|hard_cap|plateau|fault_circuit|ledger_corrupt`.
+  `loop-mark-done` stays deliberately narrower (`done|deadline|cancel|error`) —
+  `ledger_corrupt` is an armed-gate-only reason.
+
+### Verification
+
+- omx-core full pytest suite green: **892 passed, 1 skipped** (843 baseline + 49
+  new across T1-T6).
+- `omx card-check` was run at release time (see Notes) — it FAILS against the
+  stale live card, which is the intended signal.
+- Appended `.superpowers/sdd/live-acceptance.md` v0.6.0 section (gate
+  `ledger_corrupt` disarm; card-check at release), to be executed after plugin
+  reinstall + `pip install -e`.
+
+### Notes
+
+- **PyPI-vs-vendored: DECIDED — neither (D-R5-7).** `omx-core` ships on PyPI no,
+  vendored wheel in the plugin no. The install path stays claudebase's
+  `git clone + pip install -e`. A single-user research harness with zero external
+  consumers gains nothing from PyPI (credential custody, dist hygiene, per-round
+  release friction) and a vendored wheel resurrects the committed-build problem
+  the audit flagged OMC for. Revisit trigger (documented, not scheduled): a
+  second consumer, or a multi-machine install pain claudebase cannot absorb.
+- **`omx card-check` result at release (recorded evidence):** run against the
+  live omha card (version `0.1.0`) with the repo now at `0.6.0`, card-check
+  returns rc 2 with `failures` naming the version drift `card '0.1.0' != plugin
+  '0.6.0'`. **This FAIL is the feature** — the card is stale across R1-R5. The
+  omha-repo card update (bump to 0.6.0 + refresh the pre-wiki description) is
+  surfaced to the user, not pushed from this train (D-R5-4/-9).
+- **Warn→hard promotions stay warn — re-earmarked to R6**, still conditioned on
+  a real-data dogfood soak that has never run (a 2026-07-11 sweep found zero
+  `.omx` roots on any machine). The dogfood soak is human-run.
+- `plugin.json` hooks are unchanged (no new hook event), so the registration
+  parity tests stay green by construction; the #25 verb contract now also covers
+  `card-check` and `wiki delete`.
+
 ## [0.5.0] - 2026-07-11 — R4: loop robustness
 
 ### Fixed

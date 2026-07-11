@@ -304,7 +304,7 @@ omx clean [--scope session|run|all] [--apply]
 ## 9. Open items deferred to the user / next pass (NOT blocking this draft)
 
 - **Score formula** (mean+λ·CV vs per-axis worst-case, λ, DR-level weighting) — deliberately deferred; `exp-init` elicits it per-profile using past-run data (D5). Elicitation rides the Criteria dimension (§4.1).
-- **Deployment packaging** — marketplace repo name, whether `omx-core` ships on PyPI vs vendored in the plugin.
+- **Deployment packaging** — marketplace repo name, whether `omx-core` ships on PyPI vs vendored in the plugin. **ANSWERED (R5, D-R5-7): neither — the editable install via claudebase (`git clone + pip install -e`) stays; revisit only on a second consumer or unabsorbable multi-machine install pain.**
 - **1-GPU vs tournament** parallelism in `exp-loop` — autoresearch sequential by default; self-improve tournament only if multi-GPU later.
 - **(B6 carry) exp-loop revert semantics** — config edits via git revert + weights via `last_kept_checkpoint` pointer is the LOCKED direction, but the exact `ledger.json` pointer schema + how a discard "leaves" a checkpoint without orphaning disk is owed at build time of #6.
 - **(B8 carry) full-unattended training override** — v0.1 forbids auto-launch entirely (D4). A future opt-in (explicit, separately-logged, per-session user authorization that de-escalates the "훈련 시작/종료는 유저" (training start/stop is the user's) rule for OMX-scoped runs) is deliberately OUT of scope and tracked here.

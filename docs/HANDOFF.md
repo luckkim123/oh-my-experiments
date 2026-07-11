@@ -5,23 +5,31 @@
 
 ## NEXT (2026-07-11)
 
-**R4 (v0.5.0, loop robustness) done on branch `feat/v0.5.0-r4`.** Two-locks-two-jobs
-concurrency (fcntl mutex + session-keyed O_EXCL run lease), the run-ledger write
-verbs that de-vestigialize `seed_ledger`/`record_iteration` (`run-seed`/`run-record`),
-plateau/fault circuits (`loop-health`), a completion marker + `loop-status --all`,
-evaluator fault taxonomy + wiki capture, launch-commit provenance, a human-gated
-`revert-config`, and campaign-plan semantics. A whole-branch 4-lens review
-(commit `df2336a`) additionally fixed the campaign-status join key and the
-`lock_stale_hours` profile override wiring. See `CHANGELOG.md` `[0.5.0]` for
-the full list.
+**R5 (v0.6.0, packaging residue) done on branch `feat/v0.6.0-r5`.** Skill-budget
+test (#18), `omx wiki delete` deprecation stub (#20), fsync durability in the
+atomic-write choke point (#21), the `omx_core.clock` unification that ends R4's
+naive/aware `_now_iso` clock-mix, a circuit backstop that survives ledger
+corruption (D-R4-4 residual), and `omx card-check` (the cross-repo card-currency
+guard). PyPI-vs-vendored decided: neither — the editable install via claudebase
+stays (D-R5-7). See `CHANGELOG.md` `[0.6.0]` for the full list. Suite: 892 passed,
+1 skipped.
 
-**Next = R5 (packaging residue):** the warn→hard promotions re-earmarked again,
-now conditioned on a real-data dogfood soak that has still never run (a
-2026-07-11 sweep found zero `.omx` roots on any machine); candidate-commit
-trust hardening; a circuit backstop that survives ledger corruption; richer
-campaign planning; skill-budget test #18; deprecation redirect #20; fsync
-durability #21; card-check automation; PyPI-vs-vendored; and the `_now_iso`
-naive/aware clock-helper unification hygiene.
+**Next = R6 (real-data dogfood + conditional promotions):** everything R5
+re-deferred, still conditioned on a real-data dogfood soak that has never run (a
+2026-07-11 sweep found zero `.omx` roots on any machine). Verbatim conditions
+(D-R5-8):
+
+- **warn→hard promotions** (report-review consumption gate, seal hard-fail,
+  unstamped-report hard-fail) — condition: *dogfood happened*, not a release
+  number.
+- **candidate-commit launch-discipline hardening** (launch.sh mechanically
+  records the training commit) — post-dogfood; R4's queue-time `queued_commit` +
+  template instruction stand.
+- **richer campaign planning** (multi-experiment DAGs, plan-level budgets) —
+  post-dogfood; the intent-list + read-time join stand.
+- **the dogfood soak itself is human-run** (real training runs on the user's
+  machines) — `.superpowers/sdd/live-acceptance.md` is the pending entry point;
+  R5 added the gate ledger-corrupt disarm + card-check-at-release checks to it.
 
 The sections below (`## Current State (summary)` onward) are the original
 v0.1-era handoff — kept for history, superseded by the CHANGELOG for R1-R3.

@@ -65,6 +65,8 @@ top, never the sole enforcement point):
 | `omx loop-status --run-id <id>` / `omx loop-status --all` | Report deadline-ceiling + pending-launch + `phase` (`done`/`running`/`died`/`idle`) as JSON, one run or every run under `runs/*/`. |
 | `omx revert-config --root <dir> --cwd <repo> --run-id <id> [--to baseline\|last-kept\|<sha>] [--i-approve-revert]` | Two-phase config revert to a run's baseline/last-kept commit; dry-run by default, applies only with `--i-approve-revert`. |
 | `omx campaign-plan-add --root <dir> --id <id> --proposal-id <id>` | Record a planned proposal into `plan.json`'s `planned` list (intent); status is derived at read time by `campaign-status`. |
+| `omx card-check [--card <path>] [--plugin-root <path>]` | Cross-repo card-currency guard: `card.version == plugin.json.version` + every plugin skill mentioned in the card. rc 2 on drift; run at release time (the card lives in the omha repo, so this is not a pytest). |
+| `omx wiki delete <slug>` | DEPRECATED — always errors (rc 2) with a JSON redirect to `wiki gc` / `wiki gc-apply`. There is no page delete (append-merge, INV-2; removal is git-guarded gc). |
 
 `omx eval --root <dir>` additionally runs the profile-seal preflight when `--root` is
 given, warning (never hard-failing in R1) on a missing or drifted seal.
@@ -79,6 +81,15 @@ Some gates read optional override keys from `metrics.yaml` at the call boundary
 | `plateau_discards` | 5 | `omx loop-health` — consecutive discards before the plateau circuit trips. |
 | `fault_streak` | 3 | `omx loop-health` — consecutive evaluator faults before the fault circuit trips. |
 | `lock_stale_hours` | 2 | `omx_core.lock.acquire_run_lease` — age (by `armed_at`, mtime fallback for a corrupt lease) after which a run lease is reaped. |
+
+### Write durability
+
+All state writes route through `omx_paths.atomic_path` (files) / `atomic_dir`
+(promoted analysis directories), which are both rename-atomic AND fsync-durable
+(D-R5-3): the file/tmp data is fsynced before the rename and the parent directory
+entry is fsynced after, so a power loss in the write window cannot lose a
+committed ledger row. Note the accepted ceiling: `atomic_dir`'s parent-dir fsync
+makes the *rename* durable, not the promoted directory's file *contents*.
 
 ### Lease/marker file map
 
