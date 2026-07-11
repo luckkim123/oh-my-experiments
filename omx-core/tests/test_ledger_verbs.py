@@ -230,3 +230,40 @@ def test_run_record_embeds_eval_json(tmp_path, capsys):
     assert rc == 0
     led = json.loads(_p(tmp_path).ledger_json("run1").read_text())
     assert led["entries"][0]["evaluator"]["status"] == "pass"
+
+
+def test_run_record_eval_json_missing_decision_reason_rc2(tmp_path, capsys):
+    # a schema-drifted eval doc with 'decision' but no 'decision_reason' must
+    # loud-fail through SystemExit -> rc 2, not an uncaught KeyError at rc 1
+    # (record_iteration reads decision["decision_reason"] unconditionally).
+    from omx_core import cli
+    cli.main(["run-seed", "--run-id", "run1", "--baseline-commit", "base",
+              "--keep-policy", "pass_only", "--root", str(tmp_path)])
+    eval_out = tmp_path / "eval.json"
+    eval_out.write_text(json.dumps({
+        "decision": {"decision": "keep", "keep": True}}))  # no decision_reason
+    capsys.readouterr()
+    rc = cli.main(["run-record", "--run-id", "run1", "--iteration", "1",
+                   "--decision", "keep", "--candidate-checkpoint", "/c",
+                   "--candidate-commit", "cand1", "--description", "d",
+                   "--eval-json", str(eval_out), "--root", str(tmp_path)])
+    assert rc == 2
+    assert "decision_reason" in capsys.readouterr().err
+
+
+# --- run-seed: crash-recovery (a killed seed leaves baseline_commit=None) ---
+
+def test_run_seed_retries_after_placeholder_crash(tmp_path, capsys):
+    # simulate a process killed between the O_CREAT|O_EXCL placeholder write
+    # and the seed_ledger call: ledger.json exists but baseline_commit is None.
+    # A retry must be able to actually seed it, not be permanently locked out.
+    from omx_core.ledger import _default_ledger
+    p = _p(tmp_path)
+    target = p.ledger_json("run1")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(_default_ledger()))
+    from omx_core import cli
+    rc = cli.main(["run-seed", "--run-id", "run1", "--baseline-commit", "abc123",
+                   "--keep-policy", "pass_only", "--root", str(tmp_path)])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out["baseline_commit"] == "abc123"

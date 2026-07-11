@@ -996,22 +996,44 @@ def _cmd_run_seed(args) -> int:
     (mirrors lock.py's _write_lease idiom), not exists()-then-write: two
     concurrent run-seed calls for the same run_id can otherwise both pass the
     exists() check before either writes, and the loser's baseline_commit is
-    silently overwritten with no error surfaced."""
+    silently overwritten with no error surfaced.
+
+    A present-but-UNSEEDED ledger (baseline_commit is still None — the
+    placeholder survived a kill between this claim and the seed_ledger call
+    below) is NOT a completed seed: it is treated as absent so the retry can
+    claim and actually seed it, instead of being permanently locked out."""
     import os
     from omx_core.ledger import _default_ledger, read_run_ledger, seed_ledger
     paths = OmxPaths(root=_resolved_root(args))
     target = paths.ledger_json(args.run_id)
     target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        fd = os.open(str(target), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    if target.exists():
         try:
-            os.write(fd, json.dumps(_default_ledger(), indent=2, sort_keys=True).encode("utf-8"))
-        finally:
-            os.close(fd)
-    except FileExistsError:
-        raise SystemExit(
-            f"ledger for run {args.run_id!r} already exists; seeding is once "
-            "(re-seeding would reset the baseline_commit anchor)")
+            already_seeded = json.loads(target.read_text()).get("baseline_commit") is not None
+        except ValueError:
+            already_seeded = True  # corrupt ledger: don't silently clobber it
+        if already_seeded:
+            raise SystemExit(
+                f"ledger for run {args.run_id!r} already exists; seeding is once "
+                "(re-seeding would reset the baseline_commit anchor)")
+    else:
+        try:
+            fd = os.open(str(target), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            try:
+                os.write(fd, json.dumps(_default_ledger(), indent=2, sort_keys=True).encode("utf-8"))
+            finally:
+                os.close(fd)
+        except FileExistsError:
+            # lost the create race to a concurrent claim; re-check its outcome
+            # instead of assuming the winner finished seeding (see above).
+            try:
+                already_seeded = json.loads(target.read_text()).get("baseline_commit") is not None
+            except (OSError, ValueError):
+                already_seeded = False
+            if already_seeded:
+                raise SystemExit(
+                    f"ledger for run {args.run_id!r} already exists; seeding is once "
+                    "(re-seeding would reset the baseline_commit anchor)")
     try:
         seed_ledger(paths, args.run_id, baseline_commit=args.baseline_commit,
                     keep_policy=args.keep_policy)
@@ -1109,9 +1131,11 @@ def _cmd_run_record(args) -> int:
         if decision is None:
             raise SystemExit("--eval-json must contain a 'decision' block "
                              "(run `omx eval --keep-policy ...`)")
-        if not isinstance(decision, dict) or "decision" not in decision:
+        if (not isinstance(decision, dict) or "decision" not in decision
+                or "decision_reason" not in decision):
             raise SystemExit("--eval-json 'decision' block missing required "
-                             "'decision' field (run `omx eval --keep-policy ...`)")
+                             "'decision'/'decision_reason' field(s) (run "
+                             "`omx eval --keep-policy ...`)")
         evaluator = decision
     else:
         # no eval doc: synthesize the minimal decision record_iteration needs.
