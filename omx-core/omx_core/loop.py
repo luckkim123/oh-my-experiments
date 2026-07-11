@@ -110,7 +110,8 @@ LOOP_HARD_CAP_DEFAULT = 50
 
 
 def arm_loop(paths: OmxPaths, *, run_id, now_iso, max_runtime_s,
-             hard_cap=LOOP_HARD_CAP_DEFAULT, session_id=None) -> dict:
+             hard_cap=LOOP_HARD_CAP_DEFAULT, session_id=None,
+             stale_hours=None) -> dict:
     """Arm the Stop-hook loop gate (spec 2.4 + R4 #1). ONE loop per root; arming
     while armed loud-fails. The whole load->check-armed->lease->write runs under
     the state-file mutex so two concurrent arms cannot race (D-R4-3). A
@@ -120,7 +121,7 @@ def arm_loop(paths: OmxPaths, *, run_id, now_iso, max_runtime_s,
     `max_runtime_s` is MANDATORY (an armed gate always self-expires); `now_iso`
     is the caller-injected AWARE UTC clock (naive/aware mixes make
     deadline_passed loud-fail, silently failing the gate open)."""
-    from omx_core.lock import acquire_run_lease, release_run_lease, with_file_lock
+    from omx_core.lock import acquire_run_lease, release_run_lease
     from omx_core.state import load_state, save_state
     rid = _require_nonempty(run_id, "run_id")
     if not isinstance(hard_cap, int) or isinstance(hard_cap, bool) or hard_cap <= 0:
@@ -133,7 +134,13 @@ def arm_loop(paths: OmxPaths, *, run_id, now_iso, max_runtime_s,
                 "a loop is already armed for this root "
                 f"({state['active_loop'].get('run_id')!r}); run `omx loop-disarm` first.")
         # lease first (loud-fails on another session's young lease), then write.
-        acquire_run_lease(paths, rid, session_id=session_id, now_iso=now_iso)
+        # stale_hours=None -> acquire's LOCK_STALE_HOURS default; the CLI
+        # resolves the profile override key `lock_stale_hours` (D12, spec 2.10).
+        if stale_hours is None:
+            acquire_run_lease(paths, rid, session_id=session_id, now_iso=now_iso)
+        else:
+            acquire_run_lease(paths, rid, session_id=session_id, now_iso=now_iso,
+                              stale_hours=stale_hours)
         try:
             # a re-arm must not read a prior 'done' marker (D-R4-8)
             marker = paths.loop_marker_json(rid)

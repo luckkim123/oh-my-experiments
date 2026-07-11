@@ -153,8 +153,13 @@ is what they approve (minimum-change revert, never-auto-git repo rule).
 - On keep: `omx tree-alias --name latest --run <run_id>` — explicit only; no
   alias is ever re-pointed automatically.
 - Record the decision in the campaign ledger: `omx campaign-log --id <group>
-  --event <kept|discarded> --run <run_id> [--data '{"reason": "..."}']`
+  --event <kept|discarded> --run <run_id>
+  --data '{"proposal_id": "<proposal_id>", "reason": "..."}'`
   (campaign id = the run's group segment; init once with `omx campaign-init`).
+  The `proposal_id` is the one captured in step 2 — it MUST be in `--data`:
+  `campaign-status` resolves a planned proposal to kept/discarded by joining
+  on exactly this key, so an outcome event without it leaves the proposal
+  stuck at `planned` forever.
 
 ### 4.5 Circuit check (stop a churning loop)
 

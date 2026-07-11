@@ -217,6 +217,8 @@ def test_acquire_retries_when_lease_vanishes_during_contended_read(tmp_path, mon
     # read_run_lease then returns None for a lease that no longer exists — this
     # must self-heal by retrying the create, not loud-fail with a confusing
     # "owned by session None" message.
+    # (white-box: monkeypatches module-level read_run_lease to force the exact
+    # interleaving — update alongside acquire_run_lease's internal retry shape.)
     import omx_core.lock as lock_mod
 
     p = OmxPaths(root=str(tmp_path))

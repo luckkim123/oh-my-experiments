@@ -994,10 +994,30 @@ def _cmd_loop_arm(args) -> int:
     """Arm the Stop-hook loop gate (spec 2.4). AWARE UTC clock — never _now_iso()."""
     from omx_core.loop import arm_loop
     now = args.now or datetime.now(timezone.utc).isoformat()
+    if args.now:
+        # a naive --now would store a naive deadline that permanently trips the
+        # gate's fail-open (deadline_passed raises on the mix, the gate swallows
+        # it, the loop silently dies) — reject at the single arm entry point.
+        try:
+            parsed = datetime.fromisoformat(args.now)
+        except ValueError:
+            raise SystemExit(f"--now is not ISO-8601: {args.now!r}")
+        if parsed.tzinfo is None:
+            raise SystemExit(
+                "--now must be timezone-AWARE UTC (e.g. 2026-07-11T10:00:00+00:00); "
+                "a naive instant would write a naive deadline and silently fail the gate open.")
+    stale_hours = None
+    try:
+        raw = load_profile_metrics(_resolved_root(args)).get("lock_stale_hours")
+        if raw is not None:
+            stale_hours = float(raw)
+    except OmxError:
+        pass  # no profile yet -> LOCK_STALE_HOURS default (D12: override slot)
     try:
         env = arm_loop(OmxPaths(root=_resolved_root(args)), run_id=args.run_id,
                        now_iso=now, max_runtime_s=args.max_runtime,
-                       hard_cap=args.hard_cap, session_id=args.session_id)
+                       hard_cap=args.hard_cap, session_id=args.session_id,
+                       stale_hours=stale_hours)
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(env))
@@ -1115,6 +1135,11 @@ def _cmd_run_seed(args) -> int:
                     f"ledger for run {args.run_id!r} already exists; seeding is once "
                     "(re-seeding would reset the baseline_commit anchor)")
     try:
+        # ponytail: the O_EXCL claim serializes only the placeholder write —
+        # kill-recovery deliberately lets a lost-race caller fall through here,
+        # so two concurrent seeds with CONFLICTING baselines last-write-win.
+        # Wrap this call in the state_lock if concurrent conflicting seeds
+        # ever become a real workload.
         seed_ledger(paths, args.run_id, baseline_commit=args.baseline_commit,
                     keep_policy=args.keep_policy)
         led = read_run_ledger(paths, args.run_id)
@@ -1890,6 +1915,9 @@ def build_parser() -> argparse.ArgumentParser:
                               "single-pass flow (armed loops mark on disarm)")
     plm.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     plm.add_argument("--run-id", required=True, dest="run_id")
+    # single-pass marker vocabulary (spec 2.5) — deliberately narrower than the
+    # six-value disarm-reason set (D-R4-11): hard_cap/plateau/fault_circuit only
+    # arise from armed-gate flows, which mark via disarm_loop, never this verb.
     plm.add_argument("--reason", default="done",
                      choices=["done", "deadline", "cancel", "error"])
     plm.add_argument("--summary", default=None, help="one-line summary (e.g. 'iteration 3')")

@@ -64,9 +64,10 @@ def plan_revert(cwd, sha, protected) -> dict:
 
 
 def apply_revert(cwd, sha, paths) -> None:
-    """git checkout <sha> -- <paths> (loud by design: check=True). `paths` is
-    the validated would_revert list from plan_revert; an empty list is a no-op
-    the caller handles before calling this."""
+    """git checkout <sha> -- <paths> (loud by design: returncode checked,
+    OmxError raised on failure). `paths` is the validated would_revert list
+    from plan_revert; an empty list is a no-op the caller handles before
+    calling this."""
     if not paths:
         return
     proc = _run_git(cwd, ["checkout", sha, "--", *paths])

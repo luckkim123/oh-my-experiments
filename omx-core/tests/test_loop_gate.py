@@ -347,3 +347,31 @@ def test_cli_loop_disarm_accepts_circuit_reasons(tmp_path, capsys):
         rc = cli.main(["loop-disarm", "--reason", reason, "--root", str(tmp_path)])
         capsys.readouterr()
         assert rc == 0  # the new reasons are valid argparse choices
+
+
+# --- whole-branch review fixes: lock_stale_hours override + naive --now guard ---
+
+def test_arm_stale_hours_param_reaps_earlier(tmp_path):
+    # spec 2.10: lock_stale_hours is a D12 override slot — a lease older than
+    # the override (but younger than the 2h default) is reaped when the
+    # override is threaded through, and still blocks under the default.
+    from omx_core.lock import acquire_run_lease
+    p = _paths(tmp_path)
+    acquire_run_lease(p, "run1", session_id="sess-A", now_iso=NOW)
+    ten_later = "2026-07-07T10:10:00+00:00"  # lease age: 10 min
+    with pytest.raises(OmxError):
+        arm_loop(p, run_id="run1", now_iso=ten_later, max_runtime_s=60,
+                 session_id="sess-B")  # default 2h threshold: still owned
+    env = arm_loop(p, run_id="run1", now_iso=ten_later, max_runtime_s=60,
+                   session_id="sess-B", stale_hours=0.05)  # 3 min: reaped
+    assert env["run_id"] == "run1"
+
+
+def test_cli_loop_arm_rejects_naive_now(tmp_path, capsys):
+    # a naive --now would store a naive deadline that permanently trips the
+    # gate's fail-open (silent loop death) — the arm entry point rejects it.
+    from omx_core import cli
+    rc = cli.main(["loop-arm", "--run-id", "run1", "--max-runtime", "60",
+                   "--now", "2026-07-07T10:00:00", "--root", str(tmp_path)])
+    assert rc == 2
+    assert "timezone-AWARE" in capsys.readouterr().err
