@@ -3,18 +3,25 @@
 > Next session / after compact: reading just this file + `docs/design/2026-05-30-omx-experiment-harness-design.md` (source of truth)
 > is enough to continue. The per-build-order execution plans are in `docs/superpowers/plans/`.
 
-## NEXT (2026-07-07)
+## NEXT (2026-07-11)
 
-**R3 (v0.4.0, full harnessization) done on branch `feat/v0.4.0-r3`.** Route emit
-STAGE checkpoint, produced-reports ledger + capture-flush, compact breadcrumb,
-loop-arm/loop-disarm + thin Stop gate, 3 read-only agents (proposal-reviewer,
-wiki-curator, campaign-auditor), `wiki promote-recipe` + `.omx/recipes/`, and
-the T11 campaign-status fix. See `CHANGELOG.md` `[0.4.0]` for the full list.
+**R4 (v0.5.0, loop robustness) done on branch `feat/v0.5.0-r4`.** Two-locks-two-jobs
+concurrency (fcntl mutex + session-keyed O_EXCL run lease), the run-ledger write
+verbs that de-vestigialize `seed_ledger`/`record_iteration` (`run-seed`/`run-record`),
+plateau/fault circuits (`loop-health`), a completion marker + `loop-status --all`,
+evaluator fault taxonomy + wiki capture, launch-commit provenance, a human-gated
+`revert-config`, and campaign-plan semantics. A whole-branch 4-lens review
+(commit `df2336a`) additionally fixed the campaign-status join key and the
+`lock_stale_hours` profile override wiring. See `CHANGELOG.md` `[0.5.0]` for
+the full list.
 
-**Next = R4 (loop robustness):** lock #1, revert #5, marker #7, plateau #8,
-faults #9/#27, staleness #12, `loop-status --all` #16 — plus the warn→hard
-promotions and campaign-planning semantics re-earmarked from R3 (soak data was
-~zero one day after R2 shipped).
+**Next = R5 (packaging residue):** the warn→hard promotions re-earmarked again,
+now conditioned on a real-data dogfood soak that has still never run (a
+2026-07-11 sweep found zero `.omx` roots on any machine); candidate-commit
+trust hardening; a circuit backstop that survives ledger corruption; richer
+campaign planning; skill-budget test #18; deprecation redirect #20; fsync
+durability #21; card-check automation; PyPI-vs-vendored; and the `_now_iso`
+naive/aware clock-helper unification hygiene.
 
 The sections below (`## Current State (summary)` onward) are the original
 v0.1-era handoff — kept for history, superseded by the CHANGELOG for R1-R3.

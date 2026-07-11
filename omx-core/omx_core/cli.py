@@ -249,6 +249,27 @@ def _cmd_eval(args) -> int:
             raise SystemExit(str(e))
         out["decision"] = decide_outcome(policy, args.last_kept_score, rec)
     print(json.dumps(_finite_clean(out), allow_nan=False))
+    # R4 #27: on an evaluator error, auto-append a low-confidence debugging wiki
+    # stub keyed by fault class (append-merge -> recurrence strengthens ONE
+    # page). Only with --root (needs a resolvable .omx); NEVER fatal — grading
+    # must not break on knowledge plumbing.
+    if rec.get("status") == "error" and args.root:
+        try:
+            from omx_core.wiki.ingest import ingest_knowledge
+            fault = rec.get("fault_class") or "unknown"
+            body = (
+                f"Command: {rec.get('command')}\n"
+                f"Exit code: {rec.get('exit_code')}\n"
+                f"Parse error: {rec.get('parse_error')}\n"
+                f"Ran at: {rec.get('ran_at')}\n"
+                f"Cwd: {args.cwd or os.getcwd()}\n")
+            ingest_knowledge(
+                OmxPaths(root=_resolved_root(args)), now=_now_iso(),
+                title=f"evaluator fault {fault}", content=body,
+                tags=["auto-captured", "evaluator-fault", fault],
+                category="debugging", confidence="low", sources=[])
+        except Exception as e:  # never fatal (D-R4-5)
+            print(f"WARNING: evaluator-fault wiki capture failed: {e}", file=sys.stderr)
     return 0 if rec["status"] in ("pass", "fail") else 1
 
 
@@ -822,33 +843,126 @@ def _cmd_queue_launch(args) -> int:
     """Queue the next training launch as a pending-approval artifact (B8).
 
     NEVER launches — writes runs/<run_id>/pending-launch.json and prints it.
-    queued_at is the real clock, injected here (the core stays time-pure)."""
+    queued_at is the real clock, injected here (the core stays time-pure). With
+    --cwd a git repo, records queued_commit = HEAD for launch provenance (#12,
+    D-R4-6); a non-repo cwd or missing git warns and omits the sha."""
+    import subprocess
     paths = OmxPaths(root=_resolved_root(args))
     now = datetime.now(timezone.utc).isoformat()
+    queued_commit = None
+    if args.cwd:
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(args.cwd), "rev-parse", "HEAD"],
+                capture_output=True, text=True, check=False)
+            if proc.returncode == 0 and proc.stdout.strip():
+                queued_commit = proc.stdout.strip()
+            else:
+                print(f"WARNING: could not record queued_commit (--cwd {args.cwd!r} "
+                      "is not a git repo or has no HEAD)", file=sys.stderr)
+        except (FileNotFoundError, OSError):
+            print("WARNING: could not record queued_commit (git unavailable)",
+                  file=sys.stderr)
     try:
         queue_pending_launch(
             paths, args.run_id,
             proposal_id=args.proposal_id, launch_delta=args.launch_delta,
-            gpu_gate=args.gpu_gate, queued_at=now)
+            gpu_gate=args.gpu_gate, queued_at=now, queued_commit=queued_commit)
         print(json.dumps(read_pending_launch(paths, args.run_id)))
     except OmxError as e:
         raise SystemExit(str(e))
     return 0
 
 
-def _cmd_loop_status(args) -> int:
-    """Report loop status as one JSON: whether the deadline ceiling passed and
-    what (if anything) is queued for launch. Claude-free; the skill reads this
-    to decide stop-or-continue. --now defaults to the real clock; pass it
-    explicitly for deterministic tests.
+def _run_phase(paths, run_id, *, armed, now, deadline_override=None):
+    """Derive (phase, lease, marker) for one run (spec 2.5/2.7). Pure read;
+    corrupt marker -> phase 'unknown' (the caller warns). `armed` is the
+    state's active_loop envelope (or None); `now` is the aware clock for the
+    deadline check. `deadline_override` (when not None) is a caller-resolved
+    deadline that WINS over the envelope's own deadline — the --run-id path
+    passes the flag-resolved deadline (explicit --deadline > --max-runtime >
+    envelope) so `phase`'s notion of 'passed' agrees with the response's
+    deadline_passed field; the --all path passes None (envelope deadline)."""
+    from omx_core.lock import read_run_lease
+    marker = None
+    unknown = False
+    mpath = paths.loop_marker_json(run_id)
+    if mpath.exists():
+        try:
+            marker = json.loads(mpath.read_text())
+        except (ValueError, OSError):
+            unknown = True
+    lease = read_run_lease(paths, run_id)
+    armed_here = bool(armed and armed.get("run_id") == run_id)
+    passed = None
+    effective_deadline = deadline_override or (armed.get("deadline") if armed_here else None)
+    if effective_deadline:
+        try:
+            passed = deadline_passed(effective_deadline, now)
+        except OmxError:
+            passed = None
+    if unknown:
+        phase = "unknown"
+    elif marker is not None:
+        phase = "done"
+    elif armed_here and passed is not True:
+        phase = "running"
+    elif armed_here and passed is True:
+        phase = "died"
+    elif lease is not None and not armed_here:
+        phase = "died"
+    else:
+        phase = "idle"
+    return phase, lease, marker
 
-    Deadline resolution order:
+
+def _cmd_loop_status(args) -> int:
+    """Report loop status. With --run-id: one run's deadline ceiling + pending
+    launch + phase. With --all (#16): every run under runs/*/ as
+    {run_id, phase, lease, marker, armed}. Claude-free.
+
+    Deadline resolution order (--run-id path):
       1. --deadline (explicit ISO-8601) takes precedence.
       2. --max-runtime <seconds>: deadline = now + max_runtime via compute_deadline.
       3. Neither: deadline_passed is None (no ceiling check).
     """
     paths = OmxPaths(root=_resolved_root(args))
     now = args.now or datetime.now(timezone.utc).isoformat()
+    from omx_core.state import load_state
+    try:
+        armed = load_state(paths).get("active_loop")
+    except ValueError as e:
+        raise SystemExit(f"state.json is corrupt: {e}")
+
+    if args.all:
+        runs_root = paths.omx_dir / "runs"
+        rows = []
+        run_ids = sorted(d.name for d in runs_root.iterdir()) if runs_root.is_dir() else []
+        for rid in run_ids:
+            try:
+                phase, lease, marker = _run_phase(paths, rid, armed=armed, now=now)
+            except Exception as e:
+                print(f"WARNING: loop-status --all: run {rid!r} unreadable: {e}",
+                      file=sys.stderr)
+                rows.append({"run_id": rid, "phase": "unknown", "lease": None,
+                             "marker": None, "armed": False})
+                continue
+            if phase == "unknown":
+                print(f"WARNING: loop-status --all: run {rid!r} has a corrupt "
+                      "marker (phase unknown)", file=sys.stderr)
+            rows.append({
+                "run_id": rid, "phase": phase,
+                "lease": ({"session_id": lease.get("session_id"),
+                           "armed_at": lease.get("armed_at")} if lease else None),
+                "marker": ({"reason": marker.get("reason"),
+                            "ended_at": marker.get("ended_at")} if marker else None),
+                "armed": bool(armed and armed.get("run_id") == rid),
+            })
+        print(json.dumps({"runs": rows,
+                          "armed_run": armed.get("run_id") if armed else None}))
+        return 0
+
+    # --run-id path (existing behavior + T3 phase)
     deadline = args.deadline
     try:
         if deadline is None and args.max_runtime is not None:
@@ -860,11 +974,10 @@ def _cmd_loop_status(args) -> int:
         pending = read_pending_launch(paths, args.run_id)
     except OmxError as e:
         raise SystemExit(str(e))
-    from omx_core.state import load_state
-    try:
-        armed = load_state(paths).get("active_loop")
-    except ValueError as e:
-        raise SystemExit(f"state.json is corrupt: {e}")
+    # pass the flag-resolved deadline (explicit --deadline > --max-runtime >
+    # envelope) so phase's 'passed' agrees with the deadline_passed field above.
+    phase, _lease, _marker = _run_phase(paths, args.run_id, armed=armed, now=now,
+                                        deadline_override=deadline)
     print(json.dumps({
         "run_id": args.run_id,
         "now": now,
@@ -872,6 +985,7 @@ def _cmd_loop_status(args) -> int:
         "deadline_passed": passed,
         "pending_launch": pending,
         "armed": armed,
+        "phase": phase,
     }))
     return 0
 
@@ -880,10 +994,30 @@ def _cmd_loop_arm(args) -> int:
     """Arm the Stop-hook loop gate (spec 2.4). AWARE UTC clock — never _now_iso()."""
     from omx_core.loop import arm_loop
     now = args.now or datetime.now(timezone.utc).isoformat()
+    if args.now:
+        # a naive --now would store a naive deadline that permanently trips the
+        # gate's fail-open (deadline_passed raises on the mix, the gate swallows
+        # it, the loop silently dies) — reject at the single arm entry point.
+        try:
+            parsed = datetime.fromisoformat(args.now)
+        except ValueError:
+            raise SystemExit(f"--now is not ISO-8601: {args.now!r}")
+        if parsed.tzinfo is None:
+            raise SystemExit(
+                "--now must be timezone-AWARE UTC (e.g. 2026-07-11T10:00:00+00:00); "
+                "a naive instant would write a naive deadline and silently fail the gate open.")
+    stale_hours = None
+    try:
+        raw = load_profile_metrics(_resolved_root(args)).get("lock_stale_hours")
+        if raw is not None:
+            stale_hours = float(raw)
+    except OmxError:
+        pass  # no profile yet -> LOCK_STALE_HOURS default (D12: override slot)
     try:
         env = arm_loop(OmxPaths(root=_resolved_root(args)), run_id=args.run_id,
                        now_iso=now, max_runtime_s=args.max_runtime,
-                       hard_cap=args.hard_cap)
+                       hard_cap=args.hard_cap, session_id=args.session_id,
+                       stale_hours=stale_hours)
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(env))
@@ -897,6 +1031,293 @@ def _cmd_loop_disarm(args) -> int:
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(out))
+    return 0
+
+
+def _cmd_loop_mark_done(args) -> int:
+    """Write the loop-completion marker for an UNARMED single-pass flow (R4 #7).
+    The armed path writes it automatically via disarm_loop; this verb covers a
+    never-armed loop. AWARE UTC clock — never _now_iso()."""
+    from omx_core.loop import mark_loop_done
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        marker = mark_loop_done(OmxPaths(root=_resolved_root(args)), args.run_id,
+                                reason=args.reason, summary=args.summary or "", now_iso=now)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(marker))
+    return 0
+
+
+def _cmd_loop_health(args) -> int:
+    """Circuit check over the run ledger (#8/#9). Thresholds come from the
+    profile (plateau_discards / fault_streak, D12 override slots) with the
+    named-constant fallbacks. Prints the health JSON; rc 2 when EITHER circuit
+    is tripped (the authoritative stop path, D-R4-4). Loud-fails if the ledger
+    is absent/corrupt (read_run_ledger)."""
+    from omx_core.ledger import read_run_ledger
+    from omx_core.loop import (FAULT_STREAK_DEFAULT, PLATEAU_DISCARDS_DEFAULT,
+                               loop_health)
+    paths = OmxPaths(root=_resolved_root(args))
+    plateau = PLATEAU_DISCARDS_DEFAULT
+    fault = FAULT_STREAK_DEFAULT
+    try:
+        prof = load_profile_metrics(_resolved_root(args))
+        plateau = int(prof.get("plateau_discards", plateau))
+        fault = int(prof.get("fault_streak", fault))
+    except OmxError:
+        pass  # no profile yet -> named-constant defaults (D12: override slot)
+    try:
+        ledger = read_run_ledger(paths, args.run_id)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    health = loop_health(ledger, plateau_discards=plateau, fault_streak=fault)
+    print(json.dumps(health))
+    if health["plateau_tripped"] or health["fault_tripped"]:
+        why = []
+        if health["plateau_tripped"]:
+            why.append(f"plateau: {health['consecutive_discards']} consecutive "
+                       f"discards (>= {plateau}, knob plateau_discards)")
+        if health["fault_tripped"]:
+            why.append(f"fault_circuit: {health['consecutive_faults']} consecutive "
+                       f"evaluator faults (>= {fault}, knob fault_streak)")
+        raise SystemExit("loop-health tripped — " + "; ".join(why)
+                         + ". Stop the loop (`omx loop-disarm --reason "
+                         "plateau|fault_circuit`).")
+    return 0
+
+
+def _cmd_run_seed(args) -> int:
+    """Seed the run ledger with the pre-experiment anchor (D-R4-2, wraps
+    seed_ledger). Seeding is ONCE — loud-fail if the ledger already exists so a
+    re-seed cannot silently reset the baseline_commit invariant.
+
+    The once-check is a create-is-the-claim O_CREAT|O_EXCL placeholder write
+    (mirrors lock.py's _write_lease idiom), not exists()-then-write: two
+    concurrent run-seed calls for the same run_id can otherwise both pass the
+    exists() check before either writes, and the loser's baseline_commit is
+    silently overwritten with no error surfaced.
+
+    A present-but-UNSEEDED ledger (baseline_commit is still None — the
+    placeholder survived a kill between this claim and the seed_ledger call
+    below) is NOT a completed seed: it is treated as absent so the retry can
+    claim and actually seed it, instead of being permanently locked out."""
+    import os
+    from omx_core.ledger import _default_ledger, read_run_ledger, seed_ledger
+    paths = OmxPaths(root=_resolved_root(args))
+    target = paths.ledger_json(args.run_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        try:
+            already_seeded = json.loads(target.read_text()).get("baseline_commit") is not None
+        except (OSError, ValueError):
+            already_seeded = True  # corrupt or race-vanished ledger: don't silently clobber it
+        if already_seeded:
+            raise SystemExit(
+                f"ledger for run {args.run_id!r} already exists; seeding is once "
+                "(re-seeding would reset the baseline_commit anchor)")
+    else:
+        try:
+            fd = os.open(str(target), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            try:
+                os.write(fd, json.dumps(_default_ledger(), indent=2, sort_keys=True).encode("utf-8"))
+            finally:
+                os.close(fd)
+        except FileExistsError:
+            # lost the create race to a concurrent claim; re-check its outcome
+            # instead of assuming the winner finished seeding (see above).
+            try:
+                already_seeded = json.loads(target.read_text()).get("baseline_commit") is not None
+            except (OSError, ValueError):
+                already_seeded = False
+            if already_seeded:
+                raise SystemExit(
+                    f"ledger for run {args.run_id!r} already exists; seeding is once "
+                    "(re-seeding would reset the baseline_commit anchor)")
+    try:
+        # ponytail: the O_EXCL claim serializes only the placeholder write —
+        # kill-recovery deliberately lets a lost-race caller fall through here,
+        # so two concurrent seeds with CONFLICTING baselines last-write-win.
+        # Wrap this call in the state_lock if concurrent conflicting seeds
+        # ever become a real workload.
+        seed_ledger(paths, args.run_id, baseline_commit=args.baseline_commit,
+                    keep_policy=args.keep_policy)
+        led = read_run_ledger(paths, args.run_id)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(led))
+    return 0
+
+
+def _is_ancestor(cwd, ancestor, descendant) -> bool | None:
+    """True/False from `git merge-base --is-ancestor`; None when the check
+    cannot run (not a git repo, unresolvable shas, no git). The run(check=False)
+    idiom of wiki/gc.py: rc 0 = ancestor, rc 1 = not, other = cannot-tell."""
+    import subprocess
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(cwd), "merge-base", "--is-ancestor", ancestor, descendant],
+            capture_output=True, text=True, check=False)
+    except (FileNotFoundError, OSError):
+        return None
+    if proc.returncode == 0:
+        return True
+    if proc.returncode == 1:
+        return False
+    return None  # 128 etc: bad sha / not a repo
+
+
+def _cmd_run_record(args) -> int:
+    """Record one iteration into the ledger (D-R4-2, wraps record_iteration),
+    guarded by the run-lease assertion + the git-ancestry staleness check.
+
+    Lease assertion (spec 2.3): a lease exists AND carries a session_id AND the
+    caller passed --session-id AND they differ -> rc 2. Caller passed no
+    --session-id while a lease exists -> stderr warning (unverifiable), proceed.
+    No lease -> proceed silently (single-shot record outside a loop).
+
+    Staleness (D-R4-6): with --cwd a git repo, base = last_kept_commit else
+    baseline_commit must be an ANCESTOR of --candidate-commit; non-ancestor ->
+    rc 2 (--no-staleness-check escapes); missing/non-repo cwd -> warn + skip."""
+    from omx_core.ledger import read_run_ledger, record_iteration
+    from omx_core.lock import read_run_lease
+    paths = OmxPaths(root=_resolved_root(args))
+
+    # (1) lease assertion
+    lease = read_run_lease(paths, args.run_id)
+    if lease is not None:
+        owner = lease.get("session_id")
+        if owner and args.session_id and owner != args.session_id:
+            raise SystemExit(
+                f"run {args.run_id!r} is owned by loop session {owner!r} "
+                f"(armed {lease.get('armed_at')}); disarm it or pass the owning "
+                "--session-id")
+        if args.session_id is None:
+            print(f"WARNING: a lease exists for run {args.run_id!r} but no "
+                  "--session-id was passed — ownership unverifiable; proceeding",
+                  file=sys.stderr)
+
+    # (2) staleness check
+    try:
+        ledger = read_run_ledger(paths, args.run_id)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    if not args.no_staleness_check:
+        if not args.cwd:
+            print("WARNING: staleness check skipped (no --cwd)", file=sys.stderr)
+        else:
+            base = ledger.get("last_kept_commit") or ledger.get("baseline_commit")
+            if not base:
+                print("WARNING: staleness check skipped (no baseline/last-kept "
+                      "commit in the ledger)", file=sys.stderr)
+            else:
+                anc = _is_ancestor(args.cwd, base, args.candidate_commit)
+                if anc is None:
+                    print(f"WARNING: staleness check skipped (--cwd {args.cwd!r} "
+                          "is not a git repo or a sha is unresolvable)",
+                          file=sys.stderr)
+                elif anc is False:
+                    raise SystemExit(
+                        f"stale checkpoint: base {base!r} is NOT an ancestor of "
+                        f"candidate {args.candidate_commit!r} — the candidate was "
+                        "trained from a commit behind the kept line (grading a "
+                        "phantom improvement). Pass --no-staleness-check to override.")
+
+    # (3) embed the eval decision block (optional)
+    evaluator = None
+    if args.eval_json:
+        try:
+            eval_doc = json.loads(Path(args.eval_json).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise SystemExit(f"--eval-json unreadable or not JSON: {e}")
+        # accept either a full `omx eval` doc (with a nested decision) or a bare
+        # decision block; record_iteration wants a decision dict.
+        decision = eval_doc.get("decision") if isinstance(eval_doc, dict) else None
+        if decision is None:
+            raise SystemExit("--eval-json must contain a 'decision' block "
+                             "(run `omx eval --keep-policy ...`)")
+        if (not isinstance(decision, dict) or "decision" not in decision
+                or "decision_reason" not in decision):
+            raise SystemExit("--eval-json 'decision' block missing required "
+                             "'decision'/'decision_reason' field(s) (run "
+                             "`omx eval --keep-policy ...`)")
+        evaluator = decision
+    else:
+        # no eval doc: synthesize the minimal decision record_iteration needs.
+        # decision_reason is a fixed marker (not the --description string) so a
+        # ledger entry can tell a hand-entered verdict from an evaluator-derived
+        # one at a glance (--description still lands in the entry's own field).
+        evaluator = {"decision": args.decision, "keep": args.decision in ("keep", "bootstrap"),
+                     "evaluator": None, "decision_reason": "manual record", "notes": []}
+
+    try:
+        record_iteration(paths, args.run_id, iteration=args.iteration,
+                         decision=evaluator, candidate_checkpoint=args.candidate_checkpoint,
+                         candidate_commit=args.candidate_commit, description=args.description)
+        updated = read_run_ledger(paths, args.run_id)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(_finite_clean({
+        "last_kept_commit": updated.get("last_kept_commit"),
+        "last_kept_checkpoint": updated.get("last_kept_checkpoint"),
+        "last_kept_score": updated.get("last_kept_score"),
+        "entry": updated["entries"][-1] if updated.get("entries") else None,
+    }), allow_nan=False))
+    return 0
+
+
+def _cmd_revert_config(args) -> int:
+    """Two-phase config revert (#5, spec 2.8). Dry-run by default; mutation only
+    with --i-approve-revert. Resolves the sha from the run ledger (--to
+    baseline|last-kept|<sha>), builds the path-scoped allowlist (.omx/ under cwd
+    + the resolved root tree when inside cwd), and prints the plan / applies it.
+    Loud-fails: --cwd not a git repo, sha unresolvable, ledger absent."""
+    from pathlib import Path as _Path
+    from omx_core.ledger import read_run_ledger
+    from omx_core.revert import apply_revert, plan_revert
+    paths = OmxPaths(root=_resolved_root(args))
+    try:
+        ledger = read_run_ledger(paths, args.run_id)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    # resolve the target sha
+    if args.to == "baseline":
+        sha = ledger.get("baseline_commit")
+    elif args.to == "last-kept":
+        sha = ledger.get("last_kept_commit") or ledger.get("baseline_commit")
+    else:
+        sha = args.to  # explicit sha, verified inside plan_revert
+    if not sha:
+        raise SystemExit(
+            f"cannot resolve --to {args.to!r} for run {args.run_id!r} "
+            "(the ledger has no matching commit)")
+    # path-scoped allowlist: .omx relative to cwd, plus the resolved root tree
+    # when it lies inside cwd.
+    protected = [".omx/"]
+    cwd_res = _Path(args.cwd).resolve()
+    root_res = _Path(_resolved_root(args)).resolve()
+    try:
+        rel = root_res.relative_to(cwd_res)
+        if rel != _Path("."):  # root == cwd -> str(rel/".omx") is just ".omx/" (already in protected)
+            protected.append(str(rel / ".omx") + "/")
+    except ValueError:
+        pass  # root is not inside cwd -> the ".omx/" prefix already covers cwd's tree
+    try:
+        plan = plan_revert(args.cwd, sha, protected)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    if not args.i_approve_revert:
+        print(json.dumps({"dry_run": True, "target": sha, **plan}))
+        return 0
+    if not plan["would_revert"]:
+        print(json.dumps({"dry_run": False, "target": sha, "reverted": []}))
+        return 0
+    try:
+        apply_revert(args.cwd, sha, plan["would_revert"])
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps({"dry_run": False, "target": sha,
+                      "reverted": plan["would_revert"]}))
     return 0
 
 
@@ -1221,6 +1642,18 @@ def _cmd_campaign_list(args) -> int:
     return 0
 
 
+def _cmd_campaign_plan_add(args) -> int:
+    from omx_core.campaign import plan_add
+    paths = OmxPaths(root=_resolved_root(args))
+    try:
+        plan = plan_add(paths, args.id, proposal_id=args.proposal_id,
+                        summary=args.summary, now=_now_iso())
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(plan))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="omx", description="OMX experiment-analysis core")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1431,12 +1864,19 @@ def build_parser() -> argparse.ArgumentParser:
     pq.add_argument("--proposal-id", required=True)
     pq.add_argument("--launch-delta", required=True)
     pq.add_argument("--gpu-gate", required=True)
+    pq.add_argument("--cwd", default=None,
+                    help="training git repo; when given, records queued_commit = HEAD "
+                         "for launch provenance (#12)")
     pq.set_defaults(func=_cmd_queue_launch)
 
     pl = sub.add_parser("loop-status",
-                        help="report deadline-ceiling + pending-launch as JSON (Claude-free)")
+                        help="report deadline-ceiling + pending-launch + phase as JSON; "
+                             "--all reports every run (Claude-free)")
     pl.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
-    pl.add_argument("--run-id", required=True)
+    _pl_grp = pl.add_mutually_exclusive_group(required=True)
+    _pl_grp.add_argument("--run-id", default=None, help="report one run")
+    _pl_grp.add_argument("--all", action="store_true",
+                         help="report every run under runs/*/ (#16)")
     pl.add_argument("--deadline", default=None,
                     help="ISO-8601 deadline; omit to skip the ceiling check")
     pl.add_argument("--now", default=None,
@@ -1457,14 +1897,81 @@ def build_parser() -> argparse.ArgumentParser:
                      help="max blocked stops before the gate self-disarms (default 50)")
     pla.add_argument("--now", default=None,
                      help="ISO-8601 aware instant for deterministic tests; default: real UTC clock")
+    pla.add_argument("--session-id", default=None, dest="session_id",
+                     help="omx session id claiming the run lease (the value "
+                          "`omx session-id` resolves); the lease guards ownership")
     pla.set_defaults(func=_cmd_loop_arm)
 
     pld = sub.add_parser("loop-disarm",
                          help="clear the armed loop gate (idempotent; the standing exit)")
     pld.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pld.add_argument("--reason", default="cancel",
-                     choices=["done", "deadline", "cancel", "hard_cap"])
+                     choices=["done", "deadline", "cancel", "hard_cap",
+                              "plateau", "fault_circuit"])
     pld.set_defaults(func=_cmd_loop_disarm)
+
+    plm = sub.add_parser("loop-mark-done",
+                         help="write the loop-completion marker for an UNARMED "
+                              "single-pass flow (armed loops mark on disarm)")
+    plm.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    plm.add_argument("--run-id", required=True, dest="run_id")
+    # single-pass marker vocabulary (spec 2.5) — deliberately narrower than the
+    # six-value disarm-reason set (D-R4-11): hard_cap/plateau/fault_circuit only
+    # arise from armed-gate flows, which mark via disarm_loop, never this verb.
+    plm.add_argument("--reason", default="done",
+                     choices=["done", "deadline", "cancel", "error"])
+    plm.add_argument("--summary", default=None, help="one-line summary (e.g. 'iteration 3')")
+    plm.set_defaults(func=_cmd_loop_mark_done)
+
+    plh = sub.add_parser("loop-health",
+                         help="circuit check over the run ledger (#8/#9): rc 2 "
+                              "when plateau/fault streak trips (authoritative stop)")
+    plh.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    plh.add_argument("--run-id", required=True, dest="run_id")
+    plh.set_defaults(func=_cmd_loop_health)
+
+    prs2 = sub.add_parser("run-seed",
+                          help="seed the run ledger with the baseline anchor "
+                               "(D-R4-2; once — loud-fail if it exists)")
+    prs2.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    prs2.add_argument("--run-id", required=True, dest="run_id")
+    prs2.add_argument("--baseline-commit", required=True, dest="baseline_commit")
+    prs2.add_argument("--keep-policy", required=True, dest="keep_policy",
+                      choices=["pass_only", "score_improvement"])
+    prs2.set_defaults(func=_cmd_run_seed)
+
+    prc2 = sub.add_parser("run-record",
+                          help="record one loop iteration into the ledger "
+                               "(D-R4-2; lease-asserted + ancestry-staleness-checked)")
+    prc2.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    prc2.add_argument("--run-id", required=True, dest="run_id")
+    prc2.add_argument("--iteration", required=True, type=int)
+    prc2.add_argument("--decision", required=True,
+                      choices=["keep", "discard", "ambiguous", "bootstrap"])
+    prc2.add_argument("--candidate-checkpoint", required=True, dest="candidate_checkpoint")
+    prc2.add_argument("--candidate-commit", required=True, dest="candidate_commit")
+    prc2.add_argument("--description", required=True)
+    prc2.add_argument("--session-id", default=None, dest="session_id",
+                      help="assert loop-lease ownership by session id (warns if omitted while a lease exists)")
+    prc2.add_argument("--cwd", default=None,
+                      help="project git repo for the ancestry staleness check")
+    prc2.add_argument("--eval-json", default=None, dest="eval_json",
+                      help="path to a saved `omx eval` doc; its decision block is embedded")
+    prc2.add_argument("--no-staleness-check", action="store_true", dest="no_staleness_check",
+                      help="skip the git-ancestry staleness check (documented escape)")
+    prc2.set_defaults(func=_cmd_run_record)
+
+    prv2 = sub.add_parser("revert-config",
+                          help="two-phase config revert to a run's baseline/last-kept "
+                               "commit (#5; dry-run default, --i-approve-revert applies)")
+    prv2.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    prv2.add_argument("--cwd", required=True, help="the project git repo to revert in")
+    prv2.add_argument("--run-id", required=True, dest="run_id")
+    prv2.add_argument("--to", default="baseline",
+                      help="baseline | last-kept | <sha> (default: baseline)")
+    prv2.add_argument("--i-approve-revert", action="store_true", dest="i_approve_revert",
+                      help="APPLY the revert (git checkout); without this it is dry-run only")
+    prv2.set_defaults(func=_cmd_revert_config)
 
     pw = sub.add_parser("wiki", help="workspace knowledge wiki (keyword-indexed, no embeddings)")
     wsub = pw.add_subparsers(dest="wiki_cmd", required=True)
@@ -1592,6 +2099,15 @@ def build_parser() -> argparse.ArgumentParser:
     pcll = sub.add_parser("campaign-list", help="list campaigns with event counts")
     pcll.add_argument("--root", default=None)
     pcll.set_defaults(func=_cmd_campaign_list)
+
+    pcp = sub.add_parser("campaign-plan-add",
+                         help="record a planned proposal into plan.json's `planned` "
+                              "list (intent; status is derived at read time)")
+    pcp.add_argument("--root", default=None)
+    pcp.add_argument("--id", required=True)
+    pcp.add_argument("--proposal-id", required=True, dest="proposal_id")
+    pcp.add_argument("--summary", default=None)
+    pcp.set_defaults(func=_cmd_campaign_plan_add)
 
     return p
 

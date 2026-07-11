@@ -111,3 +111,20 @@ def test_decide_outcome_rejects_unnormalized_policy():
     # no-silent-fallback rule; callers pre-normalize via parse_keep_policy.
     with pytest.raises(EvaluatorError):
         decide_outcome("Pass_Only", None, _eval("pass", **{"pass": True}))
+
+
+# --- R4 T9: fault_class propagated into the error note ---
+
+def test_error_note_carries_fault_class():
+    from omx_core.decision import decide_outcome
+    d = decide_outcome("pass_only", None,
+                       _eval("error", parse_error="x", fault_class="timeout"))
+    assert d["decision_reason"] == "evaluator error"  # unchanged (downstream stability)
+    assert "(timeout)" in d["notes"][0]
+
+
+def test_error_note_without_fault_class_is_stable():
+    from omx_core.decision import decide_outcome
+    d = decide_outcome("pass_only", None, _eval("error", parse_error="x"))
+    # no fault_class present -> note still reads sensibly (no "(None)")
+    assert "(None)" not in d["notes"][0]

@@ -65,7 +65,7 @@ stop and report (a single supervised pass is the safe default).
 Once the user approves the max-runtime, arm the gate so the session keeps
 cycling even when a turn ends early:
 
-    omx loop-arm --run-id <run_id> --max-runtime <seconds> --root <root>
+    omx loop-arm --run-id <run_id> --max-runtime <seconds> --session-id <session_id> --root <root>
 
 State this to the user when arming (ownership is intended, not incidental):
 **arming dedicates this session to the loop until `omx loop-disarm`** — every
@@ -73,6 +73,10 @@ turn-end is continued by the gate, including off-topic turns. The gate
 self-expires at the deadline and after 50 blocked stops (hard cap), and
 `OMX_SKIP_HOOKS=loop_gate` / `OMX_DISABLE=1` silence it instantly. Arming
 fails loudly if a loop is already armed for this root — disarm first.
+Pass the `--session-id` you resolved above (the "Session id" section): the arm
+claims a per-run lease keyed by that id, so `omx run-record --session-id
+<session_id>` can later prove this session owns the run (a stray record from
+another session loud-fails).
 
 ## One iteration
 
@@ -108,21 +112,70 @@ candidate to grade (e.g. this is the very first analysis pass), skip evaluation
 and go straight to queuing the next launch.
 
 ### 4. Record the iteration (keep/discard target = B6)
-The core has already applied the keep/discard pointer rule inside the ledger.
-Record this iteration through the ledger writer (config reverts via git; weights
-revert via the `last_kept_checkpoint` pointer — keep advances, non-keep leaves;
-NO git/rm on weight files). You do NOT git-revert or delete any checkpoint
-yourself in v0.1 — the ledger pointer + decision-log is the record; physical
-checkpoint GC is out of scope (design §9). If a config edit was made and the
-decision is `discard`, tell the user the exact `git revert`/`git checkout`
-command to unwind to `baseline_commit` (from `ledger.json`) — but do NOT run it
-unless they explicitly approve (minimum-change revert, repo rule).
+The core applies the keep/discard pointer rule inside the ledger. Record this
+iteration through the ledger writer — on the FIRST iteration seed the ledger,
+then record every iteration:
+
+First iteration only (once): seed the ledger with the pre-experiment anchor:
+
+    omx run-seed --run-id <run_id> --baseline-commit <baseline_sha> \
+        --keep-policy <pass_only|score_improvement> --root <root>
+
+Every iteration: record the decision (pass the eval JSON you saved in step 3 so
+the evaluator block is embedded, the owning session id so the lease is asserted,
+and the project cwd so the git-ancestry staleness check runs — a candidate
+trained from a commit BEHIND the kept line loud-fails):
+
+    omx run-record --run-id <run_id> --iteration <n> --decision <keep|discard|ambiguous|bootstrap> \
+        --candidate-checkpoint <path> --candidate-commit <training_head_sha> \
+        --description "<one line>" --session-id <session_id> --cwd <project_dir> \
+        --eval-json <saved eval output> --root <root>
+
+`run-record` prints the updated pointer trio (`last_kept_commit`,
+`last_kept_checkpoint`, `last_kept_score`) + the appended entry. You do NOT
+git-revert or delete any checkpoint yourself — the ledger pointer + decision-log
+is the record; physical checkpoint GC is out of scope (design §9).
+
+If a config edit was made and the decision is `discard`, offer the mechanized
+revert — but keep it human-gated. Show the user the dry-run plan first:
+
+    omx revert-config --cwd <project_dir> --run-id <run_id> --to baseline --root <root>
+
+This prints `would_revert` (the exact files a revert would touch; `.omx/` run
+artifacts are always protected). Only on the user's explicit approval, apply it:
+
+    omx revert-config --cwd <project_dir> --run-id <run_id> --to baseline \
+        --i-approve-revert --root <root>
+
+NEVER pass `--i-approve-revert` without the user's explicit "yes" — the dry-run
+is what they approve (minimum-change revert, never-auto-git repo rule).
 
 - On keep: `omx tree-alias --name latest --run <run_id>` — explicit only; no
   alias is ever re-pointed automatically.
 - Record the decision in the campaign ledger: `omx campaign-log --id <group>
-  --event <kept|discarded> --run <run_id> [--data '{"reason": "..."}']`
+  --event <kept|discarded> --run <run_id>
+  --data '{"proposal_id": "<proposal_id>", "reason": "..."}'`
   (campaign id = the run's group segment; init once with `omx campaign-init`).
+  The `proposal_id` is the one captured in step 2 — it MUST be in `--data`:
+  `campaign-status` resolves a planned proposal to kept/discarded by joining
+  on exactly this key, so an outcome event without it leaves the proposal
+  stuck at `planned` forever.
+
+### 4.5 Circuit check (stop a churning loop)
+
+After recording, ask the ledger whether the loop is making progress:
+
+    omx loop-health --run-id <run_id> --root <root>
+
+It prints the streaks and trip flags. If it exits rc 2 (a plateau of consecutive
+discards, or a streak of evaluator faults), STOP the loop — this is the
+AUTHORITATIVE stop path. Disarm with the matching reason and report the streak
+to the user:
+
+    omx loop-disarm --reason plateau --root <root>        # (or --reason fault_circuit)
+
+The Stop-hook gate also self-disarms on the same signal as a backstop, but the
+verb is what you act on — a churning loop wastes the deadline it was given.
 
 ### 5. Queue the next launch (NEVER fire it — B8)
 Mint the run skeleton first: `omx tree-scaffold --run-id <id> --under <levels>
@@ -173,6 +226,10 @@ disarm the gate FIRST so the Stop hook lets the session rest:
     omx loop-disarm --reason done --root <root>
 
 Deadline expiry needs no action — the gate self-disarms on the next stop.
+
+Use the reason that matches WHY you stopped: `done` (work complete), `cancel`
+(user asked), `plateau` / `fault_circuit` (a `loop-health` trip) — the reason is
+recorded in the completion marker and the campaign forensics.
 
 ## Hard constraints (never violate)
 

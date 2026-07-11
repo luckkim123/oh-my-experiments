@@ -298,6 +298,24 @@ class OmxPaths:
         hand. Run-bound, sits beside the ledger trio."""
         return self.run_dir(run_id) / "pending-launch.json"
 
+    def loop_lock(self, run_id) -> Path:
+        """runs/<run_id>/.loop-lock — the per-run O_EXCL lease file (R4 #1,
+        D-R4-3). Keyed by the omx session id; creation is the atomic claim, so
+        NO atomic_path .tmp dance (a lease must not be rename-replaceable)."""
+        return self.run_dir(run_id) / ".loop-lock"
+
+    def state_lock(self) -> Path:
+        """.omx/state/.state-lock — the fcntl mutex file guarding every
+        state.json load-mutate-save critical section (R4 #1). Under state/ (not
+        beside state.json) so the lock file is never mistaken for state."""
+        return self.omx_dir / "state" / ".state-lock"
+
+    def loop_marker_json(self, run_id) -> Path:
+        """runs/<run_id>/loop-status.json — the loop-completion marker (R4 #7,
+        D-R4-8). Written atomically by mark_loop_done; folded into loop-status'
+        phase field."""
+        return self.run_dir(run_id) / "loop-status.json"
+
     # --- campaigns/<campaign_id>/ (cross-run ledger, R2 #28) ---
     def campaign_dir(self, campaign_id) -> Path:
         """campaigns/<campaign_id>/ — campaign_id shares the run_id CHARSET

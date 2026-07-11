@@ -43,3 +43,22 @@ working session (arming the gate on itself, self-compacting, ending itself):
 - [ ] compact_breadcrumb: with a fresh scratch notes.md present, /compact ->
       the first post-compaction prompt carries <omx-durable-state>.
 - [ ] kill switch: OMX_DISABLE=1 silences all of the above.
+
+## v0.5.0 (R4) live acceptance (append — R3 checkboxes above are untouched)
+
+R4 adds one platform-dependent behavior beyond R3: the `loop_gate` circuit
+self-disarm (plateau/fault_circuit) — checkable in the same armed-session probe
+as R3's pending `loop_gate` item. Everything else in R4 is Claude-free CLI logic
+proven by pytest.
+
+- [ ] loop_gate circuit backstop: seed a run ledger with 5 consecutive discards
+      (`omx run-seed` + 5 `omx run-record --decision discard`), arm the gate,
+      then end a turn -> the gate self-disarms with reason `plateau` (the
+      completion marker records it) and the next stop is allowed. Repeat with 3
+      consecutive evaluator faults for `fault_circuit`.
+- [x] route_emit platform-fire OBSERVED LIVE 2026-07-11: the `<omx-routing>`
+      STAGE block was injected into this authoring session (plugin v0.4.0;
+      route_emit is R3 code unchanged by R4, so this is real observed evidence,
+      not a pre-mark), closing the corresponding R3 checkbox (record here; do
+      not edit the R3 list above — this line is the evidence). All other
+      v0.5.0 boxes stay unchecked until run after plugin reinstall.

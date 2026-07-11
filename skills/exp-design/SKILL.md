@@ -69,6 +69,18 @@ Treat hits as PRIOR EVIDENCE feeding the diagnosis (a past confirmed cause is st
 evidence for that lane). If a prior probe was already tried, design a DIFFERENT
 discriminating probe. An empty result just means this is new ground.
 
+### Check the campaign plan (do not re-propose a settled probe)
+
+If this run belongs to a campaign, read its reconciled plan before designing:
+
+    omx campaign-status --id <group> --root <root>
+
+Its `plan` list carries each planned proposal with a `derived_status`
+(`planned` / `launched` / `kept` / `discarded`, joined against the ledger at
+read time). Do NOT re-propose a probe family already marked `discarded` (it was
+tried and rejected) or still `planned` (it is queued) — feed this mechanical
+signal into the novelty judgment `probe-novelty` also informs.
+
 ### Recipes (promoted procedures)
 
 Also list `.omx/recipes/` — a recipe matching the regression's symptom
@@ -260,5 +272,8 @@ Tell the user where the proposal is
 hypothesis and the one-variable probe in 2-3 lines, and remind them it is
 **pending approval — not launched**. Do not start a loop or run anything; the
 analyze→design→eval loop is exp-loop's job (#6).
-- Append the adopted proposal to the campaign ledger:
-  `omx campaign-log --id <group> --event note --data '{"proposal": "<proposal_id>"}'`.
+- Record the adopted proposal as campaign INTENT (replayable plan, not an
+  outcome): `omx campaign-plan-add --id <group> --proposal-id <proposal_id>
+  --summary "<one-line probe>"`. The campaign ledger's `note`/`kept`/`discarded`
+  events still record what HAPPENS to the proposal later (via exp-loop); this
+  line records that it was PLANNED.

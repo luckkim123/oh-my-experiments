@@ -101,6 +101,11 @@ set -euo pipefail
 # GPU gate (example - adapt to your setup):
 #   nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits
 
+# Provenance (R4 #12): record the training commit at launch time and pass it to
+# `omx run-record --candidate-commit "$(git rev-parse HEAD)"` when you grade the
+# resulting checkpoint — the ancestry staleness check needs the real training
+# HEAD, not whatever HEAD is at record time.
+
 # Training command (placeholder - substitute your entrypoint; nothing machine-specific):
 #   cd "$OMX_PROJECT_DIR" && python <your_train_entrypoint> --task "$OMX_TASK" ...
 echo "launch.sh is a template; fill in your training command. exp-init never runs it."
