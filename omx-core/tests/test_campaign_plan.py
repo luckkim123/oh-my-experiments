@@ -72,6 +72,30 @@ def test_status_reconciles_planned_against_ledger(tmp_path):
     assert by_id["p-discarded"]["derived_status"] == "discarded"
 
 
+def test_status_terminal_outcome_not_regressed_by_later_non_terminal_event(tmp_path):
+    # regression: a later eval/note event on an already-kept/discarded
+    # proposal_id must not overwrite the terminal derived_status back to
+    # "planned" (campaign.py campaign_status outcome join — only terminal
+    # events may settle an outcome).
+    from omx_core.campaign import append_event
+    p = _init(tmp_path)
+    plan_add(p, "camp1", proposal_id="p-kept", summary="was kept", now=NOW)
+    plan_add(p, "camp1", proposal_id="p-discarded", summary="was discarded", now=NOW)
+    append_event(p, "camp1", now=NOW, event="kept", run_id="r1",
+                 data={"proposal": "p-kept"})
+    append_event(p, "camp1", now=NOW, event="discarded", run_id="r2",
+                 data={"proposal_id": "p-discarded"})
+    # later non-terminal events on the same proposal_ids
+    append_event(p, "camp1", now=NOW, event="eval", run_id="r1",
+                 data={"proposal": "p-kept"})
+    append_event(p, "camp1", now=NOW, event="note", run_id="r2",
+                 data={"proposal_id": "p-discarded"})
+    status = campaign_status(p, "camp1")
+    by_id = {e["proposal_id"]: e for e in status["plan"]}
+    assert by_id["p-kept"]["derived_status"] == "kept"
+    assert by_id["p-discarded"]["derived_status"] == "discarded"
+
+
 def test_status_no_planned_key_is_empty_list(tmp_path):
     # a campaign created before any plan-add has no `planned` -> plan == []
     p = _init(tmp_path)

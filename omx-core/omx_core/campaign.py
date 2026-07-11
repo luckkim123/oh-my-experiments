@@ -122,8 +122,12 @@ def campaign_status(paths: OmxPaths, campaign_id) -> dict:
     for e in events:
         data = e.get("data") or {}
         pid = data.get("proposal") or data.get("proposal_id")
-        if pid:
-            outcome[pid] = e.get("event")  # last event wins
+        ev = e.get("event")
+        # only terminal events settle an outcome (last TERMINAL event wins) —
+        # a later eval/note on the same proposal_id must not regress a
+        # kept/discarded/launched proposal back to "planned".
+        if pid and ev in ("kept", "discarded", "launched"):
+            outcome[pid] = ev
     plan_view = []
     for entry in plan.get("planned", []):
         pid = entry.get("proposal_id")
