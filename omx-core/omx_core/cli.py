@@ -987,6 +987,138 @@ def _cmd_loop_health(args) -> int:
     return 0
 
 
+def _cmd_run_seed(args) -> int:
+    """Seed the run ledger with the pre-experiment anchor (D-R4-2, wraps
+    seed_ledger). Seeding is ONCE — loud-fail if the ledger already exists so a
+    re-seed cannot silently reset the baseline_commit invariant."""
+    from omx_core.ledger import read_run_ledger, seed_ledger
+    paths = OmxPaths(root=_resolved_root(args))
+    if paths.ledger_json(args.run_id).exists():
+        raise SystemExit(
+            f"ledger for run {args.run_id!r} already exists; seeding is once "
+            "(re-seeding would reset the baseline_commit anchor)")
+    try:
+        seed_ledger(paths, args.run_id, baseline_commit=args.baseline_commit,
+                    keep_policy=args.keep_policy)
+        led = read_run_ledger(paths, args.run_id)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(led))
+    return 0
+
+
+def _is_ancestor(cwd, ancestor, descendant) -> bool | None:
+    """True/False from `git merge-base --is-ancestor`; None when the check
+    cannot run (not a git repo, unresolvable shas, no git). The run(check=False)
+    idiom of wiki/gc.py: rc 0 = ancestor, rc 1 = not, other = cannot-tell."""
+    import subprocess
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(cwd), "merge-base", "--is-ancestor", ancestor, descendant],
+            capture_output=True, text=True, check=False)
+    except (FileNotFoundError, OSError):
+        return None
+    if proc.returncode == 0:
+        return True
+    if proc.returncode == 1:
+        return False
+    return None  # 128 etc: bad sha / not a repo
+
+
+def _cmd_run_record(args) -> int:
+    """Record one iteration into the ledger (D-R4-2, wraps record_iteration),
+    guarded by the run-lease assertion + the git-ancestry staleness check.
+
+    Lease assertion (spec 2.3): a lease exists AND carries a session_id AND the
+    caller passed --session-id AND they differ -> rc 2. Caller passed no
+    --session-id while a lease exists -> stderr warning (unverifiable), proceed.
+    No lease -> proceed silently (single-shot record outside a loop).
+
+    Staleness (D-R4-6): with --cwd a git repo, base = last_kept_commit else
+    baseline_commit must be an ANCESTOR of --candidate-commit; non-ancestor ->
+    rc 2 (--no-staleness-check escapes); missing/non-repo cwd -> warn + skip."""
+    from omx_core.ledger import read_run_ledger, record_iteration
+    from omx_core.lock import read_run_lease
+    paths = OmxPaths(root=_resolved_root(args))
+
+    # (1) lease assertion
+    lease = read_run_lease(paths, args.run_id)
+    if lease is not None:
+        owner = lease.get("session_id")
+        if owner and args.session_id and owner != args.session_id:
+            raise SystemExit(
+                f"run {args.run_id!r} is owned by loop session {owner!r} "
+                f"(armed {lease.get('armed_at')}); disarm it or pass the owning "
+                "--session-id")
+        if args.session_id is None:
+            print(f"WARNING: a lease exists for run {args.run_id!r} but no "
+                  "--session-id was passed — ownership unverifiable; proceeding",
+                  file=sys.stderr)
+
+    # (2) staleness check
+    try:
+        ledger = read_run_ledger(paths, args.run_id)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    if not args.no_staleness_check:
+        if not args.cwd:
+            print("WARNING: staleness check skipped (no --cwd)", file=sys.stderr)
+        else:
+            base = ledger.get("last_kept_commit") or ledger.get("baseline_commit")
+            if not base:
+                print("WARNING: staleness check skipped (no baseline/last-kept "
+                      "commit in the ledger)", file=sys.stderr)
+            else:
+                anc = _is_ancestor(args.cwd, base, args.candidate_commit)
+                if anc is None:
+                    print(f"WARNING: staleness check skipped (--cwd {args.cwd!r} "
+                          "is not a git repo or a sha is unresolvable)",
+                          file=sys.stderr)
+                elif anc is False:
+                    raise SystemExit(
+                        f"stale checkpoint: base {base!r} is NOT an ancestor of "
+                        f"candidate {args.candidate_commit!r} — the candidate was "
+                        "trained from a commit behind the kept line (grading a "
+                        "phantom improvement). Pass --no-staleness-check to override.")
+
+    # (3) embed the eval decision block (optional)
+    evaluator = None
+    if args.eval_json:
+        try:
+            eval_doc = json.loads(Path(args.eval_json).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise SystemExit(f"--eval-json unreadable or not JSON: {e}")
+        # accept either a full `omx eval` doc (with a nested decision) or a bare
+        # decision block; record_iteration wants a decision dict.
+        decision = eval_doc.get("decision") if isinstance(eval_doc, dict) else None
+        if decision is None:
+            raise SystemExit("--eval-json must contain a 'decision' block "
+                             "(run `omx eval --keep-policy ...`)")
+        evaluator = decision
+    else:
+        # no eval doc: synthesize the minimal decision record_iteration needs.
+        # decision_reason is a fixed marker (not the --description string) so a
+        # ledger entry can tell a hand-entered verdict from an evaluator-derived
+        # one at a glance (--description still lands in the entry's own field).
+        evaluator = {"decision": args.decision, "keep": args.decision in ("keep", "bootstrap"),
+                     "evaluator": None, "decision_reason": "manual record", "notes": []}
+
+    try:
+        record_iteration(paths, args.run_id, iteration=args.iteration,
+                         decision=evaluator, candidate_checkpoint=args.candidate_checkpoint,
+                         candidate_commit=args.candidate_commit, description=args.description)
+        updated = read_run_ledger(paths, args.run_id)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(_finite_clean({
+        "last_kept_commit": updated.get("last_kept_commit"),
+        "last_kept_checkpoint": updated.get("last_kept_checkpoint"),
+        "last_kept_score": updated.get("last_kept_score"),
+        "entry": updated["entries"][-1] if updated.get("entries") else None,
+    }), allow_nan=False))
+    return 0
+
+
 def _now_stamp() -> str:
     # local wall-clock; deterministic format YYYYMMDD-HHMMSS
     import time
@@ -1573,6 +1705,37 @@ def build_parser() -> argparse.ArgumentParser:
     plh.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     plh.add_argument("--run-id", required=True, dest="run_id")
     plh.set_defaults(func=_cmd_loop_health)
+
+    prs2 = sub.add_parser("run-seed",
+                          help="seed the run ledger with the baseline anchor "
+                               "(D-R4-2; once — loud-fail if it exists)")
+    prs2.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    prs2.add_argument("--run-id", required=True, dest="run_id")
+    prs2.add_argument("--baseline-commit", required=True, dest="baseline_commit")
+    prs2.add_argument("--keep-policy", required=True, dest="keep_policy",
+                      choices=["pass_only", "score_improvement"])
+    prs2.set_defaults(func=_cmd_run_seed)
+
+    prc2 = sub.add_parser("run-record",
+                          help="record one loop iteration into the ledger "
+                               "(D-R4-2; lease-asserted + ancestry-staleness-checked)")
+    prc2.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    prc2.add_argument("--run-id", required=True, dest="run_id")
+    prc2.add_argument("--iteration", required=True, type=int)
+    prc2.add_argument("--decision", required=True,
+                      choices=["keep", "discard", "ambiguous", "bootstrap"])
+    prc2.add_argument("--candidate-checkpoint", required=True, dest="candidate_checkpoint")
+    prc2.add_argument("--candidate-commit", required=True, dest="candidate_commit")
+    prc2.add_argument("--description", required=True)
+    prc2.add_argument("--session-id", default=None, dest="session_id",
+                      help="assert loop-lease ownership by session id (warns if omitted while a lease exists)")
+    prc2.add_argument("--cwd", default=None,
+                      help="project git repo for the ancestry staleness check")
+    prc2.add_argument("--eval-json", default=None, dest="eval_json",
+                      help="path to a saved `omx eval` doc; its decision block is embedded")
+    prc2.add_argument("--no-staleness-check", action="store_true", dest="no_staleness_check",
+                      help="skip the git-ancestry staleness check (documented escape)")
+    prc2.set_defaults(func=_cmd_run_record)
 
     pw = sub.add_parser("wiki", help="workspace knowledge wiki (keyword-indexed, no embeddings)")
     wsub = pw.add_subparsers(dest="wiki_cmd", required=True)
