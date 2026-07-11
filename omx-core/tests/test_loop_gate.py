@@ -250,3 +250,80 @@ def test_gate_mixed_clock_fails_open(tmp_path):
 
 def test_gate_fails_open_on_garbage_payload():
     assert _load_handlers().loop_gate({"cwd": None}) is None
+
+
+# --- R4 T6: loop_gate state-lock + circuit backstop (spec 2.6) ---
+
+def test_gate_self_disarm_releases_lease_and_marks(tmp_path):
+    # hard_cap self-disarm must clean up the lease AND write the marker (the
+    # disarm path is now authoritative — critic C2).
+    from omx_core.lock import read_run_lease
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=10 ** 8, hard_cap=1,
+             session_id="sess-A")
+    mod = _load_handlers()
+    assert mod.loop_gate(_payload(tmp_path))["decision"] == "block"  # iter -> 1
+    assert mod.loop_gate(_payload(tmp_path)) is None                 # cap reached -> disarm
+    assert load_state(p)["active_loop"] is None
+    assert read_run_lease(p, "run1") is None                         # lease released
+    marker = json.loads(p.loop_marker_json("run1").read_text())
+    assert marker["reason"] == "hard_cap"
+
+
+def test_gate_deadline_self_disarm_releases_lease_and_marks(tmp_path):
+    from omx_core.lock import read_run_lease
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso="2020-01-01T00:00:00+00:00", max_runtime_s=1,
+             session_id="s")
+    assert _load_handlers().loop_gate(_payload(tmp_path)) is None
+    assert read_run_lease(p, "run1") is None
+    assert json.loads(p.loop_marker_json("run1").read_text())["reason"] == "deadline"
+
+
+def test_gate_circuit_backstop_disarms_on_plateau(tmp_path):
+    # 5 consecutive discards in the ledger -> the gate's best-effort backstop
+    # self-disarms with reason 'plateau' and allows the stop.
+    from omx_core.ledger import append_ledger_entry, seed_ledger
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=10 ** 8, session_id="s")
+    seed_ledger(p, "run1", baseline_commit="abc", keep_policy="pass_only")
+    for _ in range(5):
+        append_ledger_entry(p, "run1", {"decision": "discard",
+                                        "evaluator": {"status": "fail"}})
+    assert _load_handlers().loop_gate(_payload(tmp_path)) is None
+    assert load_state(p)["active_loop"] is None
+    marker = json.loads(p.loop_marker_json("run1").read_text())
+    assert marker["reason"] == "plateau"
+
+
+def test_gate_circuit_backstop_disarms_on_fault_streak(tmp_path):
+    from omx_core.ledger import append_ledger_entry, seed_ledger
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=10 ** 8, session_id="s")
+    seed_ledger(p, "run1", baseline_commit="abc", keep_policy="pass_only")
+    for _ in range(3):
+        append_ledger_entry(p, "run1", {"decision": "discard",
+                                        "evaluator": {"status": "error"}})
+    assert _load_handlers().loop_gate(_payload(tmp_path)) is None
+    marker = json.loads(p.loop_marker_json("run1").read_text())
+    assert marker["reason"] == "fault_circuit"
+
+
+def test_gate_backstop_fail_opens_on_missing_ledger(tmp_path):
+    # a loop that never recorded -> read_run_ledger loud-fails INSIDE the branch
+    # -> the branch is skipped (fail-open), the gate blocks normally.
+    p = _paths(tmp_path)
+    arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=10 ** 8, session_id="s")
+    out = _load_handlers().loop_gate(_payload(tmp_path))
+    assert out["decision"] == "block"  # no ledger -> backstop skipped, normal block
+
+
+def test_cli_loop_disarm_accepts_circuit_reasons(tmp_path, capsys):
+    from omx_core import cli
+    p = _paths(tmp_path)
+    for reason in ("plateau", "fault_circuit"):
+        arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=60, session_id="s")
+        capsys.readouterr()
+        rc = cli.main(["loop-disarm", "--reason", reason, "--root", str(tmp_path)])
+        capsys.readouterr()
+        assert rc == 0  # the new reasons are valid argparse choices

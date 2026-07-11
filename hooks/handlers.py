@@ -194,34 +194,75 @@ def loop_gate(payload):
     try:
         from datetime import datetime, timezone
 
-        from omx_core.loop import deadline_passed, disarm_loop
+        from omx_core.lock import release_run_lease, with_file_lock
+        from omx_core.loop import deadline_passed, mark_loop_done
         from omx_core.omx_paths import OmxPaths
         from omx_core.state import load_state, save_state
 
         paths = OmxPaths(root=_omx_root(payload))
-        state = load_state(paths)
-        env = state.get("active_loop")
-        if not env:
-            return None
-        now = datetime.now(timezone.utc).isoformat()
-        if deadline_passed(env["deadline"], now):
-            disarm_loop(paths, reason="deadline")
-            return None
-        if env.get("iteration", 0) >= env.get("hard_cap", 50):
-            disarm_loop(paths, reason="hard_cap")
-            return None
-        sid = payload.get("session_id")
-        adopted = env.get("adopted_session")
-        if adopted and sid and adopted != sid:
-            return None  # another session's loop — pass through untouched
-        if not adopted and sid:
-            env["adopted_session"] = sid  # first blocked session owns the loop
-        env["iteration"] = env.get("iteration", 0) + 1
-        state["active_loop"] = env
-        save_state(paths, state)
-        return {"decision": "block",
-                "reason": _LOOP_CONTINUATION.format(
-                    iteration=env["iteration"], run_id=env["run_id"])}
+
+        def _crit():
+            state = load_state(paths)
+            env = state.get("active_loop")
+            if not env:
+                return None
+
+            def _disarm_inline(reason):
+                # Inline disarm while ALREADY holding the state lock. We must NOT
+                # call the public lock-wrapped disarm_loop here: fcntl locks are
+                # non-reentrant across fds in one process, so disarm_loop's own
+                # flock(LOCK_EX) on a second fd of the same lock file would block
+                # until with_file_lock times out and the gate fail-opens. So do
+                # the disarm's side effects (marker + lease release) inline.
+                rid = env.get("run_id")
+                if rid:
+                    now2 = datetime.now(timezone.utc).isoformat()
+                    mark_loop_done(paths, rid, reason=reason,
+                                   summary=f"iteration {env.get('iteration')}",
+                                   now_iso=now2)
+                    release_run_lease(paths, rid)
+                state["active_loop"] = None
+                save_state(paths, state)
+                return None
+
+            now = datetime.now(timezone.utc).isoformat()
+            if deadline_passed(env["deadline"], now):
+                return _disarm_inline("deadline")
+            if env.get("iteration", 0) >= env.get("hard_cap", 50):
+                return _disarm_inline("hard_cap")
+            # circuit backstop (D-R4-4): best-effort — a circuit-evaluation error
+            # (including a missing ledger) skips the branch (fail-open), so a
+            # ledger-read failure disables the backstop by design. The verb +
+            # exp-loop step 4.5 is the AUTHORITATIVE stop; this is the backstop.
+            # NOTE: this runs BEFORE the session-adoption check by design —
+            # plateau/fault are objective ledger-derived facts (like deadline/
+            # hard_cap), and every self-disarm branch intentionally runs from any
+            # session (R3 crash-recovery precedent), so the backstop is allowed to
+            # disarm regardless of which session owns the loop.
+            try:
+                from omx_core.ledger import read_run_ledger
+                from omx_core.loop import loop_health
+                health = loop_health(read_run_ledger(paths, env["run_id"]))
+                if health["plateau_tripped"]:
+                    return _disarm_inline("plateau")
+                if health["fault_tripped"]:
+                    return _disarm_inline("fault_circuit")
+            except Exception:
+                pass  # backstop fail-open: a broken/absent ledger never traps the gate
+            sid = payload.get("session_id")
+            adopted = env.get("adopted_session")
+            if adopted and sid and adopted != sid:
+                return None  # another session's loop — pass through untouched
+            if not adopted and sid:
+                env["adopted_session"] = sid  # first blocked session owns the loop
+            env["iteration"] = env.get("iteration", 0) + 1
+            state["active_loop"] = env
+            save_state(paths, state)
+            return {"decision": "block",
+                    "reason": _LOOP_CONTINUATION.format(
+                        iteration=env["iteration"], run_id=env["run_id"])}
+
+        return with_file_lock(paths.state_lock(), _crit)
     except Exception:
         return None  # fail-open (D9): a broken gate must never trap a session
 

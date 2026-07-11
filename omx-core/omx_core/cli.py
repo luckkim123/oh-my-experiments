@@ -1553,7 +1553,8 @@ def build_parser() -> argparse.ArgumentParser:
                          help="clear the armed loop gate (idempotent; the standing exit)")
     pld.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pld.add_argument("--reason", default="cancel",
-                     choices=["done", "deadline", "cancel", "hard_cap"])
+                     choices=["done", "deadline", "cancel", "hard_cap",
+                              "plateau", "fault_circuit"])
     pld.set_defaults(func=_cmd_loop_disarm)
 
     plm = sub.add_parser("loop-mark-done",
