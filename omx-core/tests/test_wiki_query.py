@@ -91,3 +91,56 @@ def test_query_n_matches_is_total_not_truncated(tmp_path):
     assert res["n_matches"] == 25      # total that matched
     assert res["n_returned"] == 20     # capped by limit
     assert len(res["matches"]) == 20
+
+
+def test_query_low_confidence_sinks_below_equal_keyword_high(tmp_path):
+    # same keyword content, different confidence -> high ranks first (was a tie).
+    # NOTE: second title is "Heavy tail 2", not a literal duplicate of the first --
+    # ingest_knowledge merges same-slug pages (INV-2 append-merge, ingest.py:59-109)
+    # and merge always keeps the higher confidence, so an identical title here would
+    # collapse both ingests into one "high"-confidence page (n_matches==1, no tie to
+    # rank). "Heavy tail 2" still contains "heavy tail" as a substring so it earns the
+    # same +5 title-match score, keeping the tie while landing on a distinct slug.
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Heavy tail",
+                            content="body", tags=[], category="pattern",
+                            confidence="low", sources=[])
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Heavy tail 2",
+                            content="body", tags=[], category="pattern",
+                            confidence="high", sources=[])
+    res = query.query_wiki(p, now="2026-05-31T10:01:00", text="heavy tail")
+    assert res["n_matches"] == 2
+    assert res["matches"][0]["confidence"] == "high"   # high wins the tie
+    assert res["matches"][1]["confidence"] == "low"
+
+
+def test_query_strong_keyword_low_still_outranks_weak_high(tmp_path):
+    # low-confidence TITLE match (score 5 -> 4.0) beats high-confidence CONTENT
+    # match (score 2 -> 2.0): keyword relevance stays primary.
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Heavy tail",
+                            content="unrelated", tags=[], category="pattern",
+                            confidence="low", sources=[])
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Other",
+                            content="this mentions heavy tail once", tags=[],
+                            category="pattern", confidence="high", sources=[])
+    res = query.query_wiki(p, now="2026-05-31T10:01:00", text="heavy tail")
+    assert res["matches"][0]["title"] == "Heavy tail"   # low+title beats high+content
+
+
+def test_query_resolved_status_demoted_on_tie(tmp_path):
+    # equal keyword + equal confidence; a resolved page sinks below a non-actionable one.
+    # NOTE: second title is "Heavy tail 2" for the same reason as the confidence-tie
+    # test above -- an identical title merges (INV-2, ingest.py:59-109) and a None
+    # status on merge KEEPS the existing status, so a literal duplicate title would
+    # collapse into one "resolved" page (n_matches==1) instead of two ranked pages.
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Heavy tail",
+                            content="body", tags=[], category="pattern",
+                            confidence="high", sources=[], status="resolved")
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Heavy tail 2",
+                            content="body", tags=[], category="pattern",
+                            confidence="high", sources=[])
+    res = query.query_wiki(p, now="2026-05-31T10:01:00", text="heavy tail")
+    assert res["matches"][0]["status"] is None       # active page first
+    assert res["matches"][1]["status"] == "resolved"  # resolved demoted
