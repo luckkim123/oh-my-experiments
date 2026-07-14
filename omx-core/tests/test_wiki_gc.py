@@ -309,3 +309,13 @@ def test_merge_pages_survivor_blocked_on_wins(tmp_path):
                             blocked_on="source reason")
     gc.merge_pages(paths, into=into, from_slugs=[src], now="2026-06-06T01:00:00")
     assert storage.read_page(paths, into).blocked_on == "survivor reason"   # survivor-first
+
+
+def test_merge_pages_preserves_survivor_quality(tmp_path):
+    # pre-existing bug: merge_pages reconstructed the survivor WITHOUT quality fields,
+    # silently dropping them on every merge. The survivor's quality must survive.
+    paths = OmxPaths(root=tmp_path)
+    into = _seed_status_page(tmp_path, "Quality Keeper", quality_score=85)
+    src = _seed_status_page(tmp_path, "Quality Dup")
+    gc.merge_pages(paths, into=into, from_slugs=[src], now="2026-06-06T01:00:00")
+    assert storage.read_page(paths, into).quality_score == 85

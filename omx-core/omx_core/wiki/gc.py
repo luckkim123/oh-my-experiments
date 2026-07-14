@@ -192,6 +192,8 @@ def merge_pages(paths: OmxPaths, *, into: str, from_slugs: list, now: str) -> No
         created=survivor.created, updated=now, sources=sources, links=links,
         category=survivor.category, confidence=confidence,
         schema_version=survivor.schema_version,
+        quality_score=survivor.quality_score,
+        quality_reasons=list(survivor.quality_reasons),
         status=status, blocked_on=blocked_on, content=content,
     )
     storage.write_page(paths, merged, now=now)
