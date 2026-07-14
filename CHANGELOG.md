@@ -4,6 +4,85 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.7.0] - 2026-07-14 — wiki actionable-status + launch forcing gate
+
+Two documented incidents motivate this round, both the same failure class: the wiki
+RECORDS actionable knowledge perfectly but nothing FORCES it into the artifact that
+depends on it, so it succeeds as an archive and silently fails as a gate. (1) A
+campaign's planning audit found higher-value experiment leads, recorded them in a
+design doc, but the README summary DROPPED them — and keyword-ranked `wiki query` never
+resurfaced the backlog across sessions. (2) Measured TAM/IMU corrections were recorded
+with an explicit HARD invalidation gate ("apply together, not piecemeal"), yet a later
+sim-fix batch launched the baseline with the correction still pending; a baseline + 4
+experiments trained on a plant model known to be physically wrong, and no artifact
+surfaced that fact. This round makes both structurally hard. Design + plan:
+`docs/superpowers/specs/2026-07-14-wiki-actionable-status-design.md`.
+
+### Added
+
+- **First-class actionable status on wiki pages.** `WikiPage.status` ∈
+  `needs-experiment` (soft open lead), `needs-apply-before-retrain` (hard, blocks a
+  launch), `resolved` (terminal); plus an optional `blocked-on:` annotation (a blocked
+  lead KEEPS its status so it stays enumerable). Absent status = not actionable (all
+  existing pages). `status`/`blocked-on` frontmatter keys are plain (not camelCase) so
+  `grep -rl '^status: needs-' <wiki-dir>` enumerates any om* harness's backlog with one
+  command. Values are workflow vocabulary, not project content (INV-1).
+- **`omx wiki add --status {…} --blocked-on <text>`** and **`omx wiki list --status <value>`**
+  — the deterministic, keyword-independent backlog enumeration ("backlog by construction").
+  `wiki list` output now carries `status`/`blocked_on` per page; `wiki query` match dicts
+  carry `status`. One shared `enumerate_pages` helper backs both `wiki list` and the launch
+  gate, so the human's view and the gate's view cannot drift.
+- **Pre-`queue-launch` forcing gate.** An open `needs-apply-before-retrain` page REFUSES
+  the launch (rc 2, writes NOTHING, prints `open_gates` + a hint) unless acknowledged
+  per-slug via the new repeatable **`--ack-gate <slug>`** (no blanket override — typing the
+  gate slug IS the mechanism). Acked gates and still-open soft leads are recorded in the
+  pending-launch artifact (`acknowledged_gates`, `open_leads`), so the human-approval
+  artifact CARRIES the un-applied corrections it launched over. Soft leads WARN (rc 0).
+  Empty/absent wiki passes; a corrupt page or an unknown status never blocks.
+- **lint `open-lead` / `unknown-status`.** `open-lead` (warning if blocking, info if soft)
+  surfaces the backlog at every iteration end; `unknown-status` (info) flags a typo'd
+  value that would otherwise silently exit both the enumeration and the gate.
+- **Write-time + audit backstops.** The route checkpoint (`hooks/handlers.py`, still <2KiB)
+  gains a reconcile clause: before a next-steps/미해결/delta section, run
+  `omx wiki list --status` and reconcile; an open HARD gate must be named. `campaign-auditor`
+  gains `dropped-lead` + `gated-launch` backstop findings; `exp-loop` close-out and
+  `exp-design` query section get the same enumeration instruction.
+
+### Fixed
+
+- **gc merge silently dropped `quality_score`/`quality_reasons` (pre-existing).**
+  `merge_pages` reconstructed the survivor without its quality fields; now carried. Found
+  while adding the status/blocked_on merge carry.
+
+### Changed
+
+- **`wiki gc` merge and delete-suggestion honor status.** `merge_pages` rank-maxes status
+  across survivor+sources (`needs-apply-before-retrain > needs-experiment > resolved > None`)
+  so folding a duplicate can never silently disarm a HARD gate; `suggest_from_lint` exempts
+  open-lead pages from delete candidates (a backlog page is typically inbound==0). ingest
+  append-merge: an explicit new status wins, `None` keeps the existing (a status-less
+  capture stub never clobbers a flag; resolving is a `--status resolved` re-add).
+
+### Verification
+
+- Full `omx-core` suite green (913 passed; the 11 pre-existing failures are wandb/tensorboard
+  `[analyze]` optional-dep tests, unrelated). 30 new tests across types/storage/ingest/gc/
+  lint/query/cli/queue-launch/hooks, each test-first (TDD). Separate-lane review (2 agents,
+  no blocking findings). End-to-end CLI smoke: add a soft lead + a HARD gate → `list --status`
+  surfaces the backlog → `queue-launch` REFUSES → `--ack-gate` passes and records the ack →
+  `--status resolved` merge excludes the resolved lead. Both incidents' fixes demonstrated.
+
+### Notes
+
+- **Version-skew caveat.** `parse_page` drops unknown frontmatter keys (pre-existing), so an
+  old omx-core (< 0.7.0) that merge-writes a status-flagged page STRIPS the flag — and for a
+  HARD gate that silently disarms the REFUSE. Mitigations: the wiki is git-tracked (a stripped
+  line shows in the diff), lint `unknown-status`/`open-lead` visibility, and plugin-update
+  discipline. `schemaVersion` stays 1 (a bump would not help — an old parser ignores it).
+- **Blocking-status inflation.** Reserve `needs-apply-before-retrain` for facts that invalidate
+  dependent runs; over-flagging turns refusals into rubber-stamps. Stale gates resolve with one
+  `--status resolved` merge.
+
 ## [0.6.0] - 2026-07-11 — R5: packaging residue
 
 Two incidents motivate this round. The omha routing **card has said 0.1.0 with a
