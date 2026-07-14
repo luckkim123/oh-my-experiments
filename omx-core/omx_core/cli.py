@@ -34,6 +34,7 @@ from omx_core.report import parse_findings
 from omx_core.coverage import check_coverage, check_cross_run_refs
 from omx_core.profile import load_profile_metrics
 from omx_core.wiki import ingest as _wiki_ingest, query as _wiki_query, lint as _wiki_lint, storage as _wiki_storage, gc as _wiki_gc
+from omx_core.wiki.types import STATUSES as _WIKI_STATUSES, BLOCKING_STATUSES as _WIKI_BLOCKING_STATUSES
 
 
 def _finite_or_none(x):
@@ -1381,7 +1382,8 @@ def _cmd_wiki_add(args) -> int:
             paths, now=clock.now_iso_naive(), title=args.title, content=content,
             tags=tags, category=args.category, confidence=confidence,
             sources=[s.strip() for s in (args.sources or "").split(",") if s.strip()],
-            quality_score=score, quality_reasons=reasons)
+            quality_score=score, quality_reasons=reasons,
+            status=args.status, blocked_on=args.blocked_on)
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps({**res, "quality_score": score, "quality_forced_low": forced,
@@ -1492,16 +1494,9 @@ def _cmd_wiki_lint(args) -> int:
 
 def _cmd_wiki_list(args) -> int:
     paths = OmxPaths(root=_resolved_root(args))
-    out = {"pages": [], "corrupt_pages": []}
-    for slug in _wiki_storage.list_pages(paths):
-        try:
-            page = _wiki_storage.read_page(paths, slug)
-        except OmxError:
-            out["corrupt_pages"].append(slug)
-            continue
-        if page is not None:
-            out["pages"].append({"slug": slug, "title": page.title, "category": page.category})
-    print(json.dumps(out))
+    # --status enumerates the backlog by construction (keyword-independent); the same
+    # helper backs the queue-launch gate so the two views can never drift.
+    print(json.dumps(_wiki_query.enumerate_pages(paths, status=args.status)))
     return 0
 
 
@@ -2023,6 +2018,10 @@ def build_parser() -> argparse.ArgumentParser:
     pwa.add_argument("--sources", default=None, help="comma-separated source ids")
     pwa.add_argument("--from-report", default=None, dest="from_report",
                      help="extract-only: print [FINDING] candidates from a report.md, write nothing")
+    pwa.add_argument("--status", default=None, choices=list(_WIKI_STATUSES),
+                     help="actionable status (absent = not actionable); enumerated by `wiki list --status`")
+    pwa.add_argument("--blocked-on", default=None, dest="blocked_on",
+                     help="optional annotation; a blocked lead KEEPS its actionable status")
     pwa.set_defaults(func=_cmd_wiki_add)
 
     pwc = wsub.add_parser("capture-session",
@@ -2063,8 +2062,11 @@ def build_parser() -> argparse.ArgumentParser:
     pwl.add_argument("--max-page-size", type=int, default=10240, dest="max_page_size")
     pwl.set_defaults(func=_cmd_wiki_lint)
 
-    pwls = wsub.add_parser("list", help="catalog of pages (slug/title/category)")
+    pwls = wsub.add_parser("list", help="catalog of pages (slug/title/category/status); "
+                                        "--status enumerates the backlog by construction")
     pwls.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    pwls.add_argument("--status", default=None, choices=list(_WIKI_STATUSES),
+                      help="filter to one actionable status (keyword-independent backlog)")
     pwls.set_defaults(func=_cmd_wiki_list)
 
     pwr = wsub.add_parser("read", help="print one page's full text by slug (loud-fail if absent)")

@@ -53,6 +53,21 @@ def test_query_match_dict_includes_status(tmp_path):
     assert res["matches"][0]["status"] == "needs-experiment"
 
 
+def test_enumerate_pages_all_and_status_filtered(tmp_path):
+    # deterministic no-scoring catalog; backs both `wiki list` and the queue-launch gate.
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Lead", content="b",
+                            tags=[], category="reference", confidence="high", sources=[],
+                            status="needs-experiment")
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Plain", content="b",
+                            tags=[], category="reference", confidence="high", sources=[])
+    allp = query.enumerate_pages(p)
+    assert len(allp["pages"]) == 2 and allp["corrupt_pages"] == []
+    only = query.enumerate_pages(p, status="needs-experiment")
+    assert [pg["slug"] for pg in only["pages"]] == ["lead.md"]
+    assert only["pages"][0]["blocked_on"] is None
+
+
 def test_query_reports_corrupt_page_and_skips_it(tmp_path):
     p = OmxPaths(root=tmp_path)
     ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Good",

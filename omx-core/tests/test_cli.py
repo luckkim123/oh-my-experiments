@@ -472,6 +472,46 @@ def test_wiki_list_returns_json(tmp_path, capsys):
     assert out["pages"][0]["slug"] == "a.md"
 
 
+def test_wiki_add_with_status_and_blocked_on(tmp_path, capsys):
+    from omx_core.cli import build_parser
+    from omx_core.omx_paths import OmxPaths
+    from omx_core.wiki import storage
+    args = build_parser().parse_args(
+        ["wiki", "add", "--root", str(tmp_path), "--title", "TAM row rewrite",
+         "--category", "decision", "--confidence", "high",
+         "--content", "reorder ESC channels", "--status", "needs-apply-before-retrain",
+         "--blocked-on", "bench-measure T200 curve"])
+    rc = args.func(args)
+    assert rc == 0
+    page = storage.read_page(OmxPaths(root=tmp_path), "tam_row_rewrite.md")
+    assert page.status == "needs-apply-before-retrain"
+    assert page.blocked_on == "bench-measure T200 curve"
+
+
+def test_wiki_list_status_filter_and_output_fields(tmp_path, capsys):
+    from omx_core.cli import build_parser
+    from omx_core.omx_paths import OmxPaths
+    from omx_core.wiki import ingest
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Lead", content="b",
+                            tags=[], category="reference", confidence="high", sources=[],
+                            status="needs-experiment")
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Plain", content="b",
+                            tags=[], category="reference", confidence="high", sources=[])
+    args = build_parser().parse_args(["wiki", "list", "--root", str(tmp_path)])
+    args.func(args)
+    out = json.loads(capsys.readouterr().out)
+    by_slug = {pg["slug"]: pg for pg in out["pages"]}
+    assert len(by_slug) == 2
+    assert by_slug["plain.md"]["status"] is None
+    assert "blocked_on" in by_slug["lead.md"]
+    args2 = build_parser().parse_args(
+        ["wiki", "list", "--root", str(tmp_path), "--status", "needs-experiment"])
+    args2.func(args2)
+    out2 = json.loads(capsys.readouterr().out)
+    assert [pg["slug"] for pg in out2["pages"]] == ["lead.md"]
+
+
 def _seed_wiki_page(tmp_path):
     from omx_core.omx_paths import OmxPaths
     from omx_core.wiki import ingest
