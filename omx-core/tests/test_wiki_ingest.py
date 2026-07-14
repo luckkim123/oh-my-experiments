@@ -77,3 +77,55 @@ def test_aware_now_loud_fails(tmp_path):
         ingest.ingest_knowledge(p, now="2026-05-31T10:00:00+00:00", title="X",
                                 content="c", tags=[], category="pattern",
                                 confidence="high", sources=[])
+
+
+def test_create_with_status_and_blocked_on(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="TAM row rewrite",
+                            content="reorder ESC channels to match firmware",
+                            tags=["tam"], category="decision", confidence="high",
+                            sources=["meas-20260705"],
+                            status="needs-apply-before-retrain",
+                            blocked_on="bench-measure T200 curve")
+    page = storage.read_page(p, "tam_row_rewrite.md")
+    assert page.status == "needs-apply-before-retrain"
+    assert page.blocked_on == "bench-measure T200 curve"
+
+
+def test_merge_explicit_status_wins(tmp_path):
+    # resolving a lead: same title, --status resolved flips the flag AND appends the note.
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Command-box eval",
+                            content="extend eval to full box", tags=["eval"],
+                            category="reference", confidence="medium", sources=[],
+                            status="needs-experiment")
+    ingest.ingest_knowledge(p, now="2026-05-31T11:00:00", title="Command-box eval",
+                            content="applied in abc123", tags=[], category="reference",
+                            confidence="medium", sources=[], status="resolved")
+    page = storage.read_page(p, "command_box_eval.md")
+    assert page.status == "resolved"
+    assert "extend eval to full box" in page.content   # INV-2: nothing lost
+
+
+def test_merge_none_status_keeps_existing(tmp_path):
+    # a capture session-stub re-adds with no status -> must NOT clobber the flag.
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="TAM row rewrite",
+                            content="hard gate", tags=[], category="decision",
+                            confidence="high", sources=[],
+                            status="needs-apply-before-retrain",
+                            blocked_on="measure first")
+    ingest.ingest_knowledge(p, now="2026-05-31T11:00:00", title="TAM row rewrite",
+                            content="unrelated session note", tags=[], category="decision",
+                            confidence="high", sources=[])   # no status/blocked_on
+    page = storage.read_page(p, "tam_row_rewrite.md")
+    assert page.status == "needs-apply-before-retrain"   # kept
+    assert page.blocked_on == "measure first"            # kept
+
+
+def test_invalid_status_loud_fails(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    with pytest.raises(WikiError):
+        ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="X",
+                                content="c", tags=[], category="pattern",
+                                confidence="high", sources=[], status="needs-typo")

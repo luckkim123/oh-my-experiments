@@ -16,6 +16,7 @@ from omx_core.wiki.types import (
     WikiPage,
     CATEGORIES,
     CONFIDENCES,
+    STATUSES,
     WIKI_SCHEMA_VERSION,
 )
 from omx_core.wiki import storage
@@ -36,14 +37,22 @@ def _extract_links(content: str) -> list[str]:
 def ingest_knowledge(paths: OmxPaths, *, now: str, title: str, content: str,
                      tags: list, category: str, confidence: str,
                      sources: list, quality_score: int | None = None,
-                     quality_reasons: tuple = ()) -> dict:
-    """Create or append-merge a wiki page. Returns {action, slug}."""
+                     quality_reasons: tuple = (), status: str | None = None,
+                     blocked_on: str | None = None) -> dict:
+    """Create or append-merge a wiki page. Returns {action, slug}.
+
+    `status` (optional) is the actionable-status flag; an explicit value must be in
+    STATUSES (loud-fail otherwise). On merge, an explicit status/blocked_on WINS and
+    None KEEPS the existing value — so a capture session-stub (no status) never
+    clobbers a flag, and resolving a lead is a `--status resolved` re-add."""
     if "+" in now or now.endswith("Z"):
         raise WikiError(f"now must be a naive ISO timestamp (no tz offset); got {now!r}")
     if category not in CATEGORIES:
         raise WikiError(f"category {category!r} not in {sorted(CATEGORIES)}")
     if confidence not in CONFIDENCES:
         raise WikiError(f"confidence {confidence!r} not in {list(CONFIDENCES)}")
+    if status is not None and status not in STATUSES:
+        raise WikiError(f"status {status!r} not in {list(STATUSES)}")
     if not title.strip():
         raise WikiError("wiki page title must be non-empty")
 
@@ -61,6 +70,7 @@ def ingest_knowledge(paths: OmxPaths, *, now: str, title: str, content: str,
                 category=category, confidence=confidence,
                 schema_version=WIKI_SCHEMA_VERSION,
                 quality_score=quality_score, quality_reasons=list(quality_reasons),
+                status=status, blocked_on=blocked_on,
                 content=f"\n# {title}\n\n{content}\n",
             )
             action = "created"
@@ -75,6 +85,10 @@ def ingest_knowledge(paths: OmxPaths, *, now: str, title: str, content: str,
                 merged_conf = existing.confidence
             new_qs = quality_score if quality_score is not None else existing.quality_score
             new_qr = list(quality_reasons) if quality_score is not None else existing.quality_reasons
+            # explicit-wins / None-keeps: a status-less re-add (capture stub) never
+            # clobbers a flag; an explicit --status resolves or re-opens the lead.
+            new_status = status if status is not None else existing.status
+            new_blocked_on = blocked_on if blocked_on is not None else existing.blocked_on
             appended = existing.content.rstrip() + f"\n\n---\n\n## Update ({now})\n\n{content}\n"
             page = WikiPage(
                 slug=slug, title=existing.title,
@@ -83,6 +97,7 @@ def ingest_knowledge(paths: OmxPaths, *, now: str, title: str, content: str,
                 category=existing.category, confidence=merged_conf,
                 schema_version=existing.schema_version,
                 quality_score=new_qs, quality_reasons=new_qr,
+                status=new_status, blocked_on=new_blocked_on,
                 content=appended,
             )
             action = "updated"
