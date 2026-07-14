@@ -115,8 +115,9 @@ def test_query_low_confidence_sinks_below_equal_keyword_high(tmp_path):
 
 
 def test_query_strong_keyword_low_still_outranks_weak_high(tmp_path):
-    # low-confidence TITLE match (score 5 -> 4.0) beats high-confidence CONTENT
-    # match (score 2 -> 2.0): keyword relevance stays primary.
+    # low-confidence TITLE match: title 'Heavy tail' also embeds into content
+    # (ingest heading), so real score is 7 -> weighted 7*0.80=5.6, beating the
+    # high-confidence CONTENT match (score 2 -> 2.0). Keyword dominant.
     p = OmxPaths(root=tmp_path)
     ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Heavy tail",
                             content="unrelated", tags=[], category="pattern",

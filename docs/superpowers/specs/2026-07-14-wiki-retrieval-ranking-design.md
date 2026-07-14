@@ -68,7 +68,7 @@ Proposed default weights (module constants, tunable; final values fixed in the p
 | confidence | high | 1.00 | curated, trust |
 | confidence | medium | 0.92 | |
 | confidence | low | 0.80 | the auto-captured session-log stubs — sink on ties |
-| confidence | (absent) | 0.90 | neutral; older/hand pages keep surfacing (backwards-compat) |
+| confidence | None / unknown | 0.90 | neutral fallback; genuine frontmatter-absence loads as `medium` (0.92) per the storage default, so 0.90 is reached only for an explicitly-null or unrecognized value |
 | status | needs-experiment / needs-apply-before-retrain | 1.00 | actionable, keep visible |
 | status | resolved | 0.70 | settled/historical — mild sink, still surfaces on a strong match |
 | status | (absent) | 1.00 | not actionable, no effect |

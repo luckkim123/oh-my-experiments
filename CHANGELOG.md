@@ -9,8 +9,10 @@ project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.jso
 ### Changed
 
 - **`omx wiki query` now ranks confidence/status-aware.** The keyword score is
-  multiplied by a confidence weight (`high` 1.0, `medium` 0.92, `low` 0.80, absent
-  0.90) and a status weight (`resolved` 0.70, else 1.0) before sorting. Keyword
+  multiplied by a confidence weight (`high` 1.0, `medium` 0.92, `low` 0.80; an absent
+  confidence loads as `medium` per the storage default, so the `0.90` neutral weight is
+  reached only for an explicitly-null or unrecognized value) and a status weight
+  (`resolved` 0.70, else 1.0) before sorting. Keyword
   relevance is the dominant term — individual weights are in `[0.70, 1.00]` (combined
   worst case 0.56); a clearly-stronger keyword match wins, while metadata intentionally
   breaks near-tied scores (the stub-sinking).
