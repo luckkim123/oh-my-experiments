@@ -865,6 +865,31 @@ def _cmd_queue_launch(args) -> int:
     import subprocess
     paths = OmxPaths(root=_resolved_root(args))
     now = clock.now_iso()
+    # --- pre-launch wiki forcing gate (spec 4.a): REFUSE on an open HARD gate,
+    # WARN on soft leads. Read-only; same enumerate_pages helper as `wiki list`, so
+    # the gate can never drift from what the human sees. Empty/absent wiki -> passes;
+    # a corrupt page is surfaced by lint, never blocks; an unknown status never blocks.
+    def _norm(s):
+        return s if s.endswith(".md") else f"{s}.md"
+    acked = {_norm(s) for s in (args.ack_gate or [])}
+    catalog = _wiki_query.enumerate_pages(paths)
+    blocking = [pg for pg in catalog["pages"] if pg["status"] in _WIKI_BLOCKING_STATUSES]
+    unacked = [pg for pg in blocking if pg["slug"] not in acked]
+    if unacked:
+        print(json.dumps({
+            "refused": True,
+            "open_gates": [{"slug": pg["slug"], "title": pg["title"],
+                            "blocked_on": pg["blocked_on"]} for pg in unacked],
+            "hint": ("resolve each via `omx wiki add --title <same> --status resolved`, "
+                     "or rerun with `--ack-gate <slug>` per gate to launch over it"),
+        }))
+        return 2   # REFUSE: write nothing, nonzero rc
+    soft = [pg for pg in catalog["pages"]
+            if pg["status"] in _WIKI_STATUSES
+            and pg["status"] not in _WIKI_BLOCKING_STATUSES
+            and pg["status"] != "resolved"]
+    open_leads = {"count": len(soft), "slugs": [pg["slug"] for pg in soft]} if soft else None
+    acked_present = sorted(pg["slug"] for pg in blocking if pg["slug"] in acked) or None
     queued_commit = None
     if args.cwd:
         try:
@@ -883,10 +908,16 @@ def _cmd_queue_launch(args) -> int:
         queue_pending_launch(
             paths, args.run_id,
             proposal_id=args.proposal_id, launch_delta=args.launch_delta,
-            gpu_gate=args.gpu_gate, queued_at=now, queued_commit=queued_commit)
+            gpu_gate=args.gpu_gate, queued_at=now, queued_commit=queued_commit,
+            open_leads=open_leads, acknowledged_gates=acked_present)
         print(json.dumps(read_pending_launch(paths, args.run_id)))
     except OmxError as e:
         raise SystemExit(str(e))
+    if soft:
+        print(f"WARNING: {len(soft)} open experiment lead(s) not resolved: "
+              f"{', '.join(pg['slug'] for pg in soft)} "
+              f"(carry into the plan or resolve; see `omx wiki list --status`)",
+              file=sys.stderr)
     return 0
 
 
@@ -1899,6 +1930,11 @@ def build_parser() -> argparse.ArgumentParser:
     pq.add_argument("--cwd", default=None,
                     help="training git repo; when given, records queued_commit = HEAD "
                          "for launch provenance (#12)")
+    pq.add_argument("--ack-gate", action="append", default=None, dest="ack_gate",
+                    metavar="SLUG",
+                    help="acknowledge an open HARD wiki gate (status needs-apply-before-retrain) "
+                         "and launch over it; repeatable, per-slug (no blanket override). The "
+                         "acked slug is recorded in the pending-launch artifact.")
     pq.set_defaults(func=_cmd_queue_launch)
 
     pl = sub.add_parser("loop-status",

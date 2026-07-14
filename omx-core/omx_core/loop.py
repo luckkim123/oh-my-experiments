@@ -61,7 +61,8 @@ def _require_nonempty(value, label: str) -> str:
 
 
 def queue_pending_launch(paths: OmxPaths, run_id, *, proposal_id, launch_delta,
-                         gpu_gate, queued_at, queued_commit=None) -> None:
+                         gpu_gate, queued_at, queued_commit=None,
+                         open_leads=None, acknowledged_gates=None) -> None:
     """Write runs/<run_id>/pending-launch.json marked 'pending approval' (B8).
 
     This is the ONLY thing exp-loop does with a launch — it queues it, never
@@ -70,8 +71,13 @@ def queue_pending_launch(paths: OmxPaths, run_id, *, proposal_id, launch_delta,
     nvidia-smi precondition the human must confirm; `queued_at` is an ISO-8601
     instant supplied by the caller (the CLI injects the real clock).
     `queued_commit` (optional, D-R4-6) is the training-repo HEAD at queue time,
-    recorded for launch provenance; omitted from the artifact when None. All
-    non-optional args are required and loud-fail when empty. Atomic write."""
+    recorded for launch provenance; omitted from the artifact when None.
+    `open_leads` (optional {count, slugs}) records soft actionable wiki leads
+    still open at queue time, and `acknowledged_gates` (optional [slug]) the HARD
+    gate pages the human acked to launch over — the handler computes both from the
+    wiki so the approval artifact CARRIES the un-applied corrections (the fix for
+    'no artifact surfaced that fact'). Both omitted from the artifact when falsy.
+    All non-optional args are required and loud-fail when empty. Atomic write."""
     pid = _require_nonempty(proposal_id, "proposal_id")
     delta = _require_nonempty(launch_delta, "launch_delta")
     gate = _require_nonempty(gpu_gate, "gpu_gate")
@@ -88,6 +94,10 @@ def queue_pending_launch(paths: OmxPaths, run_id, *, proposal_id, launch_delta,
     }
     if queued_commit:
         payload["queued_commit"] = queued_commit
+    if open_leads:
+        payload["open_leads"] = open_leads
+    if acknowledged_gates:
+        payload["acknowledged_gates"] = acknowledged_gates
     with atomic_path(target) as tmp:
         tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))
 
