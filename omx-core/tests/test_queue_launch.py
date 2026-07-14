@@ -135,7 +135,7 @@ def test_queue_launch_warns_on_soft_lead(tmp_path, capsys):
     cap = capsys.readouterr()
     out = json.loads(cap.out)
     assert rc == 0                                  # soft leads WARN, never REFUSE
-    assert out["open_leads"]["count"] == 1
+    assert out["open_leads"] == ["command_box_eval.md"]
     assert "command_box_eval.md" in cap.err
 
 
@@ -165,10 +165,9 @@ def test_queue_pending_launch_records_open_leads_and_acks(tmp_path):
     p = _p(tmp_path)
     queue_pending_launch(p, "run1", proposal_id="x", launch_delta="d", gpu_gate="g",
                          queued_at="2026-07-11T10:00:00+00:00",
-                         open_leads={"count": 1, "slugs": ["a.md"]},
-                         acknowledged_gates=["b.md"])
+                         open_leads=["a.md"], acknowledged_gates=["b.md"])
     data = read_pending_launch(p, "run1")
-    assert data["open_leads"] == {"count": 1, "slugs": ["a.md"]}
+    assert data["open_leads"] == ["a.md"]
     assert data["acknowledged_gates"] == ["b.md"]
 
 

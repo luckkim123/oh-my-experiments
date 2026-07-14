@@ -72,11 +72,11 @@ def queue_pending_launch(paths: OmxPaths, run_id, *, proposal_id, launch_delta,
     instant supplied by the caller (the CLI injects the real clock).
     `queued_commit` (optional, D-R4-6) is the training-repo HEAD at queue time,
     recorded for launch provenance; omitted from the artifact when None.
-    `open_leads` (optional {count, slugs}) records soft actionable wiki leads
-    still open at queue time, and `acknowledged_gates` (optional [slug]) the HARD
-    gate pages the human acked to launch over — the handler computes both from the
-    wiki so the approval artifact CARRIES the un-applied corrections (the fix for
-    'no artifact surfaced that fact'). Both omitted from the artifact when falsy.
+    `open_leads` (optional [slug]) records soft actionable wiki leads still open
+    at queue time, and `acknowledged_gates` (optional [slug]) the HARD gate pages
+    the human acked to launch over — the handler computes both from the wiki so the
+    approval artifact CARRIES the un-applied corrections (the fix for 'no artifact
+    surfaced that fact'). Both omitted from the artifact when falsy.
     All non-optional args are required and loud-fail when empty. Atomic write."""
     pid = _require_nonempty(proposal_id, "proposal_id")
     delta = _require_nonempty(launch_delta, "launch_delta")

@@ -869,9 +869,7 @@ def _cmd_queue_launch(args) -> int:
     # WARN on soft leads. Read-only; same enumerate_pages helper as `wiki list`, so
     # the gate can never drift from what the human sees. Empty/absent wiki -> passes;
     # a corrupt page is surfaced by lint, never blocks; an unknown status never blocks.
-    def _norm(s):
-        return s if s.endswith(".md") else f"{s}.md"
-    acked = {_norm(s) for s in (args.ack_gate or [])}
+    acked = {_wiki_gc._norm_slug(s) for s in (args.ack_gate or [])}
     catalog = _wiki_query.enumerate_pages(paths)
     blocking = [pg for pg in catalog["pages"] if pg["status"] in _WIKI_BLOCKING_STATUSES]
     unacked = [pg for pg in blocking if pg["slug"] not in acked]
@@ -888,7 +886,7 @@ def _cmd_queue_launch(args) -> int:
             if pg["status"] in _WIKI_STATUSES
             and pg["status"] not in _WIKI_BLOCKING_STATUSES
             and pg["status"] != "resolved"]
-    open_leads = {"count": len(soft), "slugs": [pg["slug"] for pg in soft]} if soft else None
+    open_leads = [pg["slug"] for pg in soft] or None
     acked_present = sorted(pg["slug"] for pg in blocking if pg["slug"] in acked) or None
     queued_commit = None
     if args.cwd:
