@@ -137,14 +137,18 @@ def delete_page(paths: OmxPaths, slug: str) -> None:
 
 
 _CONF_RANK = {"high": 3, "medium": 2, "low": 1}
+#: Most-open-wins on merge (mirrors _CONF_RANK): a folded duplicate must never
+#: silently disarm a HARD gate. None(0) < resolved(1) < needs-experiment(2)
+#: < needs-apply-before-retrain(3).
+_STATUS_RANK = {None: 0, "resolved": 1, "needs-experiment": 2, "needs-apply-before-retrain": 3}
 
 
 def merge_pages(paths: OmxPaths, *, into: str, from_slugs: list, now: str) -> None:
     """Fold each `from` page into the `into` survivor (lossless), then delete the
-    `from` pages. Tags union, sources append, links union, confidence max; each
-    source body is appended as a '## Merged from <slug> (<now>)' section. Caller
-    holds the lock and does update_index/append_log. Loud-fail on self-merge or an
-    absent page."""
+    `from` pages. Tags union, sources append, links union, confidence max, status
+    most-open-wins, blocked_on survivor-first; each source body is appended as a
+    '## Merged from <slug> (<now>)' section. Caller holds the lock and does
+    update_index/append_log. Loud-fail on self-merge or an absent page."""
     into_norm = _norm_slug(into)
     froms = [_norm_slug(s) for s in from_slugs]
     if into_norm in froms:
@@ -158,6 +162,8 @@ def merge_pages(paths: OmxPaths, *, into: str, from_slugs: list, now: str) -> No
     sources = list(survivor.sources)
     links = list(survivor.links)
     confidence = survivor.confidence
+    status = survivor.status
+    blocked_on = survivor.blocked_on
     content = survivor.content.rstrip()
 
     for fslug in froms:
@@ -175,13 +181,18 @@ def merge_pages(paths: OmxPaths, *, into: str, from_slugs: list, now: str) -> No
                 links.append(l)
         if _CONF_RANK.get(src.confidence, 2) > _CONF_RANK.get(confidence, 2):
             confidence = src.confidence
+        if _STATUS_RANK.get(src.status, 0) > _STATUS_RANK.get(status, 0):
+            status = src.status
+        if blocked_on is None and src.blocked_on is not None:
+            blocked_on = src.blocked_on   # survivor-first, else first source that set it
         content += f"\n\n---\n\n## Merged from {fslug} ({now})\n\n{src.content.strip()}\n"
 
     merged = WikiPage(
         slug=into_norm, title=survivor.title, tags=tags,
         created=survivor.created, updated=now, sources=sources, links=links,
         category=survivor.category, confidence=confidence,
-        schema_version=survivor.schema_version, content=content,
+        schema_version=survivor.schema_version,
+        status=status, blocked_on=blocked_on, content=content,
     )
     storage.write_page(paths, merged, now=now)
     for fslug in froms:
