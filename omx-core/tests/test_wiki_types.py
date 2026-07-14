@@ -45,3 +45,17 @@ def test_wikipage_holds_frontmatter_and_content():
     assert page.title == "Roll heavy-tail"
     assert page.category == "pattern"
     assert page.tags == ["roll", "heavy-tail"]
+
+
+def test_statuses_include_soft_hard_and_terminal():
+    from omx_core.wiki.types import STATUSES, BLOCKING_STATUSES
+    assert STATUSES == ("needs-experiment", "needs-apply-before-retrain", "resolved")
+    # the blocking value(s) that make queue-launch REFUSE, a subset of the known statuses
+    assert BLOCKING_STATUSES == frozenset({"needs-apply-before-retrain"})
+    assert BLOCKING_STATUSES <= set(STATUSES)
+
+
+def test_wikipage_status_and_blocked_on_default_none():
+    page = WikiPage(slug="a.md", title="A")
+    assert page.status is None
+    assert page.blocked_on is None

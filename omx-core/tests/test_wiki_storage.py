@@ -130,3 +130,26 @@ def test_with_wiki_lock_runs_the_body(tmp_path):
     p = OmxPaths(root=tmp_path)
     out = storage.with_wiki_lock(p, lambda: 42)
     assert out == 42
+
+
+def test_status_and_blocked_on_round_trip():
+    page = WikiPage(**{**_page().__dict__,
+                       "status": "needs-apply-before-retrain",
+                       "blocked_on": 'bench-measure the T200 "curve" first'})
+    parsed = storage.parse_page("alpha.md", storage.serialize_page(page))
+    assert parsed.status == "needs-apply-before-retrain"
+    assert parsed.blocked_on == 'bench-measure the T200 "curve" first'
+
+
+def test_status_less_page_omits_the_status_lines():
+    # backwards-compat guard: a page with no status serializes byte-identically to
+    # the pre-status format (no `status:`/`blocked-on:` lines leak in).
+    text = storage.serialize_page(_page())
+    assert "status:" not in text
+    assert "blocked-on:" not in text
+
+
+def test_legacy_frontmatter_parses_to_status_none():
+    parsed = storage.parse_page("alpha.md", storage.serialize_page(_page()))
+    assert parsed.status is None
+    assert parsed.blocked_on is None

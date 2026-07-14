@@ -105,6 +105,13 @@ def serialize_page(page: WikiPage) -> str:
         lines.append(f"qualityScore: {page.quality_score}")
         lines.append("qualityReasons: [" + ", ".join(
             f'"{_esc(r)}"' for r in page.quality_reasons) + "]")
+    # Conditional (qualityScore precedent): a status-less page stays byte-identical
+    # to the pre-status format. `status` is a controlled enum scalar (unquoted like
+    # category); `blocked-on` is free text (quoted+escaped like title).
+    if page.status is not None:
+        lines.append(f"status: {page.status}")
+    if page.blocked_on is not None:
+        lines.append(f'blocked-on: "{_esc(page.blocked_on)}"')
     return "---\n" + "\n".join(lines) + "\n---\n" + page.content
 
 
@@ -138,6 +145,10 @@ def parse_page(slug: str, raw: str) -> WikiPage:
         schema_version=schema_version,
         quality_score=quality_score,
         quality_reasons=_parse_array(fm.get("qualityReasons", "")),
+        # Never loud-fail on an unknown status at parse time (a hand-edited page must
+        # still load); lint flags typos. Absent -> None (legacy pages stay valid).
+        status=fm.get("status") or None,
+        blocked_on=fm.get("blocked-on") or None,
         content=m.group(2),
     )
 
