@@ -44,6 +44,15 @@ def test_query_tag_match_boosts(tmp_path):
     assert res["matches"][0]["slug"] == "a.md"
 
 
+def test_query_match_dict_includes_status(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Heavy tail",
+                            content="body", tags=[], category="pattern",
+                            confidence="high", sources=[], status="needs-experiment")
+    res = query.query_wiki(p, now="2026-05-31T10:01:00", text="heavy tail")
+    assert res["matches"][0]["status"] == "needs-experiment"
+
+
 def test_query_reports_corrupt_page_and_skips_it(tmp_path):
     p = OmxPaths(root=tmp_path)
     ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Good",

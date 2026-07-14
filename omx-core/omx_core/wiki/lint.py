@@ -14,7 +14,7 @@ from collections import Counter
 from datetime import datetime
 
 from omx_core.omx_paths import OmxPaths
-from omx_core.wiki.types import WikiError
+from omx_core.wiki.types import WikiError, STATUSES, BLOCKING_STATUSES
 from omx_core.wiki import storage
 from omx_core.wiki.quality import QUALITY_FLOOR
 
@@ -188,6 +188,18 @@ def lint_wiki(paths: OmxPaths, *, now: str, stale_days: int = 30,
         if page.quality_score is not None and page.quality_score < quality_floor:
             issues.append({"slug": slug, "severity": "info", "type": "low-quality",
                            "message": f"quality_score {page.quality_score} < {quality_floor}"})
+        if page.status is not None:
+            if page.status not in STATUSES:
+                # a typo'd status silently exits the enumeration AND the launch gate
+                # (parse never loud-fails on it) — the failure class, so flag it here.
+                issues.append({"slug": slug, "severity": "info", "type": "unknown-status",
+                               "message": f"status {page.status!r} not in {list(STATUSES)}"})
+            elif page.status != "resolved":
+                # an open actionable lead: warning if it blocks a launch, info if soft.
+                sev = "warning" if page.status in BLOCKING_STATUSES else "info"
+                issues.append({"slug": slug, "severity": sev, "type": "open-lead",
+                               "message": f"actionable status {page.status!r}; carry it into the "
+                                          f"next summary/plan or resolve it"})
 
     issues.extend(_contradiction_candidates(pages))
     issues.extend(_near_duplicate_candidates(pages))

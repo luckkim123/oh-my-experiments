@@ -270,6 +270,21 @@ def test_suggest_from_lint_empty_when_no_orphans():
     assert out["delete_candidates"] == []
 
 
+def test_suggest_from_lint_exempts_open_lead_slugs():
+    # an open-lead page is typically inbound==0 (nothing links to it yet — that's WHY
+    # it is a backlog page), so the orphan->delete pipeline must not offer it for deletion.
+    lint_res = {
+        "issues": [
+            {"slug": "backlog.md", "severity": "info", "type": "orphan", "message": "x"},
+            {"slug": "backlog.md", "severity": "warning", "type": "open-lead", "message": "y"},
+            {"slug": "lonely.md", "severity": "info", "type": "orphan", "message": "z"},
+        ],
+        "stats": {"total_pages": 2, "by_type": {}},
+    }
+    out = gc.suggest_from_lint(lint_res)
+    assert out["delete_candidates"] == ["lonely.md"]   # backlog.md exempt (open-lead)
+
+
 def _seed_status_page(tmp_path, title, *, status=None, blocked_on=None, quality_score=None):
     from omx_core.wiki import ingest
     res = ingest.ingest_knowledge(

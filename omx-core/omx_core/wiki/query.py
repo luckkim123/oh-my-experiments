@@ -97,7 +97,7 @@ def query_wiki(paths: OmxPaths, *, now: str, text: str, tags: list | None = None
             matches.append({
                 "slug": slug, "title": page.title, "score": score,
                 "snippet": snippet, "category": page.category,
-                "confidence": page.confidence,
+                "confidence": page.confidence, "status": page.status,
             })
 
     matches.sort(key=lambda m: m["score"], reverse=True)

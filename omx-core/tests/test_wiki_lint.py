@@ -291,3 +291,50 @@ def test_lint_honors_profile_quality_floor(tmp_path):
     res2 = lint.lint_wiki(p, now="2026-05-31T10:01:00", stale_days=30,
                           max_page_size=10240, quality_floor=1)
     assert not any(i["type"] == "low-quality" for i in res2["issues"])
+
+
+def test_lint_flags_open_lead_soft_as_info(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Lead",
+                            content="body", tags=[], category="reference",
+                            confidence="high", sources=[], status="needs-experiment")
+    res = lint.lint_wiki(p, now="2026-05-31T10:01:00", stale_days=30, max_page_size=10240)
+    hits = [i for i in res["issues"] if i["type"] == "open-lead"]
+    assert len(hits) == 1 and hits[0]["severity"] == "info"
+
+
+def test_lint_flags_open_lead_blocking_as_warning(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Gate",
+                            content="body", tags=[], category="decision",
+                            confidence="high", sources=[], status="needs-apply-before-retrain")
+    res = lint.lint_wiki(p, now="2026-05-31T10:01:00", stale_days=30, max_page_size=10240)
+    hits = [i for i in res["issues"] if i["type"] == "open-lead"]
+    assert len(hits) == 1 and hits[0]["severity"] == "warning"
+
+
+def test_lint_resolved_status_is_not_an_open_lead(tmp_path):
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Done",
+                            content="body", tags=[], category="reference",
+                            confidence="high", sources=[], status="resolved")
+    res = lint.lint_wiki(p, now="2026-05-31T10:01:00", stale_days=30, max_page_size=10240)
+    assert not any(i["type"] == "open-lead" for i in res["issues"])
+
+
+def test_lint_flags_unknown_status(tmp_path):
+    # a hand-edited page with a typo'd status silently exits the enumeration and the
+    # gate — precisely the failure class — so lint must surface it.
+    p = OmxPaths(root=tmp_path)
+    p.wiki_dir().mkdir(parents=True, exist_ok=True)
+    page = (
+        "---\n"
+        'title: "Typo"\n'
+        "tags: []\ncreated: 2026-05-31T10:00:00\nupdated: 2026-05-31T10:00:00\n"
+        "sources: []\nlinks: []\ncategory: reference\nconfidence: high\n"
+        "schemaVersion: 1\nstatus: needs-typo\n---\nbody\n"
+    )
+    (p.wiki_dir() / "typo.md").write_text(page, encoding="utf-8")
+    res = lint.lint_wiki(p, now="2026-05-31T10:01:00", stale_days=30, max_page_size=10240)
+    assert any(i["type"] == "unknown-status" and i["slug"] == "typo.md"
+               for i in res["issues"])

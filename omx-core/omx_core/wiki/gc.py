@@ -86,9 +86,15 @@ def suggest_from_lint(lint_res: dict) -> dict:
     (broken-ref/oversized/broken-frontmatter) are fix-in-place, not delete. Returns
     {delete_candidates: [slug...], proposal_skeleton: <editable wiki-gc proposal>}.
     The human copies/edits the skeleton; gc-apply (git-guarded) is the only executor."""
+    # an open lead is typically inbound==0 (nothing links to it yet — that's WHY it is a
+    # backlog page), so exempt any slug lint flagged as open-lead from delete suggestions.
+    open_lead_slugs = {
+        i["slug"] for i in lint_res.get("issues", [])
+        if i.get("type") == "open-lead"
+    }
     candidates = sorted({
         i["slug"] for i in lint_res.get("issues", [])
-        if i.get("type") == "orphan"
+        if i.get("type") == "orphan" and i["slug"] not in open_lead_slugs
     })
     delete_lines = "\n".join(f"- slug: {s}" for s in candidates) or "# (none)"
     skeleton = (
