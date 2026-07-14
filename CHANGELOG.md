@@ -4,6 +4,30 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.7.1] - 2026-07-14 — confidence/status-aware wiki query ranking
+
+### Changed
+
+- **`omx wiki query` now ranks confidence/status-aware.** The keyword score is
+  multiplied by a confidence weight (`high` 1.0, `medium` 0.92, `low` 0.80; an absent
+  confidence loads as `medium` per the storage default, so the `0.90` neutral weight is
+  reached only for an explicitly-null or unrecognized value) and a status weight
+  (`resolved` 0.70, else 1.0) before sorting. Keyword
+  relevance is the dominant term — individual weights are in `[0.70, 1.00]` (combined
+  worst case 0.56); a clearly-stronger keyword match wins, while metadata intentionally
+  breaks near-tied scores (the stub-sinking).
+  Motivation: ~65 low-confidence auto-captured `session-log` stubs previously tied
+  with curated pages and buried them. No page is filtered or hidden — only re-ordered
+  (INV-2); pages with absent metadata keep surfacing (neutral weight). Design + plan:
+  `docs/superpowers/specs/2026-07-14-wiki-retrieval-ranking-design.md`.
+
+### Deferred
+
+- A route-checkpoint prose nudge for ad-hoc experiment prompts was evaluated and
+  dropped: `_ROUTE_CHECKPOINT` has ~118 B of headroom under its 2 KiB cap and already
+  routes ad-hoc work to the query-forcing exp-analyze/exp-design skills, so the
+  byte-squeeze was not worth its marginal value.
+
 ## [0.7.0] - 2026-07-14 — wiki actionable-status + launch forcing gate
 
 Two documented incidents motivate this round, both the same failure class: the wiki

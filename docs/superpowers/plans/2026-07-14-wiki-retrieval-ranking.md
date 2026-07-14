@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `omx wiki query` rank confidence/status-aware so low-confidence auto-captured stubs stop burying curated pages, while keyword relevance stays primary.
+**Goal:** Make `omx wiki query` rank confidence/status-aware so low-confidence auto-captured stubs stop burying curated pages, while keyword relevance stays the dominant ranking term (metadata breaks near-tied scores).
 
-**Architecture:** One localized change to `omx_core/wiki/query.py`: multiply the existing integer keyword score by two lookup-table weights (`confidence`, `status`) at sort time. Keyword score stays the dominant term because every weight is in `[0.70, 1.00]`, so a strong keyword match on a low-confidence page still outranks a weak match on a high-confidence one. Read-only, no page mutated or filtered (INV-2). Then a v0.7.1 patch release.
+**Architecture:** One localized change to `omx_core/wiki/query.py`: multiply the existing integer keyword score by two lookup-table weights (`confidence`, `status`) at sort time. Keyword score is the dominant term — individual weights are in `[0.70, 1.00]` (worst-case combined `low`×`resolved` = 0.56), so a clearly-stronger keyword match wins, while metadata intentionally breaks near-tied scores (within ~1.8×) — the stub-sinking. Not strict keyword primacy (incompatible with meaningful weighting). Read-only, no page mutated or filtered (INV-2). Then a v0.7.1 patch release.
 
 **Tech Stack:** Python 3.10+, pytest. omx-core package; plugin versioned via `.claude-plugin/plugin.json`.
 
@@ -179,8 +179,9 @@ Insert directly above the `## [0.7.0]` line in `CHANGELOG.md`:
 - **`omx wiki query` now ranks confidence/status-aware.** The keyword score is
   multiplied by a confidence weight (`high` 1.0, `medium` 0.92, `low` 0.80, absent
   0.90) and a status weight (`resolved` 0.70, else 1.0) before sorting. Keyword
-  relevance stays primary — every weight is in `[0.70, 1.00]`, so a strong keyword
-  match on a low-confidence page still outranks a weak match on a high-confidence one.
+  relevance is the dominant term — individual weights are in `[0.70, 1.00]` (combined
+  worst case 0.56); a clearly-stronger keyword match wins, while metadata intentionally
+  breaks near-tied scores (the stub-sinking).
   Motivation: ~65 low-confidence auto-captured `session-log` stubs previously tied
   with curated pages and buried them. No page is filtered or hidden — only re-ordered
   (INV-2); pages with absent metadata keep surfacing (neutral weight). Design + plan:

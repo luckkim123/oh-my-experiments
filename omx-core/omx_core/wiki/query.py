@@ -16,6 +16,27 @@ from omx_core.wiki import storage
 _LATIN = re.compile(r"[a-z0-9À-ɏ]+")
 _CJK = re.compile(r"[぀-ゟ゠-ヿ一-鿿가-힯]+")
 
+# Ranking weights (v0.7.1): keyword score is DOMINANT, not strictly primary.
+# Individual weights are in [0.70, 1.00]; the worst-case combined discount is
+# low 0.80 * resolved 0.70 = 0.56, so metadata intentionally re-orders NEAR-tied
+# scores (the stub-sinking) while a clearly-stronger keyword match still wins.
+# These are the tuning knob; adjust here, not inline. absent (None) = neutral.
+_CONFIDENCE_WEIGHT = {"high": 1.0, "medium": 0.92, "low": 0.80, None: 0.90}
+_STATUS_WEIGHT = {
+    "needs-experiment": 1.0,
+    "needs-apply-before-retrain": 1.0,
+    "resolved": 0.70,
+    None: 1.0,
+}
+
+
+def _rank_weight(match: dict) -> float:
+    """Weighted rank key: keyword score modified by confidence + status.
+    Unknown/absent metadata -> neutral (never penalize a hand-edited value)."""
+    conf = _CONFIDENCE_WEIGHT.get(match["confidence"], 0.90)
+    stat = _STATUS_WEIGHT.get(match["status"], 1.0)
+    return match["score"] * conf * stat
+
 
 def tokenize(text: str) -> list[str]:
     """Lowercase tokens: Latin/digit words + CJK singletons + CJK bigrams."""
@@ -126,7 +147,7 @@ def query_wiki(paths: OmxPaths, *, now: str, text: str, tags: list | None = None
                 "confidence": page.confidence, "status": page.status,
             })
 
-    matches.sort(key=lambda m: m["score"], reverse=True)
+    matches.sort(key=lambda m: (_rank_weight(m), m["score"]), reverse=True)
     limited = matches[:limit]
     storage.append_log(paths, now=now, operation="query", pages=[m["slug"] for m in limited],
                        summary=f"query {text!r} -> {len(limited)} of {len(matches)}")
