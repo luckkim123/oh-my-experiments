@@ -23,6 +23,15 @@ Procedure:
      report in the experiments tree? A run without a report is unrecorded work.
    - Consistency: run ids follow the naming conventions; `_corrupt` events are
      surfaced, never ignored.
+   - Dropped lead (backstop for the backlog-flatten incident): run
+     `omx wiki list --status needs-experiment --root <root>`; an open lead absent
+     from the campaign's latest summary/README is a finding
+     `{"kind": "dropped-lead", "severity": "major"}`.
+   - Gated launch (backstop for the TAM-strand incident): run
+     `omx wiki list --status needs-apply-before-retrain --root <root>`; for each
+     `launched` ledger event, cross-check that page against the event's
+     `acknowledged_gates`. A launch while a blocking page was open and NOT
+     acknowledged is a finding `{"kind": "gated-launch", "severity": "major"}`.
 3. Do NOT recommend launching anything — training start/stop is the human's
    (D4); your findings are about the RECORD, not the next experiment.
 

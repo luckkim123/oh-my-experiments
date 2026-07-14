@@ -209,6 +209,14 @@ Report any `stale` / `broken-ref` / `broken-frontmatter` / `orphan` /
 `low-confidence` / `contradiction-candidate` issues to the user in your summary.
 Do NOT auto-edit or delete any page (minimum-change / review-gated rule).
 
+Before writing the iteration close-out summary, reconcile the open backlog:
+`omx wiki list --status needs-experiment --root <root>` (and
+`--status needs-apply-before-retrain`). Every open lead must be present in your
+"next" section or explicitly deferred with a reason — silently dropping a lead
+that the wiki flags is the backlog-flatten defect. An open
+`needs-apply-before-retrain` gate must be named as a launch prerequisite, never
+omitted from the delta list.
+
 If `lint`'s `stats.by_type` shows several `info`+ issues (orphan / stale /
 contradiction-candidate accumulating), add a one-line cleanup reminder to the
 summary: "wiki cleanup review suggested — run `omx wiki gc --root <root>` to see

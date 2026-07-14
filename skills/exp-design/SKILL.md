@@ -65,6 +65,13 @@ adopted/discarded with the data that decided it (= a past confirmed cause), and
 unfamiliar. exp-analyze writes these via its auto-capture loop, so the more the
 workspace is analyzed, the more this query returns.
 
+Also enumerate the open backlog keyword-independently — a symptom-scoped query alone
+hides leads the workspace already flagged as needing an experiment:
+`omx wiki list --status needs-experiment --root <root>` (and
+`--status needs-apply-before-retrain` for HARD corrections that must be applied before
+any retrain). This is the "look at the wiki for what needs experimenting" enumeration
+that a ranked query cannot surface; weigh those leads when choosing the next probe.
+
 Treat hits as PRIOR EVIDENCE feeding the diagnosis (a past confirmed cause is strong
 evidence for that lane). If a prior probe was already tried, design a DIFFERENT
 discriminating probe. An empty result just means this is new ground.
