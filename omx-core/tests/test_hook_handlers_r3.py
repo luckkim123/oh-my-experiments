@@ -65,6 +65,15 @@ def test_route_checkpoint_stays_under_2kib():
     assert len(mod._ROUTE_CHECKPOINT.encode("utf-8")) <= 2048
 
 
+def test_route_emit_carries_backlog_reconcile_clause():
+    # the write-time forcing layer (spec 4.c): before a summary/plan next-steps section,
+    # reconcile against the status enumeration; an open HARD gate must be named.
+    mod = _load_handlers()
+    text = mod._ROUTE_CHECKPOINT
+    assert "--status" in text
+    assert "needs-apply-before-retrain" in text
+
+
 def test_route_emit_registered_in_handlers_table():
     mod = _load_handlers()
     assert mod.HANDLERS["route_emit"] is mod.route_emit

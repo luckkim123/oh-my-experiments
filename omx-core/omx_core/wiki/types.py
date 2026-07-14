@@ -21,6 +21,17 @@ CATEGORIES = frozenset({
 #: Confidence levels, ordered high -> low (rank index = lower is more confident).
 CONFIDENCES = ("high", "medium", "low")
 
+#: Actionable-status values (INV-1: WORKFLOW vocabulary — the harness's own actionable
+#: units, same class as the `session-log` category — NOT project domain content). Absent
+#: status = not actionable. `needs-experiment` = soft open lead (backlog, WARN at gates);
+#: `needs-apply-before-retrain` = hard pending correction that invalidates dependent runs
+#: (queue-launch REFUSEs); `resolved` = terminal (closes the lifecycle, since merge is
+#: append-only and a status can never return to absent).
+STATUSES = ("needs-experiment", "needs-apply-before-retrain", "resolved")
+
+#: The status value(s) that make `omx queue-launch` REFUSE (subset of STATUSES).
+BLOCKING_STATUSES = frozenset({"needs-apply-before-retrain"})
+
 #: Files in the wiki dir that are NOT pages (auto-maintained); never writable as a page.
 RESERVED_FILES = frozenset({"index.md", "log.md", "profile.md"})
 
@@ -45,4 +56,6 @@ class WikiPage:
     schema_version: int = WIKI_SCHEMA_VERSION
     quality_score: int | None = None
     quality_reasons: list = field(default_factory=list)
+    status: str | None = None       # None = not actionable; see STATUSES
+    blocked_on: str | None = None   # optional annotation; a blocked lead KEEPS its status
     content: str = ""

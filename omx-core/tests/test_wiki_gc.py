@@ -268,3 +268,69 @@ def test_suggest_from_lint_empty_when_no_orphans():
                 "stats": {"total_pages": 1, "by_type": {}}}
     out = gc.suggest_from_lint(lint_res)
     assert out["delete_candidates"] == []
+
+
+def test_suggest_from_lint_exempts_open_lead_slugs():
+    # an open-lead page is typically inbound==0 (nothing links to it yet — that's WHY
+    # it is a backlog page), so the orphan->delete pipeline must not offer it for deletion.
+    lint_res = {
+        "issues": [
+            {"slug": "backlog.md", "severity": "info", "type": "orphan", "message": "x"},
+            {"slug": "backlog.md", "severity": "warning", "type": "open-lead", "message": "y"},
+            {"slug": "lonely.md", "severity": "info", "type": "orphan", "message": "z"},
+        ],
+        "stats": {"total_pages": 2, "by_type": {}},
+    }
+    out = gc.suggest_from_lint(lint_res)
+    assert out["delete_candidates"] == ["lonely.md"]   # backlog.md exempt (open-lead)
+
+
+def _seed_status_page(tmp_path, title, *, status=None, blocked_on=None, quality_score=None):
+    from omx_core.wiki import ingest
+    res = ingest.ingest_knowledge(
+        OmxPaths(root=tmp_path), now="2026-06-06T00:00:00",
+        title=title, content="body", tags=["t"], category="reference",
+        confidence="medium", sources=[], status=status, blocked_on=blocked_on,
+        quality_score=quality_score)
+    return res["slug"]
+
+
+def test_merge_pages_carries_most_open_status(tmp_path):
+    # a duplicate carrying the flag folded into an unflagged survivor must NOT drop the
+    # flag (that would silently disarm a HARD gate — the incident, via gc).
+    paths = OmxPaths(root=tmp_path)
+    into = _seed_status_page(tmp_path, "Keeper")   # no status
+    src = _seed_status_page(tmp_path, "Dup", status="needs-apply-before-retrain",
+                            blocked_on="measure first")
+    gc.merge_pages(paths, into=into, from_slugs=[src], now="2026-06-06T01:00:00")
+    page = storage.read_page(paths, into)
+    assert page.status == "needs-apply-before-retrain"   # most-open wins
+    assert page.blocked_on == "measure first"            # carried from the only source that set it
+
+
+def test_merge_pages_status_rank_resolved_beats_none(tmp_path):
+    paths = OmxPaths(root=tmp_path)
+    into = _seed_status_page(tmp_path, "Keeper2")                  # None (rank 0)
+    src = _seed_status_page(tmp_path, "Dup2", status="resolved")   # rank 1
+    gc.merge_pages(paths, into=into, from_slugs=[src], now="2026-06-06T01:00:00")
+    assert storage.read_page(paths, into).status == "resolved"
+
+
+def test_merge_pages_survivor_blocked_on_wins(tmp_path):
+    paths = OmxPaths(root=tmp_path)
+    into = _seed_status_page(tmp_path, "Keeper3", status="needs-experiment",
+                             blocked_on="survivor reason")
+    src = _seed_status_page(tmp_path, "Dup3", status="needs-experiment",
+                            blocked_on="source reason")
+    gc.merge_pages(paths, into=into, from_slugs=[src], now="2026-06-06T01:00:00")
+    assert storage.read_page(paths, into).blocked_on == "survivor reason"   # survivor-first
+
+
+def test_merge_pages_preserves_survivor_quality(tmp_path):
+    # pre-existing bug: merge_pages reconstructed the survivor WITHOUT quality fields,
+    # silently dropping them on every merge. The survivor's quality must survive.
+    paths = OmxPaths(root=tmp_path)
+    into = _seed_status_page(tmp_path, "Quality Keeper", quality_score=85)
+    src = _seed_status_page(tmp_path, "Quality Dup")
+    gc.merge_pages(paths, into=into, from_slugs=[src], now="2026-06-06T01:00:00")
+    assert storage.read_page(paths, into).quality_score == 85

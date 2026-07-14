@@ -29,6 +29,32 @@ def tokenize(text: str) -> list[str]:
     return tokens
 
 
+def enumerate_pages(paths: OmxPaths, *, status: str | None = None) -> dict:
+    """Deterministic (no-scoring) catalog, optionally filtered to one status value.
+
+    Returns {pages:[{slug, title, category, status, blocked_on}], corrupt_pages:[...]}.
+    This is the "backlog by construction" surface — ZERO keyword involvement — and it
+    backs BOTH `omx wiki list` and the queue-launch gate, so the human's view and the
+    gate's view can never drift. Read-only; no lock; a corrupt page is visible-skipped."""
+    pages = []
+    corrupt = []
+    for slug in storage.list_pages(paths):
+        try:
+            page = storage.read_page(paths, slug)
+        except WikiError:
+            corrupt.append(slug)
+            continue
+        if page is None:
+            continue
+        if status is not None and page.status != status:
+            continue
+        pages.append({
+            "slug": slug, "title": page.title, "category": page.category,
+            "status": page.status, "blocked_on": page.blocked_on,
+        })
+    return {"pages": pages, "corrupt_pages": corrupt}
+
+
 def query_wiki(paths: OmxPaths, *, now: str, text: str, tags: list | None = None,
                category: str | None = None, limit: int = 20) -> dict:
     """Search the wiki. Returns {n_matches, n_returned, matches:[...], corrupt_pages:[...]}.
@@ -97,7 +123,7 @@ def query_wiki(paths: OmxPaths, *, now: str, text: str, tags: list | None = None
             matches.append({
                 "slug": slug, "title": page.title, "score": score,
                 "snippet": snippet, "category": page.category,
-                "confidence": page.confidence,
+                "confidence": page.confidence, "status": page.status,
             })
 
     matches.sort(key=lambda m: m["score"], reverse=True)

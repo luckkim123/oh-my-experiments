@@ -34,6 +34,7 @@ from omx_core.report import parse_findings
 from omx_core.coverage import check_coverage, check_cross_run_refs
 from omx_core.profile import load_profile_metrics
 from omx_core.wiki import ingest as _wiki_ingest, query as _wiki_query, lint as _wiki_lint, storage as _wiki_storage, gc as _wiki_gc
+from omx_core.wiki.types import STATUSES as _WIKI_STATUSES, BLOCKING_STATUSES as _WIKI_BLOCKING_STATUSES
 
 
 def _finite_or_none(x):
@@ -864,6 +865,29 @@ def _cmd_queue_launch(args) -> int:
     import subprocess
     paths = OmxPaths(root=_resolved_root(args))
     now = clock.now_iso()
+    # --- pre-launch wiki forcing gate (spec 4.a): REFUSE on an open HARD gate,
+    # WARN on soft leads. Read-only; same enumerate_pages helper as `wiki list`, so
+    # the gate can never drift from what the human sees. Empty/absent wiki -> passes;
+    # a corrupt page is surfaced by lint, never blocks; an unknown status never blocks.
+    acked = {_wiki_gc._norm_slug(s) for s in (args.ack_gate or [])}
+    catalog = _wiki_query.enumerate_pages(paths)
+    blocking = [pg for pg in catalog["pages"] if pg["status"] in _WIKI_BLOCKING_STATUSES]
+    unacked = [pg for pg in blocking if pg["slug"] not in acked]
+    if unacked:
+        print(json.dumps({
+            "refused": True,
+            "open_gates": [{"slug": pg["slug"], "title": pg["title"],
+                            "blocked_on": pg["blocked_on"]} for pg in unacked],
+            "hint": ("resolve each via `omx wiki add --title <same> --status resolved`, "
+                     "or rerun with `--ack-gate <slug>` per gate to launch over it"),
+        }))
+        return 2   # REFUSE: write nothing, nonzero rc
+    soft = [pg for pg in catalog["pages"]
+            if pg["status"] in _WIKI_STATUSES
+            and pg["status"] not in _WIKI_BLOCKING_STATUSES
+            and pg["status"] != "resolved"]
+    open_leads = [pg["slug"] for pg in soft] or None
+    acked_present = sorted(pg["slug"] for pg in blocking if pg["slug"] in acked) or None
     queued_commit = None
     if args.cwd:
         try:
@@ -882,10 +906,16 @@ def _cmd_queue_launch(args) -> int:
         queue_pending_launch(
             paths, args.run_id,
             proposal_id=args.proposal_id, launch_delta=args.launch_delta,
-            gpu_gate=args.gpu_gate, queued_at=now, queued_commit=queued_commit)
+            gpu_gate=args.gpu_gate, queued_at=now, queued_commit=queued_commit,
+            open_leads=open_leads, acknowledged_gates=acked_present)
         print(json.dumps(read_pending_launch(paths, args.run_id)))
     except OmxError as e:
         raise SystemExit(str(e))
+    if soft:
+        print(f"WARNING: {len(soft)} open experiment lead(s) not resolved: "
+              f"{', '.join(pg['slug'] for pg in soft)} "
+              f"(carry into the plan or resolve; see `omx wiki list --status`)",
+              file=sys.stderr)
     return 0
 
 
@@ -1381,7 +1411,8 @@ def _cmd_wiki_add(args) -> int:
             paths, now=clock.now_iso_naive(), title=args.title, content=content,
             tags=tags, category=args.category, confidence=confidence,
             sources=[s.strip() for s in (args.sources or "").split(",") if s.strip()],
-            quality_score=score, quality_reasons=reasons)
+            quality_score=score, quality_reasons=reasons,
+            status=args.status, blocked_on=args.blocked_on)
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps({**res, "quality_score": score, "quality_forced_low": forced,
@@ -1492,16 +1523,9 @@ def _cmd_wiki_lint(args) -> int:
 
 def _cmd_wiki_list(args) -> int:
     paths = OmxPaths(root=_resolved_root(args))
-    out = {"pages": [], "corrupt_pages": []}
-    for slug in _wiki_storage.list_pages(paths):
-        try:
-            page = _wiki_storage.read_page(paths, slug)
-        except OmxError:
-            out["corrupt_pages"].append(slug)
-            continue
-        if page is not None:
-            out["pages"].append({"slug": slug, "title": page.title, "category": page.category})
-    print(json.dumps(out))
+    # --status enumerates the backlog by construction (keyword-independent); the same
+    # helper backs the queue-launch gate so the two views can never drift.
+    print(json.dumps(_wiki_query.enumerate_pages(paths, status=args.status)))
     return 0
 
 
@@ -1904,6 +1928,11 @@ def build_parser() -> argparse.ArgumentParser:
     pq.add_argument("--cwd", default=None,
                     help="training git repo; when given, records queued_commit = HEAD "
                          "for launch provenance (#12)")
+    pq.add_argument("--ack-gate", action="append", default=None, dest="ack_gate",
+                    metavar="SLUG",
+                    help="acknowledge an open HARD wiki gate (status needs-apply-before-retrain) "
+                         "and launch over it; repeatable, per-slug (no blanket override). The "
+                         "acked slug is recorded in the pending-launch artifact.")
     pq.set_defaults(func=_cmd_queue_launch)
 
     pl = sub.add_parser("loop-status",
@@ -2023,6 +2052,10 @@ def build_parser() -> argparse.ArgumentParser:
     pwa.add_argument("--sources", default=None, help="comma-separated source ids")
     pwa.add_argument("--from-report", default=None, dest="from_report",
                      help="extract-only: print [FINDING] candidates from a report.md, write nothing")
+    pwa.add_argument("--status", default=None, choices=list(_WIKI_STATUSES),
+                     help="actionable status (absent = not actionable); enumerated by `wiki list --status`")
+    pwa.add_argument("--blocked-on", default=None, dest="blocked_on",
+                     help="optional annotation; a blocked lead KEEPS its actionable status")
     pwa.set_defaults(func=_cmd_wiki_add)
 
     pwc = wsub.add_parser("capture-session",
@@ -2063,8 +2096,11 @@ def build_parser() -> argparse.ArgumentParser:
     pwl.add_argument("--max-page-size", type=int, default=10240, dest="max_page_size")
     pwl.set_defaults(func=_cmd_wiki_lint)
 
-    pwls = wsub.add_parser("list", help="catalog of pages (slug/title/category)")
+    pwls = wsub.add_parser("list", help="catalog of pages (slug/title/category/status); "
+                                        "--status enumerates the backlog by construction")
     pwls.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    pwls.add_argument("--status", default=None, choices=list(_WIKI_STATUSES),
+                      help="filter to one actionable status (keyword-independent backlog)")
     pwls.set_defaults(func=_cmd_wiki_list)
 
     pwr = wsub.add_parser("read", help="print one page's full text by slug (loud-fail if absent)")
