@@ -144,3 +144,26 @@ def test_query_resolved_status_demoted_on_tie(tmp_path):
     res = query.query_wiki(p, now="2026-05-31T10:01:00", text="heavy tail")
     assert res["matches"][0]["status"] is None       # active page first
     assert res["matches"][1]["status"] == "resolved"  # resolved demoted
+
+
+def test_query_near_tie_inversion_is_intended(tmp_path):
+    # DESIGN NOTE (v0.7.1): keyword score is DOMINANT, not strictly primary.
+    # For NEAR-tied scores the combined confidence+status discount intentionally
+    # re-orders: a score-3 low+resolved page (3*0.80*0.70=1.68) sinks below a
+    # score-2 high active page (2*1.0=2.0). This is the stub-sinking feature, not
+    # a bug -- documented so a future change notices if it flips.
+    p = OmxPaths(root=tmp_path)
+    # content="stub" (not "tail"): ingest embeds the title as a "# Heavy" heading
+    # into content, so the title alone already contributes score 3 (title +2 for
+    # "heavy", content +1 for "heavy" via the heading) -- an explicit "tail" in
+    # content would double-count and push the score to 4.
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Heavy",
+                            content="stub", tags=[], category="pattern",
+                            confidence="low", sources=[], status="resolved")
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Other",
+                            content="heavy tail", tags=[], category="pattern",
+                            confidence="high", sources=[])
+    res = query.query_wiki(p, now="2026-05-31T10:01:00", text="heavy tail")
+    assert res["n_matches"] == 2
+    assert res["matches"][0]["title"] == "Other"   # score 2, weight 2.0 -- wins
+    assert res["matches"][1]["title"] == "Heavy"    # score 3, weight 1.68 -- sinks

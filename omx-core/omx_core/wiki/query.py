@@ -16,8 +16,10 @@ from omx_core.wiki import storage
 _LATIN = re.compile(r"[a-z0-9À-ɏ]+")
 _CJK = re.compile(r"[぀-ゟ゠-ヿ一-鿿가-힯]+")
 
-# Ranking weights (v0.7.1): keyword score stays primary — every weight is in
-# [0.70, 1.00], so a strong keyword match dominates regardless of metadata.
+# Ranking weights (v0.7.1): keyword score is DOMINANT, not strictly primary.
+# Individual weights are in [0.70, 1.00]; the worst-case combined discount is
+# low 0.80 * resolved 0.70 = 0.56, so metadata intentionally re-orders NEAR-tied
+# scores (the stub-sinking) while a clearly-stronger keyword match still wins.
 # These are the tuning knob; adjust here, not inline. absent (None) = neutral.
 _CONFIDENCE_WEIGHT = {"high": 1.0, "medium": 0.92, "low": 0.80, None: 0.90}
 _STATUS_WEIGHT = {
