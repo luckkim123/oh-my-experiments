@@ -50,13 +50,16 @@ then `matches.sort(key=lambda m: m["score"], reverse=True)`. `confidence` and `s
 each match dict (v0.7.0) but **never used in scoring**. All pages of equal keyword score tie — a
 `confidence: low` auto-stub ranks level with a `confidence: high` curated finding.
 
-### 3.2 Proposed behavior — keyword stays primary, metadata is a multiplicative modifier
+### 3.2 Proposed behavior — keyword is the dominant term, metadata breaks near-ties
 
 `weighted = keyword_score * w_confidence * w_status`, sort by `weighted` desc, keyword `score` as the
-tie-break. Because every weight is in `[~0.5, 1.0]`, a strong keyword match dominates a weak one
-regardless of metadata — a `+5` title hit at `low` confidence (`×0.8 = 4.0`) still outranks a `+1`
-content hit at `high` (`×1.0 = 1.0`). This preserves relevance-first while letting metadata break the
-ties that currently let stubs float. **No page is filtered** — only re-ordered (INV-2).
+tie-break. Individual weights are in `[0.70, 1.0]` but the worst-case COMBINED discount is
+`low` 0.80 × `resolved` 0.70 = `0.56`, so keyword score is the **dominant** term, NOT strictly primary:
+it dominates when scores differ clearly (a `+5` title hit at `low`, `×0.8 = 4.0`, beats a `+1` content
+hit at `high`, `×1.0 = 1.0`), while for **near-tied** scores (ratios within ~1.8×) metadata intentionally
+re-orders — a `+3` `low`+`resolved` stub (`×0.56 = 1.68`) sinks below a `+2` `high` active page (`= 2.0`).
+That near-tie re-ordering IS the stub-sinking feature; strict keyword ordering is mathematically
+incompatible with meaningful metadata weighting. **No page is filtered** — only re-ordered (INV-2).
 
 Proposed default weights (module constants, tunable; final values fixed in the plan):
 
