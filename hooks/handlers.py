@@ -84,10 +84,54 @@ _ROUTE_CHECKPOINT = (
 )
 
 
+def _fetch_open_backlog(payload):
+    """Pre-fetch the LIVE open actionable backlog and format it as an unmissable
+    injected block. Turns the advisory 'go run omx wiki list' pointer into
+    in-context DATA, so a next-experiment / next-steps decision physically cannot
+    skip an open lead (the stranded-instruction incident 2026-07-15).
+
+    Fail-open (D9): ANY error -> '' (no injection). This runs on every prompt, so
+    a broken fetch must degrade to nothing, never break the route hook.
+    """
+    try:
+        import json
+        import subprocess
+
+        root = _omx_root(payload)  # raises if the payload cwd is not an omx project
+        lines = []
+        for st in ("needs-experiment", "needs-apply-before-retrain"):
+            proc = subprocess.run(
+                ["omx", "wiki", "list", "--status", st, "--root", root],
+                capture_output=True, text=True, timeout=4,
+            )
+            if proc.returncode != 0:
+                continue
+            for page in json.loads(proc.stdout).get("pages", [])[:20]:
+                blocked = page.get("blocked_on") or "unblocked"
+                lines.append(f"  [{st}] {page.get('slug', '?')} (blocked: {blocked})")
+        if not lines:
+            return ""
+        return (
+            "<omx-open-backlog>\n"
+            "LIVE actionable leads on THIS omx root (auto-fetched every turn). Before "
+            "choosing a next experiment/direction OR writing any next-steps / 미해결 / "
+            "delta section, reconcile against EVERY line below — carry it or defer it "
+            "with a stated reason. Silent omission is a defect.\n"
+            + "\n".join(lines)
+            + "\n</omx-open-backlog>"
+        )
+    except Exception:
+        return ""  # fail-open: never break the per-prompt route hook
+
+
 def route_emit(payload):
+    ctx = _ROUTE_CHECKPOINT
+    backlog = _fetch_open_backlog(payload)
+    if backlog:
+        ctx = ctx + "\n\n" + backlog
     return {"hookSpecificOutput": {
         "hookEventName": "UserPromptSubmit",
-        "additionalContext": _ROUTE_CHECKPOINT,
+        "additionalContext": ctx,
     }}
 
 
