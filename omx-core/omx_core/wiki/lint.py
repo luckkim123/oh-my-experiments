@@ -50,8 +50,15 @@ def _is_fresh(created: str, now_dt, stale_days: int) -> bool:
 def _contradiction_candidates(pages: dict) -> list:
     """Structural contradiction SIGNALS (INV-1: candidates only, never a verdict).
 
-    a-1: >=2 pages sharing a tag where EVERY sharing page is confidence 'high'
-         -> they may assert conflicting high-confidence conclusions; flag for review.
+    a-1: >=2 SAME-category pages sharing a tag where EVERY sharing page is
+         confidence 'high' -> they may assert conflicting high-confidence
+         conclusions; flag for review. Scale re-validation (2026-07-16,
+         253-page corpus): unconstrained all-high flagged 128 tags (62% of
+         contradiction output) because common domain tags are shared by many
+         compatible findings; group size does not discriminate (82/128 noisy
+         groups were pairs); same-category cut it to 43. An all-high group
+         SPANNING categories is normal cross-category co-tagging — skipped
+         entirely, never demoted to a-2 (demoting keeps total volume unchanged).
     a-3: a tag spanning both 'high' and 'low' confidence -> a low page may shadow
          the authoritative conclusion; flag for review.
     a-2: a tag spanning >1 category -> classification drift; flag for review.
@@ -67,13 +74,17 @@ def _contradiction_candidates(pages: dict) -> list:
         if len(group) < 2:
             continue
         slugs = sorted(g.slug for g in group)
-        # a-1: all sharing pages are high-confidence
+        # a-1: all sharing pages are high-confidence AND same-category (see docstring
+        # for the 2026-07-16 scale re-validation). A multi-category all-high group is
+        # skipped entirely — falling through to a-2 would just relabel the noise.
         if all(g.confidence == "high" for g in group):
-            issues.append({
-                "slug": slugs[0], "severity": "info", "type": "contradiction-candidate",
-                "message": (f"{len(group)} high-confidence pages share tag {tag!r}; "
-                            f"review whether their conclusions conflict: {', '.join(slugs)}"),
-            })
+            if len({g.category for g in group}) == 1:
+                issues.append({
+                    "slug": slugs[0], "severity": "info", "type": "contradiction-candidate",
+                    "message": (f"{len(group)} high-confidence {group[0].category!r} pages "
+                                f"share tag {tag!r}; review whether their conclusions "
+                                f"conflict: {', '.join(slugs)}"),
+                })
             continue
         # a-3: the group spans both 'high' and 'low' confidence -> a low page may
         # shadow the authoritative conclusion (OMC smell, keyed on tags in omx idiom).
@@ -134,8 +145,11 @@ def _near_duplicate_candidates(pages: dict) -> list:
             union = toks_a | toks_b
             jaccard = len(toks_a & toks_b) / len(union) if union else 0.0
             if jaccard >= _NEAR_DUP_JACCARD:
+                # 'other' carries the counterpart slug as DATA: gc's MERGE suggester
+                # consumes the pair structurally, never by parsing the message.
                 issues.append({
                     "slug": slug_a, "severity": "info", "type": "near-duplicate",
+                    "other": slug_b,
                     "message": (f"slug overlaps {slug_b!r} at jaccard {jaccard:.2f}; "
                                 f"read both bodies — if one topic, gc-merge them"),
                 })

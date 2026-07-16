@@ -2,13 +2,15 @@
 
 The core carries ZERO semantic judgment (INV-1): it executes an already-approved
 proposal file. `parse_gc_proposal` turns the proposal markdown into a GcPlan;
-`apply_gc` validates the WHOLE plan (slugs exist, git-tracked, no self-merge)
-before mutating anything, so a partial apply is impossible. git tracking is the
-recovery path — an untracked target loud-fails rather than becoming unrecoverable.
+`apply_gc` validates the WHOLE plan (slugs exist, git-tracked, no self-merge,
+no cross-block overlap) before mutating anything, so a partial apply is
+impossible. git tracking is the recovery path — an untracked target loud-fails
+rather than becoming unrecoverable.
 Wall-clock `now` is injected (no clock here), matching storage/ingest/lint.
 """
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 
 from omx_core.omx_paths import OmxPaths
@@ -80,11 +82,15 @@ def parse_gc_proposal(raw: str) -> GcPlan:
     return GcPlan(deletes=deletes, merges=merges)
 
 def suggest_from_lint(lint_res: dict) -> dict:
-    """Turn a lint result into REVIEW-ONLY gc delete candidates (INV-1: candidates,
+    """Turn a lint result into REVIEW-ONLY gc candidates (INV-1: candidates,
     not a proposal; nothing is written or deleted). ONLY 'orphan' (info) slugs are
     suggested for deletion — stale is 'old' not 'useless', and error/warning types
-    (broken-ref/oversized/broken-frontmatter) are fix-in-place, not delete. Returns
-    {delete_candidates: [slug...], proposal_skeleton: <editable wiki-gc proposal>}.
+    (broken-ref/oversized/broken-frontmatter) are fix-in-place, not delete.
+    Near-duplicate pairs surface under ## MERGE as COMMENTED, NON-directional
+    lines: the detector cannot know the survivor, so direction stays human — a
+    blind gc-apply of the raw skeleton merges nothing. Returns
+    {delete_candidates: [slug...], merge_candidates: [[a, b]...],
+    proposal_skeleton: <editable wiki-gc proposal>}.
     The human copies/edits the skeleton; gc-apply (git-guarded) is the only executor."""
     # an open lead is typically inbound==0 (nothing links to it yet — that's WHY it is a
     # backlog page), so exempt any slug lint flagged as open-lead from delete suggestions.
@@ -96,7 +102,15 @@ def suggest_from_lint(lint_res: dict) -> dict:
         i["slug"] for i in lint_res.get("issues", [])
         if i.get("type") == "orphan" and i["slug"] not in open_lead_slugs
     })
+    merge_pairs = sorted({
+        (i["slug"], i["other"]) for i in lint_res.get("issues", [])
+        if i.get("type") == "near-duplicate" and i.get("other")
+    })
     delete_lines = "\n".join(f"- slug: {s}" for s in candidates) or "# (none)"
+    merge_lines = "\n".join(
+        f"# near-duplicate pair (read both, pick the survivor): {a} <-> {b}"
+        for a, b in merge_pairs
+    )
     skeleton = (
         "---\n"
         "kind: wiki-gc\n"
@@ -105,8 +119,11 @@ def suggest_from_lint(lint_res: dict) -> dict:
         f"{delete_lines}\n\n"
         "## MERGE\n\n"
         "# (add `- into: <survivor>` then indented `- <source>` lines to merge instead of delete)\n"
+        + (merge_lines + "\n" if merge_lines else "")
     )
-    return {"delete_candidates": candidates, "proposal_skeleton": skeleton}
+    return {"delete_candidates": candidates,
+            "merge_candidates": [list(p) for p in merge_pairs],
+            "proposal_skeleton": skeleton}
 
 
 import subprocess
@@ -210,11 +227,12 @@ def merge_pages(paths: OmxPaths, *, into: str, from_slugs: list, now: str) -> No
 def apply_gc(paths: OmxPaths, plan: GcPlan, *, now: str, repo_root,
              git_check=is_git_tracked) -> dict:
     """Two-phase apply. Phase 1 validates the WHOLE plan (every slug exists and is
-    git-tracked; no self-merge) and mutates nothing on failure. Phase 2, under the
-    wiki lock, runs deletes then merges, then regenerates the index and logs. An
-    empty plan is a no-op (no lock). git_check is injected for testing; the CLI
-    passes is_git_tracked. The validate-first design makes a partial apply
-    impossible — the recovery guarantee plus atomicity of intent."""
+    git-tracked; no self-merge; no cross-block overlap) and mutates nothing on
+    failure. Phase 2, under the wiki lock, runs deletes then merges, then
+    regenerates the index and logs. An empty plan is a no-op (no lock). git_check
+    is injected for testing; the CLI passes is_git_tracked. The validate-first
+    design makes a partial apply impossible — the recovery guarantee plus
+    atomicity of intent."""
     if not plan.deletes and not plan.merges:
         return {"deleted": [], "merged": []}
 
@@ -238,6 +256,25 @@ def apply_gc(paths: OmxPaths, plan: GcPlan, *, now: str, repo_root,
         _require(into_norm)
         for f in froms:
             _require(f)
+
+    # cross-block overlap: any slug phase 2 REMOVES (a delete or a merge source)
+    # must not be removed twice nor be another block's survivor — sequential
+    # execution would otherwise loud-fail AFTER earlier blocks already mutated,
+    # breaking the partial-apply-impossible guarantee (e.g. a chained merge
+    # A<-B, B<-C deletes B in block 1, then block 2's survivor is absent).
+    # The same survivor across blocks stays legal: sequential merges into one page.
+    removed = [_norm_slug(s) for s in plan.deletes]
+    for merge in plan.merges:
+        removed.extend(_norm_slug(s) for s in merge["from"])
+    dups = sorted(s for s, n in Counter(removed).items() if n > 1)
+    if dups:
+        raise WikiError(f"gc plan removes {dups!r} more than once (cross-block overlap)")
+    intos = {_norm_slug(m["into"]) for m in plan.merges}
+    both = sorted(intos & set(removed))
+    if both:
+        raise WikiError(
+            f"gc plan uses {both!r} as both a merge survivor and a removed slug "
+            f"(cross-block overlap; chained merges must be collapsed into one block)")
 
     # ---- phase 2: execute under the lock ----
     def _do() -> dict:

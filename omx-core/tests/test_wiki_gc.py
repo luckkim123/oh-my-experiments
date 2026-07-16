@@ -236,6 +236,68 @@ def test_apply_gc_self_merge_aborts(tmp_path):
     assert paths.wiki_page(s[:-3]).exists()
 
 
+def test_apply_gc_rejects_slug_both_deleted_and_merge_source(tmp_path):
+    # Cross-block overlap: a slug phase 2 would remove twice (delete + merge
+    # source) must abort in phase 1 with ZERO mutations — sequential execution
+    # would otherwise loud-fail AFTER the delete already ran (partial apply,
+    # contradicting the validate-first guarantee).
+    paths = OmxPaths(root=tmp_path)
+    x = _seed_page(tmp_path, "Twice Removed")
+    s = _seed_page(tmp_path, "Survivor X")
+    plan = gc.GcPlan(deletes=[x], merges=[{"into": s, "from": [x]}])
+    with pytest.raises(OmxError):
+        gc.apply_gc(paths, plan, now="2026-07-16T02:00:00",
+                    repo_root=tmp_path, git_check=_always_tracked)
+    assert paths.wiki_page(x[:-3]).exists()
+    assert paths.wiki_page(s[:-3]).exists()
+
+
+def test_apply_gc_rejects_chained_merge(tmp_path):
+    # Cross-block overlap: merge chain A<-B, B<-C — B is a source in one block
+    # and the survivor of another. Sequential execution deletes B in block 1,
+    # then block 2 loud-fails on the absent survivor (partial apply). Phase 1
+    # must reject the whole plan with zero mutations.
+    paths = OmxPaths(root=tmp_path)
+    a = _seed_page(tmp_path, "Chain A")
+    b = _seed_page(tmp_path, "Chain B")
+    c = _seed_page(tmp_path, "Chain C")
+    plan = gc.GcPlan(merges=[{"into": a, "from": [b]}, {"into": b, "from": [c]}])
+    with pytest.raises(OmxError):
+        gc.apply_gc(paths, plan, now="2026-07-16T02:00:00",
+                    repo_root=tmp_path, git_check=_always_tracked)
+    for slug in (a, b, c):
+        assert paths.wiki_page(slug[:-3]).exists()
+
+
+def test_apply_gc_rejects_duplicate_removal_across_blocks(tmp_path):
+    # The same source folded into two different survivors is removed twice.
+    paths = OmxPaths(root=tmp_path)
+    a = _seed_page(tmp_path, "Surv A")
+    b = _seed_page(tmp_path, "Surv B")
+    d = _seed_page(tmp_path, "Shared Dup")
+    plan = gc.GcPlan(merges=[{"into": a, "from": [d]}, {"into": b, "from": [d]}])
+    with pytest.raises(OmxError):
+        gc.apply_gc(paths, plan, now="2026-07-16T02:00:00",
+                    repo_root=tmp_path, git_check=_always_tracked)
+    for slug in (a, b, d):
+        assert paths.wiki_page(slug[:-3]).exists()
+
+
+def test_apply_gc_allows_same_survivor_in_two_blocks(tmp_path):
+    # Regression guard for the overlap check: two blocks merging INTO the same
+    # survivor are valid sequential merges, not a cross-block hazard.
+    paths = OmxPaths(root=tmp_path)
+    a = _seed_page(tmp_path, "Multi Keeper", content="keeper body")
+    b = _seed_page(tmp_path, "Fold One", content="unique-one")
+    c = _seed_page(tmp_path, "Fold Two", content="unique-two")
+    plan = gc.GcPlan(merges=[{"into": a, "from": [b]}, {"into": a, "from": [c]}])
+    res = gc.apply_gc(paths, plan, now="2026-07-16T02:00:00",
+                      repo_root=tmp_path, git_check=_always_tracked)
+    assert res["merged"] == [{"into": a, "from": [b]}, {"into": a, "from": [c]}]
+    body = storage.read_page(paths, a).content
+    assert "unique-one" in body and "unique-two" in body
+
+
 def test_apply_gc_empty_plan_is_noop(tmp_path):
     paths = OmxPaths(root=tmp_path)
     _seed_page(tmp_path, "Untouched")
@@ -268,6 +330,34 @@ def test_suggest_from_lint_empty_when_no_orphans():
                 "stats": {"total_pages": 1, "by_type": {}}}
     out = gc.suggest_from_lint(lint_res)
     assert out["delete_candidates"] == []
+
+
+def test_suggest_from_lint_prefills_near_duplicate_merge_pairs():
+    # Near-duplicate lint pairs surface under ## MERGE as COMMENTED, NON-directional
+    # lines (the detector cannot know the survivor — direction stays human). The
+    # lines must be inert to parse_gc_proposal until a human rewrites them into
+    # `- into:` / `- <source>` form, so a blind gc-apply of the raw skeleton
+    # cannot merge anything.
+    lint_res = {
+        "issues": [
+            {"slug": "fork_a.md", "severity": "info", "type": "near-duplicate",
+             "other": "fork_b.md", "message": "slug overlaps 'fork_b.md' at jaccard 0.60"},
+        ],
+        "stats": {"total_pages": 2, "by_type": {}},
+    }
+    out = gc.suggest_from_lint(lint_res)
+    assert out["merge_candidates"] == [["fork_a.md", "fork_b.md"]]
+    skeleton = out["proposal_skeleton"]
+    assert "fork_a.md <-> fork_b.md" in skeleton
+    plan = gc.parse_gc_proposal(skeleton)
+    assert plan.merges == []          # commented pair lines are inert
+    assert plan.deletes == []
+
+
+def test_suggest_from_lint_no_merge_candidates_when_no_near_dups():
+    lint_res = {"issues": [{"slug": "x.md", "severity": "info", "type": "stale", "message": "m"}],
+                "stats": {"total_pages": 1, "by_type": {}}}
+    assert gc.suggest_from_lint(lint_res)["merge_candidates"] == []
 
 
 def test_suggest_from_lint_exempts_open_lead_slugs():

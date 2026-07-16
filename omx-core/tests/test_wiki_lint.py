@@ -134,6 +134,45 @@ def test_lint_flags_contradiction_candidate_tag_across_categories(tmp_path):
                for i in res["issues"])
 
 
+def test_a1_requires_same_category(tmp_path):
+    # a-1 scale re-validation (2026-07-16, 253-page corpus): the unconstrained
+    # all-high rule flagged 128 tags (62% of contradiction output) because common
+    # domain tags are shared by many compatible findings across categories; group
+    # size does NOT discriminate (82/128 noisy groups were pairs). An all-high
+    # group spanning categories is normal cross-category co-tagging -> it must be
+    # skipped ENTIRELY, not demoted to a-2 (demoting keeps total volume unchanged).
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-07-16T10:00:00", title="IPO floor decision",
+                            content="x", tags=["ipo"], category="decision",
+                            confidence="high", sources=[])
+    ingest.ingest_knowledge(p, now="2026-07-16T10:00:00", title="IPO debugging note",
+                            content="y", tags=["ipo"], category="debugging",
+                            confidence="high", sources=[])
+    res = lint.lint_wiki(p, now="2026-07-16T10:01:00", stale_days=30, max_page_size=10240)
+    assert not any(i["type"] == "contradiction-candidate" for i in res["issues"])
+
+
+def test_near_duplicate_issue_carries_other_slug(tmp_path):
+    # The near-dup pair must be machine-readable: gc's MERGE suggester consumes
+    # the counterpart slug via the structured 'other' field, never by parsing
+    # the human-facing message string.
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00",
+                            title="engine gap eval adapter covers static segmented periodic",
+                            content="a", tags=[], category="reference", confidence="high", sources=[])
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00",
+                            title="engine gap eval adapter only covers static periodic",
+                            content="b", tags=[], category="reference", confidence="high", sources=[])
+    res = lint.lint_wiki(p, now="2026-05-31T10:01:00", stale_days=30, max_page_size=10240)
+    dups = [i for i in res["issues"] if i["type"] == "near-duplicate"]
+    assert len(dups) == 1
+    assert dups[0]["other"] != dups[0]["slug"]
+    assert {dups[0]["slug"], dups[0]["other"]} == {
+        "engine_gap_eval_adapter_covers_static_segmented_periodic.md",
+        "engine_gap_eval_adapter_only_covers_static_periodic.md",
+    }
+
+
 def test_a3_high_low_mix_flagged(tmp_path):
     # a-3: two pages share tag "kl"; one high, one low -> contradiction candidate
     p = OmxPaths(root=tmp_path)
