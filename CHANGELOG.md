@@ -4,6 +4,51 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.7.3] - 2026-07-16 — wiki audit hardening: gc atomicity, lint denoise, backlog visibility
+
+### Fixed
+
+- **`apply_gc` cross-block validation** closes a partial-apply hole: phase 1 validated each
+  block in isolation, so a slug removed in one block and referenced in another (chained merge
+  `A<-B, B<-C`; a delete that is also a merge source; one source folded into two survivors)
+  loud-failed only in phase 2 — AFTER earlier blocks had mutated, contradicting the documented
+  "partial apply impossible" guarantee. Phase 1 now rejects any slug removed twice or used as
+  both a merge survivor and a removed slug; the one legal overlap (the same survivor across
+  blocks — valid sequential merges) stays allowed. Four new tests reproduce the defect classes.
+- **lint contradiction rule a-1 denoised by scale re-validation** on the real 253-page
+  constrained-albc corpus: the unconstrained all-high-shared-tag rule flagged 128 tags (62% of
+  all contradiction output) because common domain tags are shared by many compatible findings —
+  and group size does not discriminate (82/128 noisy groups were pairs, so the design-doc's
+  size-cap intuition was measured and rejected). a-1 now also requires the group to share one
+  category: 128 -> 43 on the same corpus (total contradiction-candidates 156 -> 74). An all-high
+  multi-category group is skipped ENTIRELY, never demoted to a-2 — demoting would relabel the
+  same volume, not remove it.
+- **route_emit backlog pre-fetch degrades visibly, never silently, on a real omx root**: the
+  fetch ran `json.loads` inside a blanket `except Exception: return ""`, so ANY stray stdout
+  line (a deprecation notice, a WARN, a cache-vs-repo output-shape skew) silently erased the
+  entire injected open-lead backlog — re-arming the exact 2026-07-15 stranded-instruction
+  incident the fetch was built to prevent. Degradation is now two-tier: no omx root -> silent
+  `''` (normal for non-omx projects); a failed fetch on a real omx root (nonzero exit, timeout,
+  unparseable or wrong-shape output) -> a visible WARN block naming the manual fallback commands.
+
+### Changed
+
+- **backlog pre-fetch is one subprocess per prompt, not two**: a single unfiltered
+  `omx wiki list` call filtered locally by status replaces the two per-status calls. Selection
+  is provably identical (`--status` was only ever an in-loop filter over one deterministic
+  `list_pages` order, so first-20-per-status draws the same pages), and the per-turn hook tax
+  halves (measured ~0.78s -> ~0.40s against the production corpus).
+
+### Added
+
+- **near-duplicate lint issues carry a structured `other` field** (the counterpart slug), and
+  `suggest_from_lint` now surfaces each pair under `## MERGE` as a COMMENTED, non-directional
+  line — the detector cannot know the survivor, so direction stays human, and commented lines
+  are inert to `parse_gc_proposal` (a blind gc-apply of the raw skeleton still merges nothing;
+  INV-2 preserved). Also returns a `merge_candidates` list mirroring `delete_candidates`. On
+  the production corpus this pre-fills the 5 genuine slug-fork pairs that previously had to be
+  cross-referenced from lint output by hand.
+
 ## [0.7.2] - 2026-07-16 — backlog pre-fetch hardening + instruction fixes
 
 ### Fixed
