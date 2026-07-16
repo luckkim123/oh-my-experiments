@@ -85,10 +85,14 @@ _ROUTE_CHECKPOINT = (
 )
 
 
-# Per-subprocess timeout for the backlog pre-fetch. Two sequential calls must
-# fit inside run_hook.py's default 3s SIGALRM budget for route_emit (2 * 1.2s
-# = 2.4s < 3s); pinned by test_hook_backlog.py.
+# Timeout for the backlog pre-fetch. ONE unfiltered `omx wiki list` call
+# (filtered locally by status) must fit inside run_hook.py's default 3s SIGALRM
+# budget for route_emit (1.2s < 3s); pinned by test_hook_backlog.py. The cost is
+# startup-bound (~0.4s wall), not corpus-bound (parsing 253 pages is ~3ms).
 _BACKLOG_FETCH_TIMEOUT_S = 1.2
+
+#: Injection order: soft leads first, blocking gates last (closest to the ack).
+_OPEN_STATUSES = ("needs-experiment", "needs-apply-before-retrain")
 
 
 def _fetch_open_backlog(payload):
@@ -97,27 +101,48 @@ def _fetch_open_backlog(payload):
     in-context DATA, so a next-experiment / next-steps decision physically cannot
     skip an open lead (the stranded-instruction incident 2026-07-15).
 
-    Fail-open (D9): ANY error -> '' (no injection). This runs on every prompt, so
-    a broken fetch must degrade to nothing, never break the route hook.
-
-    Budget: run_hook.py enforces a 3s SIGALRM ceiling on route_emit (not in
-    _BUDGETS), so the two sequential fetches must complete inside it —
-    _BACKLOG_FETCH_TIMEOUT_S is sized so 2 * timeout < 3s with headroom.
+    Two-tier degradation (narrowed from blanket D9 fail-open, 2026-07-16 audit):
+    - no omx root -> '' (silent; route_emit fires in every project, non-omx cwds
+      are the normal case, silence is correct);
+    - a FAILED fetch on a REAL omx root (nonzero exit, timeout, unparseable
+      stdout) -> a visible WARN block naming the manual fallback command. The
+      old ANY-error->'' path silently erased the backlog on any stray stdout
+      line (deprecation notice, cache-vs-repo output-shape skew), re-arming the
+      exact incident this fetch exists to prevent. Never raises either way.
     """
     try:
         import json
         import subprocess
 
-        root = _omx_root(payload)  # raises if the payload cwd is not an omx project
-        lines = []
-        for st in ("needs-experiment", "needs-apply-before-retrain"):
+        try:
+            root = _omx_root(payload)  # raises if the payload cwd is not an omx project
+        except Exception:
+            return ""  # not an omx project — silence is correct
+        try:
             proc = subprocess.run(
-                ["omx", "wiki", "list", "--status", st, "--root", root],
+                ["omx", "wiki", "list", "--root", root],
                 capture_output=True, text=True, timeout=_BACKLOG_FETCH_TIMEOUT_S,
             )
             if proc.returncode != 0:
-                continue
-            for page in json.loads(proc.stdout).get("pages", [])[:20]:
+                raise RuntimeError(f"omx wiki list exited {proc.returncode}")
+            pages = json.loads(proc.stdout).get("pages", [])
+            if not isinstance(pages, list):
+                # valid JSON but wrong shape must degrade VISIBLY too, not fall
+                # through to the silent outer catch during formatting.
+                raise RuntimeError("unexpected wiki-list output shape")
+        except Exception as exc:
+            return (
+                "<omx-open-backlog>\n"
+                f"WARN: open-backlog pre-fetch FAILED ({type(exc).__name__}) — open "
+                "leads may exist but could not be injected this turn. Before any "
+                "next-steps / plan / launch decision, enumerate them manually: "
+                "`omx wiki list --status needs-experiment` and "
+                "`--status needs-apply-before-retrain`.\n"
+                "</omx-open-backlog>"
+            )
+        lines = []
+        for st in _OPEN_STATUSES:
+            for page in [p for p in pages if p.get("status") == st][:20]:
                 blocked = page.get("blocked_on") or "unblocked"
                 lines.append(f"  [{st}] {page.get('slug', '?')} (blocked: {blocked})")
         if not lines:
@@ -132,7 +157,7 @@ def _fetch_open_backlog(payload):
             + "\n</omx-open-backlog>"
         )
     except Exception:
-        return ""  # fail-open: never break the per-prompt route hook
+        return ""  # last-resort fail-open: never break the per-prompt route hook
 
 
 def route_emit(payload):
