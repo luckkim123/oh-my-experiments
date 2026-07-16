@@ -145,3 +145,20 @@ smoke — seed one `high` + one `low` page with equal keyword content, `omx wiki
 - omha routing-card changes (v0.7.0 §7 — cards emit lane name only).
 - A new unified index document — `INDEX.md` already fills that role.
 - Recency weighting, embedding/vector search (hard constraint: keyword only), `query --status` filter.
+
+## 10. Amendment (2026-07-16) — route_emit backlog pre-fetch (partial reversal of §9)
+
+The 2026-07-15 stranded-instruction incident (an open wiki lead silently dropped from a
+next-steps section despite the advisory checkpoint clause) led to `route_emit` pre-fetching
+the open backlog as injected data (`hooks/handlers.py:_fetch_open_backlog`, commit 5292ab9).
+That commit landed as an unversioned hotfix and is regularized in v0.7.2.
+
+Scope relative to the §1/§9 rejection: what §9 rejected was a per-prompt executor running
+`omx wiki query` (topic-dependent, needs prompt parsing, unbounded relevance work). The
+pre-fetch is narrower — a fixed two-value `wiki list --status` enumeration, topic-blind,
+fail-open on any error, and budget-bounded. The per-prompt cost concern stands and is now
+enforced rather than assumed: each subprocess call is capped at `_BACKLOG_FETCH_TIMEOUT_S`
+(1.2s) so both calls fit inside run_hook's 3s SIGALRM ceiling (route_emit is deliberately
+not in `_BUDGETS`); the arithmetic is pinned by `test_hook_backlog.py`. The original commit's
+"8s worst case" note was wrong at runtime (SIGALRM fired first) — v0.7.2 makes the stated
+and enforced bounds identical.

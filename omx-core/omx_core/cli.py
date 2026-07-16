@@ -914,7 +914,7 @@ def _cmd_queue_launch(args) -> int:
     if soft:
         print(f"WARNING: {len(soft)} open experiment lead(s) not resolved: "
               f"{', '.join(pg['slug'] for pg in soft)} "
-              f"(carry into the plan or resolve; see `omx wiki list --status`)",
+              f"(carry into the plan or resolve; see `omx wiki list --status needs-experiment`)",
               file=sys.stderr)
     return 0
 
@@ -2053,7 +2053,7 @@ def build_parser() -> argparse.ArgumentParser:
     pwa.add_argument("--from-report", default=None, dest="from_report",
                      help="extract-only: print [FINDING] candidates from a report.md, write nothing")
     pwa.add_argument("--status", default=None, choices=list(_WIKI_STATUSES),
-                     help="actionable status (absent = not actionable); enumerated by `wiki list --status`")
+                     help="actionable status (absent = not actionable); enumerated by `wiki list --status <value>`")
     pwa.add_argument("--blocked-on", default=None, dest="blocked_on",
                      help="optional annotation; a blocked lead KEEPS its actionable status")
     pwa.set_defaults(func=_cmd_wiki_add)

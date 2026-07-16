@@ -74,7 +74,8 @@ _ROUTE_CHECKPOINT = (
     "query하라(`omx wiki query --root <root>`; exp-analyze/exp-design엔 이미 강제, "
     "손으로 쓸 때도 동일). wiki에 답이 있는데 추측으로 때우는 것은 결함이다.\n"
     "⚠️ 백로그 전파(요약/plan 작성 전 필수): README·report·DESIGN·plan의 'next steps/"
-    "미해결/delta' 섹션을 쓰기 전 `omx wiki list --status`로 열거·대조하라 — 모든 open "
+    "미해결/delta' 섹션을 쓰기 전 `omx wiki list --status needs-experiment`와 "
+    "`--status needs-apply-before-retrain`으로 열거·대조하라 — 모든 open "
     "lead는 실리거나 사유와 함께 명시적 defer; 열린 blocking(needs-apply-before-retrain)은 "
     "delta 목록 또는 launch ack에 반드시 명시. 조용한 탈락은 결함이다.\n\n"
     "실험 작업이면, 판정을 응답 맨 앞 omha ROUTE 줄 바로 다음에 이 한 줄로 출력하라(누락 금지):\n"
@@ -82,6 +83,12 @@ _ROUTE_CHECKPOINT = (
     "실험 작업이 아니면 이 블록 전체 무시(STAGE 줄도 출력하지 말 것).\n"
     "</omx-routing>"
 )
+
+
+# Per-subprocess timeout for the backlog pre-fetch. Two sequential calls must
+# fit inside run_hook.py's default 3s SIGALRM budget for route_emit (2 * 1.2s
+# = 2.4s < 3s); pinned by test_hook_backlog.py.
+_BACKLOG_FETCH_TIMEOUT_S = 1.2
 
 
 def _fetch_open_backlog(payload):
@@ -92,6 +99,10 @@ def _fetch_open_backlog(payload):
 
     Fail-open (D9): ANY error -> '' (no injection). This runs on every prompt, so
     a broken fetch must degrade to nothing, never break the route hook.
+
+    Budget: run_hook.py enforces a 3s SIGALRM ceiling on route_emit (not in
+    _BUDGETS), so the two sequential fetches must complete inside it —
+    _BACKLOG_FETCH_TIMEOUT_S is sized so 2 * timeout < 3s with headroom.
     """
     try:
         import json
@@ -102,7 +113,7 @@ def _fetch_open_backlog(payload):
         for st in ("needs-experiment", "needs-apply-before-retrain"):
             proc = subprocess.run(
                 ["omx", "wiki", "list", "--status", st, "--root", root],
-                capture_output=True, text=True, timeout=4,
+                capture_output=True, text=True, timeout=_BACKLOG_FETCH_TIMEOUT_S,
             )
             if proc.returncode != 0:
                 continue

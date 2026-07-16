@@ -4,6 +4,25 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.7.2] - 2026-07-16 — backlog pre-fetch hardening + instruction fixes
+
+### Fixed
+
+- **`route_emit` backlog pre-fetch regularized** (was an unversioned 2026-07-15 hotfix).
+  Per-subprocess timeout cut 4s -> 1.2s (`_BACKLOG_FETCH_TIMEOUT_S`) so the two sequential
+  `omx wiki list --status` fetches fit inside run_hook's 3s SIGALRM ceiling — the hotfix's
+  stated "8s worst case" never held at runtime (SIGALRM fired first and was swallowed
+  fail-open). New `test_hook_backlog.py` pins formatting, every fail-open path, and the
+  budget arithmetic (8 tests; the hotfix had shipped with none).
+- **No more bare `omx wiki list --status` instructions** (usage error — the flag requires
+  a value): route checkpoint now names both values explicitly; `queue-launch` soft-lead
+  warning and `wiki add --status` help text now show a value/placeholder.
+
+### Docs
+
+- Retrieval-ranking design doc: amendment §10 records the 2026-07-15 decision reversal
+  (per-prompt pre-fetch vs §9's "no per-prompt hook executor") and its now-enforced bounds.
+
 ## [0.7.1] - 2026-07-14 — confidence/status-aware wiki query ranking
 
 ### Changed
