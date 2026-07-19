@@ -2,9 +2,9 @@
 
 > A self-contained Claude Code harness that **analyzes your ML/RL training runs, diagnoses regressions, and designs the next experiment** — with a semi-autonomous analyze → design → eval loop that never fires a training run without your approval.
 
-![version](https://img.shields.io/badge/version-0.6.0-blue)
+![version](https://img.shields.io/badge/version-0.7.4-blue)
 ![python](https://img.shields.io/badge/python-%3E%3D3.10-blue)
-![tests](https://img.shields.io/badge/tests-894%20passed%20%2F%201%20skipped-brightgreen)
+![tests](https://img.shields.io/badge/tests-950%20passed%20%2F%201%20skipped-brightgreen)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![harness](https://img.shields.io/badge/omha-tier--1%20lane-8A2BE2)
 
@@ -47,7 +47,10 @@ any other harness.
 
 ## Quick start
 
-**Prerequisites:** Python ≥ 3.10, and [Claude Code](https://claude.com/claude-code) for the skills.
+**Prerequisites:** Python ≥ 3.10, and [Claude Code](https://claude.com/claude-code) v2.1.3 or later
+for the skills (the plugin's `SessionEnd` hook needs v1.0.85+, and its skill `argument-hint`
+frontmatter needs the v2.1.3 unification of skill/slash-command frontmatter — v2.1.3 is the
+higher, binding floor of the two).
 
 ### 1. Install the CLI
 
@@ -66,9 +69,16 @@ omx doctor
 
 ### 2. Install the plugin
 
-OMX ships as a Claude Code plugin (marketplace `omx`, plugin `oh-my-experiments`). Once
-loaded, the four skills below auto-route from natural-language prompts ("analyze these
-runs", "다음 실험 설계해줘").
+OMX ships as a Claude Code plugin via the heroacademia marketplace (plugin
+`oh-my-experiments`):
+
+```bash
+claude plugin marketplace add https://github.com/luckkim123/oh-my-heroacademia.git
+claude plugin install oh-my-experiments@heroacademia
+```
+
+Once loaded, the four skills below auto-route from natural-language prompts ("analyze
+these runs", "다음 실험 설계해줘").
 
 ### 3. Bootstrap a project
 
@@ -277,7 +287,7 @@ they never edit anything and return a verdict the calling session applies:
 
 ```
 oh-my-experiments/
-├── .claude-plugin/     # plugin.json (4 skills, 5 hooks) + marketplace.json
+├── .claude-plugin/     # plugin.json (4 skills, 5 hooks)
 ├── skills/             # exp-init / exp-analyze / exp-design / exp-loop
 ├── agents/             # 4 read-only review agents (report/proposal/campaign/wiki)
 ├── hooks/              # run_hook.py dispatch runner + handlers.py
@@ -297,7 +307,7 @@ oh-my-experiments/
 
 ```bash
 pip install -e "omx-core/[analyze]"
-cd omx-core && pytest        # 894 passed, 1 skipped (v0.6.0)
+cd omx-core && pytest        # 950 passed, 1 skipped (v0.7.4)
 ```
 
 - **Version SSOT:** `.claude-plugin/plugin.json` is the single source of truth; `scripts/sync_version.py` fans the version out to `omx-core/pyproject.toml`, and `test_version_sync.py` fails the suite on any drift.

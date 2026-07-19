@@ -1,4 +1,5 @@
 import json
+import pytest
 from omx_core.cli import main
 
 
@@ -224,6 +225,79 @@ def test_eval_nonfinite_score_null_in_nested_decision(capsys):
 
 def test_eval_unknown_keep_policy_errors(capsys):
     rc = main(["eval", "--command", "echo '{\"pass\": true}'", "--keep-policy", "bogus"])
+    assert rc != 0
+
+
+def _counter_scoring_command(tmp_path, scores):
+    """Build a shell command that returns a different score from `scores` on
+    each successive invocation (via a tmp-file counter) — models a real
+    evaluator whose own internal seed/randomness varies output per run."""
+    counter = tmp_path / "counter"
+    counter.write_text("0")
+    joined = ",".join(str(s) for s in scores)
+    return (
+        f'python3 -c "'
+        f"import json; n = int(open('{counter}').read()); "
+        f"open('{counter}', 'w').write(str(n + 1)); "
+        f"scores = [{joined}]; "
+        f'print(json.dumps({{\'pass\': True, \'score\': scores[n]}}))"'
+    )
+
+
+def test_eval_seeds_aggregates_mean_std_n(tmp_path, capsys):
+    cmd = _counter_scoring_command(tmp_path, [1.0, 2.0, 3.0])
+    rc = main(["eval", "--command", cmd, "--seeds", "3"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "pass"
+    assert out["score_n"] == 3
+    assert out["seed_scores"] == [1.0, 2.0, 3.0]
+    assert out["score"] == 2.0
+    assert out["score_std"] == pytest.approx(0.816496580927726)
+
+
+def test_eval_seeds_default_single_run_unchanged(capsys):
+    # no --seeds: single run, no score_std/score_n added (default path intact)
+    rc = main(["eval", "--command", "echo '{\"pass\": true, \"score\": 0.8}'"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert "score_std" not in out
+    assert "score_n" not in out
+
+
+def test_eval_seeds_significance_gate_rejects_noisy_winner(tmp_path, capsys):
+    # bare '>' would keep (mean 2.02 > last_kept 2.0); the gate must reject
+    # since the "improvement" is well inside the seed std.
+    cmd = _counter_scoring_command(tmp_path, [1.9, 2.0, 2.16])
+    rc = main(["eval", "--command", cmd, "--seeds", "3",
+               "--keep-policy", "score_improvement", "--last-kept-score", "2.0"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["decision"]["decision"] == "discard"
+    assert "seed-noise gate" in out["decision"]["decision_reason"]
+
+
+def test_eval_seeds_significance_gate_accepts_genuine_improvement(tmp_path, capsys):
+    cmd = _counter_scoring_command(tmp_path, [1.9, 2.0, 2.1])
+    rc = main(["eval", "--command", cmd, "--seeds", "3",
+               "--keep-policy", "score_improvement", "--last-kept-score", "0.5"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["decision"]["decision"] == "keep"
+    assert "seed-noise gate" in out["decision"]["decision_reason"]
+
+
+def test_eval_seeds_one_fails_aggregates_to_fail(capsys):
+    # a seed run that always fails must make the whole candidate fail
+    rc = main(["eval", "--command", "echo '{\"pass\": false}'", "--seeds", "3"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "fail"
+    assert "score_std" not in out
+
+
+def test_eval_seeds_rejects_less_than_one():
+    rc = main(["eval", "--command", "echo '{\"pass\": true}'", "--seeds", "0"])
     assert rc != 0
 
 
