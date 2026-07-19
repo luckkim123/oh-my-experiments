@@ -4,6 +4,23 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.7.5] - 2026-07-19 — extract atomic_path/atomic_dir into om-core
+
+### Changed
+
+- **`atomic_path`/`atomic_dir` extracted out of `omx_paths.py` into
+  `omx_core/atomic.py`**, vendored verbatim from the new shared `om-core` repo
+  (context-manager form — the shape omx uses, distinct from the function-form
+  `atomic_write_json`/`atomic_write_text` vendored by omp/oms/omd). `omx_paths.py`
+  re-exports both names for back-compat, so all ~16 call sites (`seal.py`,
+  `ledger.py`, `profile.py`, `cli.py`, `campaign.py`, `loop.py`, `state.py`,
+  `tree_ops.py`, `reduce/cache.py`, `integrity.py`, `wiki/*.py`, `hooks/handlers.py`,
+  and the package root `omx_core/__init__.py`) are unaffected — same import path,
+  same behavior, same durability guarantees (file + directory-entry fsync).
+  Adds a local-only `omx-core/tests/test_atomic_vendored_sync.py` that byte-compares
+  the vendored copy against `~/om-core/atomic_ctx.py` and skips gracefully when
+  that sibling repo is absent (clean CI runner).
+
 ## [0.7.4] - 2026-07-19 — startup-cost + hook-anchor + doctor audit fixes
 
 ### Fixed
