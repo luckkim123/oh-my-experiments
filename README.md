@@ -66,9 +66,16 @@ omx doctor
 
 ### 2. Install the plugin
 
-OMX ships as a Claude Code plugin (marketplace `omx`, plugin `oh-my-experiments`). Once
-loaded, the four skills below auto-route from natural-language prompts ("analyze these
-runs", "다음 실험 설계해줘").
+OMX ships as a Claude Code plugin via the heroacademia marketplace (plugin
+`oh-my-experiments`):
+
+```bash
+claude plugin marketplace add https://github.com/luckkim123/oh-my-heroacademia.git
+claude plugin install oh-my-experiments@heroacademia
+```
+
+Once loaded, the four skills below auto-route from natural-language prompts ("analyze
+these runs", "다음 실험 설계해줘").
 
 ### 3. Bootstrap a project
 
