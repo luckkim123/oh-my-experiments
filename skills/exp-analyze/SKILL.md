@@ -549,7 +549,9 @@ the core never decides *what* to remove; you do, and a human approves.
    supersedes an earlier one).
 3. Write a proposal `proposals/<ts>-wiki-gc.md` with `---\nkind: wiki-gc\n---` frontmatter,
    a `## DELETE` section (`- slug: X` + `reason:`), and a `## MERGE` section
-   (`- into: X` / `from:` list + `reason:`). Each item carries a one-line reason.
+   (a `- into: X` line opens each entry, followed by one indented `- <loser-slug>`
+   line per page to fold in — no `- slug:`/`from:` labels under MERGE). Each item
+   carries a one-line reason.
 4. STOP. The user reviews the proposal and deletes any line they disagree with —
    editing the file IS the approval. Never apply without this human gate.
 5. `omx wiki gc-apply --proposal <file> --root <r>` — two-phase: validates the whole
