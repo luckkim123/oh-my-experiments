@@ -4,6 +4,29 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.7.4] - 2026-07-19 — startup-cost + hook-anchor + doctor audit fixes
+
+### Fixed
+
+- **cli.py no longer eagerly imports numpy/pandas/matplotlib**: metadata-only verbs
+  (`doctor`, `session-id`, `wiki list`) paid the full ~250ms scientific-stack import cost
+  on every invocation, which alone consumed most of the 1.2s backlog pre-fetch budget
+  (`hooks/handlers.py`'s `_BACKLOG_FETCH_TIMEOUT_S`). The adapters/reduce/plot modules
+  that actually need numpy/pandas/matplotlib are now imported inside the verbs that use
+  them (`_ingest`, `_cmd_reduce_summarize`, `_cmd_plot`, `_cmd_promote`), matching the
+  lazy-import pattern the `npz` branch already used.
+- **backlog pre-fetch no longer shells out against an unanchored cwd**: `_omx_root`'s
+  docstring claimed root resolution "raises on failure", but `resolve_omx_root` (root.py)
+  never raises — it always falls back to cwd (stage `"cwd"`). `_fetch_open_backlog` never
+  short-circuited on an unanchored cwd and ran the `omx wiki list` subprocess anyway. A new
+  `_resolve_backlog_root` helper treats stage `"cwd"` explicitly as "no omx root" for the
+  backlog fetch specifically; `_omx_root` (shared by `capture_flush`/`compact_breadcrumb`/
+  `loop_gate`, which tolerate a bare-cwd anchor) is unchanged, only its docstring corrected.
+- **`omx doctor` now checks the Python version floor**: it reported `python_version` but
+  never compared it against `requires-python` (`>=3.10`), so an unsupported interpreter
+  died on a raw PEP-604 `X | None` `TypeError` instead of an actionable doctor line. Adds
+  `requires_python`/`python_ok`/`python_check` fields (PASS/FAIL/SKIP with an upgrade hint).
+
 ## [0.7.3] - 2026-07-16 — wiki audit hardening: gc atomicity, lint denoise, backlog visibility
 
 ### Fixed
