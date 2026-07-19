@@ -271,7 +271,7 @@ failure mode this step exists to stop.
 Before reporting, gate the proposal:
 `omx proposal-lint --path <proposals/<id>.md>` MUST exit 0 (fix the proposal
 through a re-write if it fails — the H1/H2 predictions must genuinely differ), and run
-`omx probe-novelty --root <root> --proposal <that path> --proposals-dir <output_root>/<run_id>/proposals`
+`omx probe-novelty --path <that path> --root <root> --proposals-dir <output_root>/<run_id>/proposals`
 — surface any overlap warning to the user (novelty is their judgment call, not a gate).
 
 Tell the user where the proposal is
