@@ -11,16 +11,10 @@ import os
 import sys
 from pathlib import Path
 
-import numpy as np
-
-from omx_core.ingest.eval_summary import EvalSummaryAdapter
-from omx_core.ingest.csv_longform import LongFormCsvAdapter
-from omx_core.ingest.tensorboard import TensorboardAdapter
-from omx_core.ingest.wandb_offline import WandbAdapter
-from omx_core.reduce.summarize import to_dataframe, add_cv
-from omx_core.reduce.series import downsample
-from omx_core.reduce.plot import line_plot
-from omx_core.reduce.promote import promote_plots
+# numpy/pandas/matplotlib (and the adapter/reduce modules that pull them in)
+# are lazy-imported inside the verbs that actually need them (omx-1 audit fix):
+# metadata-only verbs (doctor, session-id, wiki list) must not pay their ~250ms
+# import cost, which otherwise eats most of the hook backlog-fetch budget.
 from omx_core.evaluator import run_evaluator
 from omx_core.decision import decide_outcome, parse_keep_policy
 from omx_core.omx_paths import OmxError, OmxPaths, validate_token, resolve_session_id, atomic_path
@@ -69,12 +63,18 @@ def _resolved_root(args) -> str:
     return str(resolve_omx_root()[0])
 
 
-_ADAPTERS = {
-    "eval_summary": EvalSummaryAdapter,
-    "csv_longform": LongFormCsvAdapter,
-    "tensorboard": TensorboardAdapter,
-    "wandb": WandbAdapter,
-}
+def _adapters():
+    """Lazily import + build the format->adapter registry (numpy-backed)."""
+    from omx_core.ingest.eval_summary import EvalSummaryAdapter
+    from omx_core.ingest.csv_longform import LongFormCsvAdapter
+    from omx_core.ingest.tensorboard import TensorboardAdapter
+    from omx_core.ingest.wandb_offline import WandbAdapter
+    return {
+        "eval_summary": EvalSummaryAdapter,
+        "csv_longform": LongFormCsvAdapter,
+        "tensorboard": TensorboardAdapter,
+        "wandb": WandbAdapter,
+    }
 
 
 def _ingest(path, fmt, max_scalars=None, max_bytes=None):
@@ -88,14 +88,15 @@ def _ingest(path, fmt, max_scalars=None, max_bytes=None):
         return IngestResult(summary=[], series=series,
                             meta={"source": str(path), "format": "npz",
                                   "skipped_nd": sorted(all_keys - set(series))})
-    if fmt not in _ADAPTERS:
-        raise SystemExit(f"unknown --format {fmt!r}; choose from {sorted(_ADAPTERS) + ['npz']}")
+    adapters = _adapters()
+    if fmt not in adapters:
+        raise SystemExit(f"unknown --format {fmt!r}; choose from {sorted(adapters) + ['npz']}")
     if fmt == "tensorboard":
-        adapter = TensorboardAdapter(max_scalars=max_scalars, max_bytes=max_bytes)
+        adapter = adapters["tensorboard"](max_scalars=max_scalars, max_bytes=max_bytes)
     elif fmt == "eval_summary":
-        adapter = EvalSummaryAdapter(max_bytes=max_bytes)
+        adapter = adapters["eval_summary"](max_bytes=max_bytes)
     else:
-        adapter = _ADAPTERS[fmt]()
+        adapter = adapters[fmt]()
     return adapter.ingest(path)
 
 
@@ -147,6 +148,7 @@ def _cmd_ingest(args) -> int:
 
 
 def _cmd_reduce_summarize(args) -> int:
+    from omx_core.reduce.summarize import to_dataframe, add_cv
     ms, mb = _resolve_ingest_bounds(args)
     try:
         res = _ingest(args.path, args.format, max_scalars=ms, max_bytes=mb)
@@ -333,6 +335,9 @@ def _cmd_plot(args) -> int:
     Claude-free: the skill picks WHICH series/metric/view; this verb does the
     matplotlib + scratch-path IO (design D8). Output filename = <metric>__<view>.png.
     """
+    import numpy as np
+    from omx_core.reduce.series import downsample
+    from omx_core.reduce.plot import line_plot
     ms, mb = _resolve_ingest_bounds(args)
     try:
         res = _ingest(args.path, args.format, max_scalars=ms, max_bytes=mb)
@@ -367,6 +372,7 @@ def _cmd_promote(args) -> int:
 
     --referenced may be repeated. Loud-fails (rc 2) if any referenced PNG is absent
     in scratch (promote_plots raises OmxError -> SystemExit)."""
+    from omx_core.reduce.promote import promote_plots
     paths = OmxPaths(root=_resolved_root(args))
     scratch = paths.scratch_plots(session_id=args.session_id)
     dest = paths.analysis_dir(
