@@ -46,8 +46,9 @@ def test_wiki_delete_parses_without_positional_slug(capsys):
 def test_wiki_delete_registered_as_real_subcommand():
     # the #25 verb-contract test globs skills for `omx wiki <sub>`; delete must
     # be a genuine registered choice so a doc mention would not be flagged.
-    from omx_core.cli import build_parser
     import argparse
+
+    from omx_core.cli import build_parser
     for a in build_parser()._actions:
         if isinstance(a, argparse._SubParsersAction) and "wiki" in a.choices:
             wiki = a.choices["wiki"]

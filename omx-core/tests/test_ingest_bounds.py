@@ -1,10 +1,8 @@
 import json
-import numpy as np
-import pytest
 
+import pytest
 from omx_core.ingest.eval_summary import EvalSummaryAdapter
-from omx_core.ingest.tensorboard import (
-    TensorboardAdapter, MAX_SCALARS_DEFAULT, MAX_INGEST_BYTES_DEFAULT)
+from omx_core.ingest.tensorboard import MAX_INGEST_BYTES_DEFAULT, MAX_SCALARS_DEFAULT, TensorboardAdapter
 from omx_core.omx_paths import OmxError
 
 

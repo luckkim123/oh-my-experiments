@@ -11,7 +11,6 @@ marker is cited (the report was grounded in the engine, not hand-extracted scala
 import json
 
 import pytest
-
 from omx_core.coverage import CoverageResult, CrossRefResult, check_coverage, check_cross_run_refs
 from omx_core.omx_paths import OmxError
 

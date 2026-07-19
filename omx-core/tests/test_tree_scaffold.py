@@ -2,9 +2,8 @@
 import json
 
 from omx_core.cli import main
-from omx_core.tree import load_tree_schema
 from omx_core.omx_paths import OmxPaths
-
+from omx_core.tree import load_tree_schema
 from tree_fixtures import GROUPED_TREE_YAML, build_grouped_tree
 
 

@@ -1,4 +1,5 @@
 import json
+
 import pytest
 from omx_core.cli import main
 
@@ -721,8 +722,8 @@ def test_report_coverage_cli_strict_flag_fails_shallow(tmp_path, capsys):
 
 def test_wiki_gc_readonly_emits_lint_and_pages(tmp_path, capsys):
     from omx_core.cli import main
-    from omx_core.wiki import ingest
     from omx_core.omx_paths import OmxPaths
+    from omx_core.wiki import ingest
     ingest.ingest_knowledge(OmxPaths(root=tmp_path), now="2026-06-06T00:00:00",
                             title="Page A", content="aaa", tags=["t"],
                             category="reference", confidence="medium", sources=[])
@@ -736,9 +737,10 @@ def test_wiki_gc_readonly_emits_lint_and_pages(tmp_path, capsys):
 
 def test_wiki_gc_apply_deletes_via_proposal(tmp_path, capsys):
     import subprocess
+
     from omx_core.cli import main
-    from omx_core.wiki import ingest
     from omx_core.omx_paths import OmxPaths
+    from omx_core.wiki import ingest
     paths = OmxPaths(root=tmp_path)
     ingest.ingest_knowledge(paths, now="2026-06-06T00:00:00", title="Trash Me",
                             content="junk", tags=["t"], category="reference",
@@ -761,8 +763,8 @@ def test_wiki_gc_apply_deletes_via_proposal(tmp_path, capsys):
 def test_wiki_gc_apply_untracked_loud_fails(tmp_path, capsys):
     import pytest
     from omx_core.cli import build_parser
-    from omx_core.wiki import ingest
     from omx_core.omx_paths import OmxPaths
+    from omx_core.wiki import ingest
     paths = OmxPaths(root=tmp_path)
     ingest.ingest_knowledge(paths, now="2026-06-06T00:00:00", title="Untracked",
                             content="x", tags=["t"], category="reference",

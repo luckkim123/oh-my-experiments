@@ -1,4 +1,5 @@
 import json
+
 from omx_core.cli import main
 
 

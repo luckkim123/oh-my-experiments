@@ -1,7 +1,7 @@
 import json
 
-from omx_core.proposal import lint_proposal, probe_tokens
 from omx_core.cli import main
+from omx_core.proposal import lint_proposal, probe_tokens
 
 GOOD = """# Next-experiment proposal — pending approval
 run_id: run_a  analysis: diagnose-20260705-120000  proposal: next-20260705-130000

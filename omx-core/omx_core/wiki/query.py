@@ -10,8 +10,8 @@ from __future__ import annotations
 import re
 
 from omx_core.omx_paths import OmxPaths
-from omx_core.wiki.types import WikiError
 from omx_core.wiki import storage
+from omx_core.wiki.types import WikiError
 
 _LATIN = re.compile(r"[a-z0-9À-ɏ]+")
 _CJK = re.compile(r"[぀-ゟ゠-ヿ一-鿿가-힯]+")
@@ -139,7 +139,7 @@ def query_wiki(paths: OmxPaths, *, now: str, text: str, tags: list | None = None
 
         if score > 0:
             if not snippet:
-                first = next((l.strip() for l in page.content.split("\n") if l.strip()), "")
+                first = next((ln.strip() for ln in page.content.split("\n") if ln.strip()), "")
                 snippet = first[:117] + "..." if len(first) > 120 else first
             matches.append({
                 "slug": slug, "title": page.title, "score": score,

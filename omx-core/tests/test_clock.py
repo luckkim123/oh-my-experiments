@@ -5,7 +5,6 @@ value gets UTC attached — exact, because every legacy writer was a UTC instant
 from datetime import datetime, timezone
 
 import pytest
-
 from omx_core import clock
 from omx_core.omx_paths import OmxError
 
@@ -67,6 +66,7 @@ def test_lease_ages_pre_r5_naive_armed_at_via_real_subtraction(tmp_path):
     # the new aware now (the normalizer), NOT the mtime fallback. A 10h-old naive
     # lease is stale (> 2h default) and gets reaped, regardless of file mtime.
     import json
+
     from omx_core.lock import acquire_run_lease, read_run_lease
     from omx_core.omx_paths import OmxPaths
     p = OmxPaths(root=str(tmp_path))

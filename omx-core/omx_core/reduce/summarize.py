@@ -6,8 +6,6 @@ computed per (dr_level, axis). Exact arithmetic via pandas, never LLM mental mat
 import numpy as np
 import pandas as pd
 
-from omx_core.ingest.base import SummaryRecord
-
 
 def to_dataframe(records) -> pd.DataFrame:
     """list[SummaryRecord] -> tidy DataFrame [dr_level, axis, field, value]."""

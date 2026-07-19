@@ -12,11 +12,12 @@ Two-tier validation (design doc B1):
 """
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+from omx_core.atomic import atomic_dir, atomic_path  # noqa: F401 — re-export, back-compat
 
 
 class OmxError(Exception):
@@ -425,6 +426,6 @@ def resolve_session_id(explicit=None, env=None, autogen=None) -> str:
 
 
 # atomic_path/atomic_dir moved to omx_core.atomic (om-core vendored file);
-# re-exported here for back-compat — the ~25 call sites across the codebase
-# import from omx_core.omx_paths (or the omx_core package root), unaffected.
-from omx_core.atomic import atomic_path, atomic_dir  # re-export: back-compat for callers importing from omx_paths
+# re-exported at the top of this file for back-compat — the ~25 call sites
+# across the codebase import from omx_core.omx_paths (or the omx_core
+# package root), unaffected.

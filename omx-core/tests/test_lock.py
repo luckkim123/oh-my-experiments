@@ -8,9 +8,14 @@ import threading
 import time
 
 import pytest
-
-from omx_core.lock import with_file_lock
-from omx_core.omx_paths import OmxError
+from omx_core.lock import (
+    LOCK_STALE_HOURS,
+    acquire_run_lease,
+    read_run_lease,
+    release_run_lease,
+    with_file_lock,
+)
+from omx_core.omx_paths import OmxError, OmxPaths
 
 
 def test_with_file_lock_runs_fn_and_returns(tmp_path):
@@ -42,7 +47,10 @@ def test_with_file_lock_serializes_concurrent_writers(tmp_path):
             with_file_lock(lock, crit)
 
     t1, t2 = threading.Thread(target=bump), threading.Thread(target=bump)
-    t1.start(); t2.start(); t1.join(); t2.join()
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
     assert int(counter.read_text()) == 2 * N
 
 
@@ -86,8 +94,6 @@ def test_with_file_lock_releases_on_exception(tmp_path):
 
 # --- T2: omx_paths lease/lock/marker getters ---
 
-from omx_core.omx_paths import OmxPaths
-
 
 def test_loop_lock_path(tmp_path):
     p = OmxPaths(root=str(tmp_path))
@@ -105,13 +111,6 @@ def test_loop_marker_path(tmp_path):
 
 
 # --- T2: run-lease primitives (spec 2.1 / 3) ---
-
-from omx_core.lock import (
-    LOCK_STALE_HOURS,
-    acquire_run_lease,
-    read_run_lease,
-    release_run_lease,
-)
 
 AWARE_NOW = "2026-07-11T10:00:00+00:00"
 
@@ -200,7 +199,6 @@ def test_acquire_old_corrupt_lease_is_reaped(tmp_path):
     # mtime fallback (real-clock delta) actually measures ~(STALE+1)h of age and
     # reaps it. This exercises the fallback for the right reason — the outcome is
     # independent of the injected now_iso.
-    import os
     p = OmxPaths(root=str(tmp_path))
     p.run_dir("run1").mkdir(parents=True)
     lock = p.loop_lock("run1")
@@ -294,7 +292,6 @@ def test_acquire_stale_reap_tolerates_reaper_race_and_reclaim_race(tmp_path, mon
 
     monkeypatch.setattr(pathlib.Path, "unlink", fake_unlink)
 
-    real_write = lock_mod._write_lease
     write_calls = {"n": 0}
 
     def fake_write(path_, payload_):

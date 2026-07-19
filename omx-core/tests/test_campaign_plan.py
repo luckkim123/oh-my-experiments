@@ -5,8 +5,7 @@ never duplicated into plan.json."""
 import json
 
 import pytest
-
-from omx_core.campaign import (campaign_status, init_campaign, plan_add)
+from omx_core.campaign import campaign_status, init_campaign, plan_add
 from omx_core.omx_paths import OmxError, OmxPaths
 
 NOW = "2026-07-11T10:00:00"

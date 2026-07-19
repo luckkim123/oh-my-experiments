@@ -6,7 +6,6 @@ import json
 import subprocess
 
 import pytest
-
 from omx_core.omx_paths import OmxError, OmxPaths
 from omx_core.revert import apply_revert, plan_revert
 
@@ -18,9 +17,11 @@ def _git(cwd, *a):
 def _init_repo(cwd):
     cwd.mkdir(parents=True, exist_ok=True)
     _git(cwd, "init", "-q")
-    _git(cwd, "config", "user.email", "t@t.t"); _git(cwd, "config", "user.name", "t")
+    _git(cwd, "config", "user.email", "t@t.t")
+    _git(cwd, "config", "user.name", "t")
     (cwd / "config.yaml").write_text("lr: 0.001\n")
-    _git(cwd, "add", "config.yaml"); _git(cwd, "commit", "-q", "-m", "base")
+    _git(cwd, "add", "config.yaml")
+    _git(cwd, "commit", "-q", "-m", "base")
     base = subprocess.run(["git", "-C", str(cwd), "rev-parse", "HEAD"],
                           capture_output=True, text=True).stdout.strip()
     return base
@@ -47,7 +48,8 @@ def test_plan_filters_allowlisted_paths(tmp_path):
     (repo / ".omx").mkdir()
     (repo / ".omx" / "state.json").write_text("{}")
     (repo / "config.yaml").write_text("lr: 0.5\n")
-    _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "bump+omx")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "bump+omx")
     plan = plan_revert(str(repo), base, protected=[".omx/"])
     assert "config.yaml" in plan["would_revert"]
     assert any(".omx/" in s for s in plan["skipped_allowlist"])
@@ -66,7 +68,8 @@ def test_plan_filters_unicode_named_allowlisted_paths(tmp_path):
     base = _init_repo(repo)
     (repo / ".omx").mkdir()
     (repo / ".omx" / "한글파일.json").write_text("{}")
-    _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "add unicode")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "add unicode")
     (repo / ".omx" / "한글파일.json").write_text('{"x": 1}')
     _git(repo, "commit", "-aqm", "bump unicode")
     plan = plan_revert(str(repo), base, protected=[".omx/"])
@@ -79,7 +82,8 @@ def test_plan_filters_quote_bearing_allowlisted_paths(tmp_path):
     base = _init_repo(repo)
     (repo / ".omx").mkdir()
     (repo / ".omx" / 'a "quoted" file.json').write_text("{}")
-    _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "add quoted")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "add quoted")
     (repo / ".omx" / 'a "quoted" file.json').write_text('{"x": 1}')
     _git(repo, "commit", "-aqm", "bump quoted")
     plan = plan_revert(str(repo), base, protected=[".omx/"])
@@ -127,7 +131,8 @@ def test_cli_dry_run_is_default(tmp_path, capsys):
     from omx_core import cli
     repo = tmp_path / "proj"
     base = _init_repo(repo)
-    (repo / "config.yaml").write_text("lr: 0.5\n"); _git(repo, "commit", "-aqm", "bump")
+    (repo / "config.yaml").write_text("lr: 0.5\n")
+    _git(repo, "commit", "-aqm", "bump")
     _seed(tmp_path, base)
     capsys.readouterr()
     rc = cli.main(["revert-config", "--cwd", str(repo), "--run-id", "run1",
@@ -142,7 +147,8 @@ def test_cli_approve_flag_applies(tmp_path, capsys):
     from omx_core import cli
     repo = tmp_path / "proj"
     base = _init_repo(repo)
-    (repo / "config.yaml").write_text("lr: 0.5\n"); _git(repo, "commit", "-aqm", "bump")
+    (repo / "config.yaml").write_text("lr: 0.5\n")
+    _git(repo, "commit", "-aqm", "bump")
     _seed(tmp_path, base)
     capsys.readouterr()
     rc = cli.main(["revert-config", "--cwd", str(repo), "--run-id", "run1",
@@ -169,10 +175,12 @@ def test_cli_to_last_kept_resolves(tmp_path, capsys):
     from omx_core import cli
     repo = tmp_path / "proj"
     base = _init_repo(repo)
-    (repo / "config.yaml").write_text("lr: 0.5\n"); _git(repo, "commit", "-aqm", "v2")
+    (repo / "config.yaml").write_text("lr: 0.5\n")
+    _git(repo, "commit", "-aqm", "v2")
     kept = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
                           capture_output=True, text=True).stdout.strip()
-    (repo / "config.yaml").write_text("lr: 9\n"); _git(repo, "commit", "-aqm", "v3")
+    (repo / "config.yaml").write_text("lr: 9\n")
+    _git(repo, "commit", "-aqm", "v3")
     _seed(tmp_path, base, last_kept=kept)
     capsys.readouterr()
     rc = cli.main(["revert-config", "--cwd", str(repo), "--run-id", "run1",

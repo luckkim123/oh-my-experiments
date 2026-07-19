@@ -3,7 +3,6 @@ import json
 
 from omx_core.cli import main
 from omx_core.tree_audit import audit_tree
-
 from tree_fixtures import GROUPED_TREE_YAML, build_grouped_tree, build_violation_zoo
 
 

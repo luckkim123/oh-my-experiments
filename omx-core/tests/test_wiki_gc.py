@@ -1,5 +1,9 @@
 """Tests for omx_core.wiki.gc — wiki garbage-collect (delete/merge) execution."""
-from omx_core.wiki import gc
+import subprocess
+
+import pytest
+from omx_core.omx_paths import OmxError, OmxPaths
+from omx_core.wiki import gc, storage
 
 
 def test_norm_slug_adds_md_suffix():
@@ -12,9 +16,6 @@ def test_gcplan_defaults_are_empty():
     assert plan.deletes == []
     assert plan.merges == []
 
-
-import pytest
-from omx_core.omx_paths import OmxError
 
 _VALID_PROPOSAL = """---
 kind: wiki-gc
@@ -68,9 +69,6 @@ def test_parse_proposal_normalizes_bare_slugs():
     assert plan.merges == [{"into": "s.md", "from": ["f1.md"]}]
 
 
-import subprocess
-
-
 def _git(cwd, *args):
     subprocess.run(["git", *args], cwd=str(cwd), check=True,
                    capture_output=True, text=True)
@@ -98,9 +96,6 @@ def test_is_git_tracked_false_when_no_repo(tmp_path):
     f = tmp_path / "c.txt"
     f.write_text("hi", encoding="utf-8")
     assert gc.is_git_tracked(tmp_path, f) is False
-
-
-from omx_core.omx_paths import OmxPaths
 
 
 def _seed_page(tmp_path, title, content="body text", category="reference"):
@@ -134,8 +129,6 @@ def test_delete_page_reserved_loud_fails(tmp_path):
     with pytest.raises(OmxError):
         gc.delete_page(paths, "index.md")
 
-
-from omx_core.wiki import storage
 
 
 def test_merge_pages_survivor_gains_content_and_deletes_sources(tmp_path):

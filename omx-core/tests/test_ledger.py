@@ -1,10 +1,15 @@
 import json
+
 import pytest
-from omx_core.omx_paths import OmxPaths
 from omx_core.ledger import (
-    append_results_row, append_ledger_entry, append_decision_log,
-    seed_ledger, record_iteration, RESULTS_HEADER,
+    RESULTS_HEADER,
+    append_decision_log,
+    append_ledger_entry,
+    append_results_row,
+    record_iteration,
+    seed_ledger,
 )
+from omx_core.omx_paths import OmxPaths
 
 
 def test_results_tsv_header_written_once(tmp_path):
@@ -154,8 +159,8 @@ def test_record_iteration_writes_all_three_artifacts(tmp_path):
 # --- R5 T5: absent-vs-corrupt split + health mirror (D-R5-6) ---
 
 def test_read_run_ledger_absent_raises_plain_omxerror(tmp_path):
+    from omx_core.ledger import LedgerCorruptError, read_run_ledger
     from omx_core.omx_paths import OmxError
-    from omx_core.ledger import read_run_ledger, LedgerCorruptError
     p = OmxPaths(tmp_path)
     with pytest.raises(OmxError) as ei:
         read_run_ledger(p, "run1")
@@ -165,7 +170,7 @@ def test_read_run_ledger_absent_raises_plain_omxerror(tmp_path):
 
 
 def test_read_run_ledger_corrupt_raises_ledger_corrupt(tmp_path):
-    from omx_core.ledger import read_run_ledger, LedgerCorruptError
+    from omx_core.ledger import LedgerCorruptError, read_run_ledger
     p = OmxPaths(tmp_path)
     target = p.ledger_json("run1")
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -175,16 +180,16 @@ def test_read_run_ledger_corrupt_raises_ledger_corrupt(tmp_path):
 
 
 def test_ledger_corrupt_is_omxerror_subclass():
-    from omx_core.omx_paths import OmxError
     from omx_core.ledger import LedgerCorruptError
+    from omx_core.omx_paths import OmxError
     assert issubclass(LedgerCorruptError, OmxError)
 
 
 def test_record_iteration_writes_health_mirror_when_armed(tmp_path):
     # a loop armed for run1 -> record_iteration mirrors loop_health into the
     # active_loop envelope AFTER the ledger writes.
+    from omx_core.ledger import record_iteration, seed_ledger
     from omx_core.loop import arm_loop
-    from omx_core.ledger import seed_ledger, record_iteration
     from omx_core.state import load_state
     p = OmxPaths(tmp_path)
     arm_loop(p, run_id="run1", now_iso="2026-07-11T10:00:00+00:00",
@@ -203,7 +208,7 @@ def test_record_iteration_writes_health_mirror_when_armed(tmp_path):
 
 def test_record_iteration_no_mirror_when_not_armed(tmp_path):
     # no loop armed (or armed for a DIFFERENT run) -> record writes no mirror.
-    from omx_core.ledger import seed_ledger, record_iteration
+    from omx_core.ledger import record_iteration, seed_ledger
     from omx_core.state import load_state
     p = OmxPaths(tmp_path)
     seed_ledger(p, "run1", baseline_commit="abc", keep_policy="pass_only")

@@ -1,7 +1,8 @@
 import os
-from omx_core.omx_paths import OmxPaths
-from omx_core.evaluator import run_evaluator, parse_evaluator_result
+
 from omx_core.decision import decide_outcome
+from omx_core.evaluator import parse_evaluator_result, run_evaluator
+from omx_core.omx_paths import OmxPaths
 
 
 def test_reference_evaluator_resolves_committed_file(tmp_path):

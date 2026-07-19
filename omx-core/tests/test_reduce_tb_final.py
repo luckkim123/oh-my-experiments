@@ -14,7 +14,6 @@ The reduce fn is PURE: it takes the already-ingested series dict
 """
 import numpy as np
 import pytest
-
 from omx_core.omx_paths import OmxError
 from omx_core.reduce.tb_final import final_window_means
 

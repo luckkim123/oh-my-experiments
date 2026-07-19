@@ -1,6 +1,5 @@
 """Task 1 — tree.yaml schema loader, ts-format compiler, run_id grammar."""
 import pytest
-
 from omx_core.tree import (
     DEFAULT_TREE_YAML,
     TreeError,

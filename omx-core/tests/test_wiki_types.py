@@ -1,10 +1,9 @@
 from omx_core.wiki.types import (
-    WikiError,
-    WikiPage,
     CATEGORIES,
     CONFIDENCES,
-    WIKI_SCHEMA_VERSION,
     RESERVED_FILES,
+    WikiError,
+    WikiPage,
 )
 
 
@@ -48,7 +47,7 @@ def test_wikipage_holds_frontmatter_and_content():
 
 
 def test_statuses_include_soft_hard_and_terminal():
-    from omx_core.wiki.types import STATUSES, BLOCKING_STATUSES
+    from omx_core.wiki.types import BLOCKING_STATUSES, STATUSES
     assert STATUSES == ("needs-experiment", "needs-apply-before-retrain", "resolved")
     # the blocking value(s) that make queue-launch REFUSE, a subset of the known statuses
     assert BLOCKING_STATUSES == frozenset({"needs-apply-before-retrain"})

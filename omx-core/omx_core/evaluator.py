@@ -10,9 +10,11 @@ fault-tolerant-by-RECORDING (captures the failure into the EvaluationRecord so
 the decision tree turns it into 'discard', never crashing the loop).
 """
 import json
+import subprocess
+from pathlib import Path
 
-from omx_core.omx_paths import OmxError
 from omx_core import clock
+from omx_core.omx_paths import OmxError
 
 
 class EvaluatorError(OmxError):
@@ -49,10 +51,6 @@ def parse_evaluator_result(raw: str) -> dict:
     if "score" in parsed:
         return {"pass": parsed["pass"], "score": parsed["score"]}
     return {"pass": parsed["pass"]}
-
-
-import subprocess
-from pathlib import Path
 
 
 def _last_nonempty_line(text: str):

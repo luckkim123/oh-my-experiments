@@ -11,15 +11,15 @@ from __future__ import annotations
 import re
 
 from omx_core.omx_paths import OmxPaths
+from omx_core.wiki import storage
 from omx_core.wiki.types import (
-    WikiError,
-    WikiPage,
     CATEGORIES,
     CONFIDENCES,
     STATUSES,
     WIKI_SCHEMA_VERSION,
+    WikiError,
+    WikiPage,
 )
-from omx_core.wiki import storage
 
 _LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 _CONF_RANK = {"high": 3, "medium": 2, "low": 1}

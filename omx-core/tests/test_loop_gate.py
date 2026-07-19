@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from omx_core.loop import LOOP_HARD_CAP_DEFAULT, arm_loop, disarm_loop
 from omx_core.omx_paths import OmxError, OmxPaths
 from omx_core.state import load_state
@@ -239,7 +238,8 @@ def test_gate_hard_cap_self_disarms(tmp_path):
 def test_gate_mixed_clock_fails_open(tmp_path):
     # A NAIVE deadline in the envelope (should be impossible via loop-arm) makes
     # deadline_passed raise; the handler must fail-open (allow), never crash.
-    from omx_core.state import load_state as ls, save_state as ss
+    from omx_core.state import load_state as ls
+    from omx_core.state import save_state as ss
     p = _paths(tmp_path)
     arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=60)
     state = ls(p)
@@ -423,7 +423,7 @@ def test_gate_three_corrupt_probes_disarm_ledger_corrupt(tmp_path):
 def test_gate_healthy_probe_resets_counter_and_persists(tmp_path):
     # counter climbs to 2, then a healthy ledger read resets it to 0 (persisted:
     # a stale 2 must not survive a healthy probe).
-    from omx_core.ledger import seed_ledger, append_ledger_entry
+    from omx_core.ledger import append_ledger_entry, seed_ledger
     p = _paths(tmp_path)
     arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=10 ** 8, session_id="s")
     _corrupt_ledger(p)
@@ -443,7 +443,7 @@ def test_gate_mirror_trips_plateau_when_ledger_corrupt(tmp_path):
     # a healthy record left a mirror showing a plateau streak, THEN the ledger
     # went corrupt: the gate consults the mirror on the corrupt path and disarms
     # with the usual 'plateau' reason (corruption cannot rewind the mirror).
-    from omx_core.ledger import seed_ledger, record_iteration
+    from omx_core.ledger import record_iteration, seed_ledger
     p = _paths(tmp_path)
     arm_loop(p, run_id="run1", now_iso=NOW, max_runtime_s=10 ** 8, session_id="s")
     seed_ledger(p, "run1", baseline_commit="abc", keep_policy="pass_only")

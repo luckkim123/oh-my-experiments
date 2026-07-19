@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from omx_core.reduce.series import load_npz, downsample
+from omx_core.reduce.series import downsample, load_npz
 
 
 def test_load_npz_returns_named_arrays(fixtures_dir):

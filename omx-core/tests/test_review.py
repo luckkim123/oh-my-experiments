@@ -1,7 +1,7 @@
 import json
 
-from omx_core.review import review_report
 from omx_core.cli import main
+from omx_core.review import review_report
 
 GOOD = """# r
 ## TL;DR

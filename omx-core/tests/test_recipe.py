@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from omx_core.omx_paths import OmxError, OmxPaths
 from omx_core.wiki.ingest import ingest_knowledge
 from omx_core.wiki.recipe import count_query_hits, promote_recipe

@@ -1,9 +1,9 @@
 import json
 
-from omx_core.wiki.quality import QUALITY_FLOOR, score_page
-from omx_core.wiki.types import WikiPage
-from omx_core.wiki.storage import parse_page, serialize_page
 from omx_core.cli import main
+from omx_core.wiki.quality import QUALITY_FLOOR, score_page
+from omx_core.wiki.storage import parse_page, serialize_page
+from omx_core.wiki.types import WikiPage
 
 RICH = ("Constraint cost dropped 0.5 -> 0.2 at iter 800; verified via "
         "`omx reduce tb-final` against Loss/cost_value. See analysis/eval.py:12. "

@@ -1,5 +1,5 @@
 import numpy as np
-from omx_core.reduce.plot import line_plot, bar_plot
+from omx_core.reduce.plot import bar_plot, line_plot
 
 
 def _is_png(path):

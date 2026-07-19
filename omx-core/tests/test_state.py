@@ -1,6 +1,7 @@
 import json
+
 from omx_core.omx_paths import OmxPaths
-from omx_core.state import load_state, save_state, DEFAULT_STATE
+from omx_core.state import DEFAULT_STATE, load_state, save_state
 
 
 def test_load_missing_returns_default_copy(tmp_path):

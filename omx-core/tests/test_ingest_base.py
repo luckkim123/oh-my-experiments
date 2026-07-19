@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from omx_core.ingest import IngestResult, SummaryRecord, IngestAdapter
+from omx_core.ingest import IngestAdapter, IngestResult, SummaryRecord
 
 
 def test_summary_record_is_frozen():

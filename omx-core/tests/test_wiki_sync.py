@@ -38,7 +38,7 @@ def test_sync_skips_when_page_newer(tmp_path, capsys):
     prof = _mk_profile(tmp_path)
     main(["wiki", "sync-profile", "--root", str(tmp_path)])
     capsys.readouterr()
-    rc = main(["wiki", "sync-profile", "--root", str(tmp_path)])
+    main(["wiki", "sync-profile", "--root", str(tmp_path)])
     assert json.loads(capsys.readouterr().out)["action"] == "unchanged"
     # touch the profile forward -> re-sync
     m = prof / "metrics.yaml"

@@ -21,15 +21,20 @@ def score_page(content: str, tags: list, *, title: str = "") -> tuple[int, list]
     score, reasons = 100, []
     body = (content or "").strip()
     if len(body) < 120:
-        score -= 30; reasons.append("body-under-120-chars")
+        score -= 30
+        reasons.append("body-under-120-chars")
     if not _DIGIT.search(body):
-        score -= 20; reasons.append("no-numeric-token")
+        score -= 20
+        reasons.append("no-numeric-token")
     if not _SOURCE_MARKER.search(body):
-        score -= 20; reasons.append("no-source-marker")
+        score -= 20
+        reasons.append("no-source-marker")
     tag_set = {str(t).strip().lower() for t in (tags or []) if str(t).strip()}
     if not tag_set or tag_set <= _GENERIC_TAGS:
-        score -= 10; reasons.append("generic-only-tags")
+        score -= 10
+        reasons.append("generic-only-tags")
     t = (title or "").strip().lower()
     if len(t.split()) < 2 or t in _WEAK_TITLES:
-        score -= 10; reasons.append("weak-title")
+        score -= 10
+        reasons.append("weak-title")
     return max(score, 0), reasons

@@ -1,4 +1,5 @@
 from pathlib import Path
+
 import pytest
 
 VENDORED = Path(__file__).resolve().parent.parent / "omx_core" / "atomic.py"

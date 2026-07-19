@@ -5,7 +5,6 @@ when tripped); the gate branch (T6) is a best-effort backstop."""
 import json
 
 import pytest
-
 from omx_core.ledger import read_run_ledger, seed_ledger
 from omx_core.loop import loop_health
 from omx_core.omx_paths import OmxError, OmxPaths
