@@ -5,9 +5,8 @@ updating the card is an omha-repo edit outside R5's release scope."""
 import json
 
 import pytest
-
-from omx_core.cardcheck import run_card_check
 from omx_core import cli
+from omx_core.cardcheck import run_card_check
 
 
 def _plugin(tmp_path, version="0.6.0", skills=("./skills/exp-init/", "./skills/exp-analyze/")):

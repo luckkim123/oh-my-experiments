@@ -1,7 +1,7 @@
 import json
 
-from omx_core.doctor import run_doctor
 from omx_core.cli import main
+from omx_core.doctor import run_doctor
 
 
 def test_doctor_shape_no_root():

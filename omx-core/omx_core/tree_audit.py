@@ -83,7 +83,7 @@ def audit_tree(schema: TreeSchema, base) -> dict:
         # T9 — undeclared entries (only when an allowlist is declared).
         if schema.entries is not None:
             allowed = (set(schema.entries) | set(schema.requires)
-                       | {l.name for l in schema.links.values()} | {eval_base})
+                       | {link.name for link in schema.links.values()} | {eval_base})
             for child in sorted(run.iterdir()):
                 if child.name not in allowed and not child.name.startswith("."):
                     v.append(_v("T9", "warn", child,
@@ -102,20 +102,20 @@ def audit_tree(schema: TreeSchema, base) -> dict:
                                 "eval leaf does not match eval_pattern x eval_modes"))
 
     # T4/T5 — declared aliases.
-    alias_specs = {l.name: l for l in schema.aliases()}
-    for l in walk_symlinks(schema, base):
-        spec = alias_specs.get(l["name"])
-        if spec is None or l["role"] != "index":
+    alias_specs = {link.name: link for link in schema.aliases()}
+    for link in walk_symlinks(schema, base):
+        spec = alias_specs.get(link["name"])
+        if spec is None or link["role"] != "index":
             continue
-        if l["target"] is None:
-            v.append(_v("T4", "error", l["path"], "alias symlink dangling"))
+        if link["target"] is None:
+            v.append(_v("T4", "error", link["path"], "alias symlink dangling"))
             continue
-        tgt = l["target"]
+        tgt = link["target"]
         if parse_run_id(schema, tgt.name) is None:
-            v.append(_v("T5", "error", l["path"],
+            v.append(_v("T5", "error", link["path"],
                         "alias target is not a grammar-valid run dir"))
-        elif spec.scope != "root" and tgt.parent.resolve() != l["path"].parent.resolve():
-            v.append(_v("T5", "error", l["path"],
+        elif spec.scope != "root" and tgt.parent.resolve() != link["path"].parent.resolve():
+            v.append(_v("T5", "error", link["path"],
                         f"alias target outside its {spec.scope!r} scope"))
 
     # T12 — mirror coherence (only when a data tree is declared).

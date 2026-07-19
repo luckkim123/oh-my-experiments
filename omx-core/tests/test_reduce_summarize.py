@@ -1,7 +1,8 @@
 import math
+
 import pandas as pd
 from omx_core.ingest import SummaryRecord
-from omx_core.reduce.summarize import to_dataframe, add_cv
+from omx_core.reduce.summarize import add_cv, to_dataframe
 
 
 def _recs():

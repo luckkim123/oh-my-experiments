@@ -1,4 +1,4 @@
-from omx_core.ingest import IngestResult, SummaryRecord
+from omx_core.ingest import IngestResult
 from omx_core.ingest.eval_summary import EvalSummaryAdapter
 
 

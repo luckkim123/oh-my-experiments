@@ -8,8 +8,7 @@ file data to lose; the rename is the durability unit — critic C2)."""
 import os
 
 import pytest
-
-from omx_core.omx_paths import atomic_path, atomic_dir
+from omx_core.omx_paths import atomic_dir, atomic_path
 
 
 def _trace_fsync_and_replace(monkeypatch):
@@ -88,6 +87,7 @@ def test_tree_ops_alias_swap_still_bespoke_and_pid_tmp(tmp_path):
     # concurrent-aliaser guard no coarse lock covers). Read the source, not a
     # live swap, so this stays a fast source-contract check.
     from pathlib import Path
+
     import omx_core.tree_ops as tree_ops
     src = Path(tree_ops.__file__).read_text()
     # the bespoke swap keeps its own os.replace with a pid-suffixed tmp

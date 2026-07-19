@@ -14,6 +14,8 @@ Two locks, two jobs (D-R4-3, spec 2.1):
 from __future__ import annotations
 
 import fcntl
+import json
+import os
 import time
 from pathlib import Path
 
@@ -46,9 +48,6 @@ def with_file_lock(lock_path, fn, *, timeout_s: float = 5.0, retry_s: float = 0.
         finally:
             fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
-
-import json
-import os
 
 LOCK_STALE_HOURS = 2  # a lease older than this (by armed_at, mtime fallback) is reaped
 

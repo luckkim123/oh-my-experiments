@@ -20,8 +20,11 @@ def _git(cwd, *a):
 def _init_repo(cwd):
     cwd.mkdir(parents=True, exist_ok=True)
     _git(cwd, "init", "-q")
-    _git(cwd, "config", "user.email", "t@t.t"); _git(cwd, "config", "user.name", "t")
-    (cwd / "f").write_text("x"); _git(cwd, "add", "f"); _git(cwd, "commit", "-q", "-m", "c")
+    _git(cwd, "config", "user.email", "t@t.t")
+    _git(cwd, "config", "user.name", "t")
+    (cwd / "f").write_text("x")
+    _git(cwd, "add", "f")
+    _git(cwd, "commit", "-q", "-m", "c")
     return subprocess.run(["git", "-C", str(cwd), "rev-parse", "HEAD"],
                           capture_output=True, text=True).stdout.strip()
 
@@ -141,7 +144,6 @@ def test_queue_launch_warns_on_soft_lead(tmp_path, capsys):
 
 def test_queue_launch_empty_wiki_passes_clean(tmp_path, capsys):
     from omx_core import cli
-    p = _p(tmp_path)
     rc = cli.main(["queue-launch", "--root", str(tmp_path), "--run-id", "run1",
                    "--proposal-id", "20260711-100000-x", "--launch-delta", "d",
                    "--gpu-gate", "g"])

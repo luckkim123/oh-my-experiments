@@ -1,10 +1,9 @@
 import json
 
 import pytest
-
+from omx_core.cli import main
 from omx_core.omx_paths import OmxError, OmxPaths
 from omx_core.seal import check_seal, write_seal
-from omx_core.cli import main
 
 
 def _mk_profile(tmp_path, evaluator="echo '{\"pass\": true}'"):

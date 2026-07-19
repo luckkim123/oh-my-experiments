@@ -349,8 +349,7 @@ def loop_gate(payload):
             # hard_cap), and every self-disarm branch intentionally runs from any
             # session (R3 crash-recovery precedent), so the backstop is allowed to
             # disarm regardless of which session owns the loop.
-            from omx_core.loop import (FAULT_STREAK_DEFAULT,
-                                       PLATEAU_DISCARDS_DEFAULT, loop_health)
+            from omx_core.loop import FAULT_STREAK_DEFAULT, PLATEAU_DISCARDS_DEFAULT, loop_health
             plateau_discards = PLATEAU_DISCARDS_DEFAULT
             fault_streak = FAULT_STREAK_DEFAULT
             try:
@@ -372,7 +371,7 @@ def loop_gate(payload):
             # (normal before the first record). CORRUPT ledger -> count it toward a
             # bounded stop, but FIRST consult the last-healthy mirror (corruption
             # cannot rewind it). Any OTHER exception keeps today's blanket fail-open.
-            from omx_core.ledger import (LedgerCorruptError, read_run_ledger)
+            from omx_core.ledger import LedgerCorruptError, read_run_ledger
             try:
                 health = loop_health(read_run_ledger(paths, env["run_id"]),
                                      plateau_discards=plateau_discards,

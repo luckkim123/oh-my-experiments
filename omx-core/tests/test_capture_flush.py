@@ -44,7 +44,7 @@ def test_stamp_path_appends_ledger_line(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out["stamped"] is True
     ledger = OmxPaths(root=str(tmp_path)).produced_reports_ledger()
-    lines = [json.loads(l) for l in ledger.read_text().splitlines()]
+    lines = [json.loads(ln) for ln in ledger.read_text().splitlines()]
     assert len(lines) == 1
     assert lines[0]["report"] == str(report.resolve())
     assert "stamped_at" in lines[0]
@@ -76,7 +76,7 @@ def _stamped_report_with_ledger(tmp_path) -> Path:
 
 def test_flush_captures_and_truncates(tmp_path, capsys):
     from omx_core.wiki.capture import flush_produced_reports
-    report = _stamped_report_with_ledger(tmp_path)
+    _stamped_report_with_ledger(tmp_path)
     capsys.readouterr()
     paths = OmxPaths(root=str(tmp_path))
     res = flush_produced_reports(paths, now="2026-07-07T12:00:00")

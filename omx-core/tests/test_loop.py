@@ -2,7 +2,6 @@
 import json
 
 import pytest
-
 from omx_core.loop import compute_deadline, deadline_passed, queue_pending_launch, read_pending_launch
 from omx_core.omx_paths import OmxError, OmxPaths
 

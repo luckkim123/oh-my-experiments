@@ -6,7 +6,8 @@ container, IngestResult, so the reduce layer never learns a source format.
 - series:  named time-series arrays (trajectories, training curves) for plots.
 """
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from pathlib import Path
 from typing import Optional
 

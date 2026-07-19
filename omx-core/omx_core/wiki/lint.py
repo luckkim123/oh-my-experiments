@@ -14,9 +14,9 @@ from collections import Counter
 from datetime import datetime
 
 from omx_core.omx_paths import OmxPaths
-from omx_core.wiki.types import WikiError, STATUSES, BLOCKING_STATUSES
 from omx_core.wiki import storage
 from omx_core.wiki.quality import QUALITY_FLOOR
+from omx_core.wiki.types import BLOCKING_STATUSES, STATUSES, WikiError
 
 
 def _parse_iso(value: str) -> datetime | None:

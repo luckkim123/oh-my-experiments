@@ -1,0 +1,13 @@
+# Conservative ruff config: correctness + import sorting only, no style opinions.
+# Matches repo's existing longest-line style (max observed line is 134 chars).
+target-version = "py310"
+line-length = 140
+
+[lint]
+select = [
+    "E4",  # import-related pycodestyle errors
+    "E7",  # statement-related pycodestyle errors
+    "E9",  # runtime errors (syntax, etc.)
+    "F",   # pyflakes (unused imports/vars, undefined names, etc.)
+    "I",   # isort (import sorting)
+]

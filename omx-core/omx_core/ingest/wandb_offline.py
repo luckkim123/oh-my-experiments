@@ -42,8 +42,8 @@ class WandbAdapter(IngestAdapter):
         if not wf.exists():
             raise OmxError(f"wandb offline log not found: {wf}")
         try:
-            from wandb.sdk.internal import datastore
             from wandb.proto import wandb_internal_pb2 as pb
+            from wandb.sdk.internal import datastore
         except ImportError as e:
             raise OmxError(
                 "wandb not installed; `pip install omx-core[analyze]` to ingest wandb logs"

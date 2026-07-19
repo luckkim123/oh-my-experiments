@@ -1,6 +1,5 @@
-import json
 import pytest
-from omx_core.evaluator import parse_evaluator_result, EvaluatorError
+from omx_core.evaluator import EvaluatorError, parse_evaluator_result, run_evaluator
 from omx_core.omx_paths import OmxError
 
 
@@ -54,9 +53,6 @@ def test_bool_score_rejected():
 
 def test_evaluator_error_is_omx_error():
     assert issubclass(EvaluatorError, OmxError)
-
-
-from omx_core.evaluator import run_evaluator
 
 
 def test_run_passes_last_line_only(tmp_path):
@@ -113,7 +109,6 @@ def test_run_record_carries_command_and_stdout(tmp_path):
 
 # --- R4 T9: fault_class on the four error branches (#9) ---
 
-from omx_core.evaluator import run_evaluator
 
 
 def test_fault_class_nonzero_exit(tmp_path):
@@ -189,8 +184,8 @@ def test_eval_error_stub_capture_is_idempotent(tmp_path, capsys):
 def test_eval_error_capture_failure_is_nonfatal(tmp_path, capsys, monkeypatch):
     # a capture exception must NOT change the eval rc (grading never breaks on
     # knowledge plumbing). Poison ingest_knowledge to raise.
-    from omx_core import cli
     import omx_core.wiki.ingest as ingest_mod
+    from omx_core import cli
     prof = tmp_path / ".omx" / "profile"
     prof.mkdir(parents=True)
     (prof / "evaluator.sh").write_text("#!/bin/sh\nexit 3\n")

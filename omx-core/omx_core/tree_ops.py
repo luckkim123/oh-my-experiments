@@ -228,7 +228,7 @@ def codify_tree(base, *, index_root=None, data_root=None) -> tuple:
                   "    levels: []"]
     lines += [
         "run_id:",
-        f"  grammar: \"<label>[_<tag>]_<ts>\"",
+        "  grammar: \"<label>[_<tag>]_<ts>\"",
         f"  ts_format: \"{ts_format}\"",
         f"  tag: {tag}",
     ]
@@ -353,13 +353,13 @@ def set_alias(schema: TreeSchema, base, name, run_spec, *, scope_path=None) -> d
 
 
 def list_aliases(schema: TreeSchema, base) -> list:
-    names = {l.name for l in schema.aliases()}
+    names = {link.name for link in schema.aliases()}
     out = []
-    for l in walk_symlinks(schema, base):
-        if l["name"] in names:
-            out.append({"name": l["name"], "path": str(l["path"]),
-                        "target": str(l["target"]) if l["target"] else None,
-                        "dangling": l["target"] is None})
+    for link in walk_symlinks(schema, base):
+        if link["name"] in names:
+            out.append({"name": link["name"], "path": str(link["path"]),
+                        "target": str(link["target"]) if link["target"] else None,
+                        "dangling": link["target"] is None})
     return out
 
 

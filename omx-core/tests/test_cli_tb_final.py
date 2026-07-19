@@ -4,7 +4,6 @@ reduce-summarize + test_cli_plot's TB-fixture usage."""
 import json
 
 import pytest
-
 from omx_core.cli import main
 
 

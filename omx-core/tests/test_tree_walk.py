@@ -1,6 +1,5 @@
 """Task 2 — generic walker + the spec 2.1 three-clause detection predicate."""
 from omx_core.tree import runs_at_declared_depth, walk_runs, walk_symlinks
-
 from tree_fixtures import build_flat_tree, build_grouped_tree
 
 
@@ -56,7 +55,7 @@ def test_data_tree_leaves_enumerated(tmp_path):
 def test_walk_symlinks_reports_alias_and_train(tmp_path):
     fx = build_grouped_tree(tmp_path)
     links = walk_symlinks(fx["schema"], tmp_path)
-    names = sorted(l["name"] for l in links)
+    names = sorted(link["name"] for link in links)
     assert names == ["latest", "train", "train"]
-    latest = next(l for l in links if l["name"] == "latest")
+    latest = next(link for link in links if link["name"] == "latest")
     assert latest["target"] is not None and latest["target"].name == "alpha_tune2_260602_120000"

@@ -4,8 +4,6 @@ the git-ancestry staleness check. Tests build a tmp git repo with subprocess."""
 import json
 import subprocess
 
-import pytest
-
 from omx_core.lock import acquire_run_lease
 from omx_core.omx_paths import OmxPaths
 
@@ -199,7 +197,8 @@ def test_staleness_escape_flag_skips(tmp_path, capsys):
     subprocess.run(["git", "-C", str(repo), "checkout", "-q", "--orphan", "other"],
                    check=True)
     (repo / "g.txt").write_text("x")
-    _git(repo, "add", "g.txt"); _git(repo, "commit", "-q", "-m", "orphan")
+    _git(repo, "add", "g.txt")
+    _git(repo, "commit", "-q", "-m", "orphan")
     diverged = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
                               capture_output=True, text=True).stdout.strip()
     cli.main(["run-seed", "--run-id", "run1", "--baseline-commit", base,

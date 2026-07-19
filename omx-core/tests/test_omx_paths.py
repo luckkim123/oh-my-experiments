@@ -2,18 +2,25 @@
 
 Claude-free, Isaac-free, profile-free. Pure stdlib + pytest.
 """
-from omx_core.omx_paths import OmxPathError
+from pathlib import Path
+
+import pytest
+from omx_core.omx_paths import (
+    OmxPathError,
+    OmxPaths,
+    Profile,
+    atomic_dir,
+    atomic_path,
+    resolve_session_id,
+    validate_analysis_id,
+    validate_run_id,
+    validate_session_id,
+    validate_token,
+)
 
 
 def test_error_type_is_valueerror_subclass():
     assert issubclass(OmxPathError, ValueError)
-
-
-import pytest
-from omx_core.omx_paths import (
-    Profile, OmxPathError,
-    validate_analysis_id, validate_session_id, validate_run_id, validate_token,
-)
 
 
 @pytest.mark.parametrize("good", ["20260530-143022-compare", "20260101-000000-next"])
@@ -153,8 +160,6 @@ def test_profile_accepts_valid_run_id_regex():
 # =============================================================================
 # Task 3: OmxPaths class — .omx/ getters with 2-tier validation
 # =============================================================================
-from pathlib import Path
-from omx_core.omx_paths import OmxPaths
 
 
 def _paths(tmp_path) -> OmxPaths:
@@ -432,7 +437,6 @@ def test_permanent_tree_rejects_traversal(tmp_path, evil):
 # =============================================================================
 # Task 5: resolve_session_id (B2 precedence) + atomic write helpers
 # =============================================================================
-from omx_core.omx_paths import resolve_session_id, atomic_path, atomic_dir
 
 
 def test_resolve_session_id_prefers_explicit():
@@ -678,8 +682,8 @@ def test_reference_dir_is_packaged(tmp_path):
 
 
 def test_reference_evaluator_rejects_bad_profile(tmp_path):
-    from omx_core.omx_paths import OmxPaths, OmxPathError
     import pytest
+    from omx_core.omx_paths import OmxPathError, OmxPaths
     p = OmxPaths(tmp_path)
     with pytest.raises(OmxPathError):
         p.reference_evaluator("Isaac Lab")  # space -> not a token
@@ -689,8 +693,8 @@ def test_reference_evaluator_loud_fails_when_absent(tmp_path):
     # The committed .sh ships in Task 6. Until then the getter must LOUD-FAIL
     # (not silently return a non-existent path). This is a strict assertion now,
     # and Task 6 re-asserts the resolves-success case once the file exists.
-    from omx_core.omx_paths import OmxPaths, OmxPathError
     import pytest
+    from omx_core.omx_paths import OmxPathError, OmxPaths
     p = OmxPaths(tmp_path)
     ref = p.reference_dir / "isaaclab" / "evaluator.sh"
     if ref.exists():

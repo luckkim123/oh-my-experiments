@@ -4,8 +4,7 @@ import json
 from omx_core.cli import main
 from omx_core.omx_paths import OmxPaths
 from omx_core.tree import load_tree_schema
-
-from tree_fixtures import build_grouped_tree, _mk_run
+from tree_fixtures import build_grouped_tree
 
 
 def test_codify_ignores_nested_manifest_under_a_run(tmp_path, capsys):

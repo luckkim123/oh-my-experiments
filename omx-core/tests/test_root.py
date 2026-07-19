@@ -65,6 +65,7 @@ def test_project_id_identity_prefers_remote(tmp_path):
 
 def test_no_required_root_left_anywhere():
     import argparse
+
     from omx_core.cli import build_parser
 
     def walk(parser):

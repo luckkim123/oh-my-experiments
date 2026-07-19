@@ -12,10 +12,10 @@ from pathlib import Path
 
 from omx_core.omx_paths import OmxPaths, atomic_path
 from omx_core.wiki.types import (
-    WikiError,
-    WikiPage,
     RESERVED_FILES,
     WIKI_SCHEMA_VERSION,
+    WikiError,
+    WikiPage,
 )
 
 _FM_RE = re.compile(r"\A---\n(.*?)\n---\n(.*)\Z", re.DOTALL)
@@ -96,7 +96,7 @@ def serialize_page(page: WikiPage) -> str:
         f"created: {page.created}",
         f"updated: {page.updated}",
         "sources: [" + ", ".join(f'"{_esc(s)}"' for s in page.sources) + "]",
-        "links: [" + ", ".join(f'"{_esc(l)}"' for l in page.links) + "]",
+        "links: [" + ", ".join(f'"{_esc(link)}"' for link in page.links) + "]",
         f"category: {page.category}",
         f"confidence: {page.confidence}",
         f"schemaVersion: {page.schema_version}",
@@ -218,7 +218,7 @@ def update_index(paths: OmxPaths, *, now: str) -> None:
         lines.append(f"## {cat}")
         lines.append("")
         for page in by_cat[cat]:
-            summary = next((l.strip() for l in page.content.split("\n") if l.strip()), "")
+            summary = next((ln.strip() for ln in page.content.split("\n") if ln.strip()), "")
             if len(summary) > 80:
                 summary = summary[:77] + "..."
             lines.append(f"- [{page.title}]({page.slug}) - {summary}")

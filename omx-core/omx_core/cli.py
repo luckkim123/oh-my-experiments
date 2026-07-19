@@ -9,26 +9,30 @@ import json
 import math
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
+
+from omx_core import clock
+from omx_core import integrity as _integrity
+from omx_core.coverage import check_coverage, check_cross_run_refs
+from omx_core.decision import decide_outcome, parse_keep_policy, seed_stats
 
 # numpy/pandas/matplotlib (and the adapter/reduce modules that pull them in)
 # are lazy-imported inside the verbs that actually need them (omx-1 audit fix):
 # metadata-only verbs (doctor, session-id, wiki list) must not pay their ~250ms
 # import cost, which otherwise eats most of the hook backlog-fetch budget.
 from omx_core.evaluator import run_evaluator
-from omx_core.decision import decide_outcome, parse_keep_policy, seed_stats
-from omx_core.omx_paths import OmxError, OmxPaths, validate_token, resolve_session_id, atomic_path
-from omx_core import integrity as _integrity
-from datetime import datetime, timezone
-
-from omx_core.loop import queue_pending_launch, read_pending_launch, deadline_passed, compute_deadline
-from omx_core import clock
-from omx_core.profile import bootstrap_profile, default_metrics
+from omx_core.loop import compute_deadline, deadline_passed, queue_pending_launch, read_pending_launch
+from omx_core.omx_paths import OmxError, OmxPaths, atomic_path, resolve_session_id, validate_token
+from omx_core.profile import bootstrap_profile, default_metrics, load_profile_metrics
 from omx_core.report import parse_findings
-from omx_core.coverage import check_coverage, check_cross_run_refs
-from omx_core.profile import load_profile_metrics
-from omx_core.wiki import ingest as _wiki_ingest, query as _wiki_query, lint as _wiki_lint, storage as _wiki_storage, gc as _wiki_gc
-from omx_core.wiki.types import STATUSES as _WIKI_STATUSES, BLOCKING_STATUSES as _WIKI_BLOCKING_STATUSES
+from omx_core.wiki import gc as _wiki_gc
+from omx_core.wiki import ingest as _wiki_ingest
+from omx_core.wiki import lint as _wiki_lint
+from omx_core.wiki import query as _wiki_query
+from omx_core.wiki import storage as _wiki_storage
+from omx_core.wiki.types import BLOCKING_STATUSES as _WIKI_BLOCKING_STATUSES
+from omx_core.wiki.types import STATUSES as _WIKI_STATUSES
 
 
 def _finite_or_none(x):
@@ -65,8 +69,8 @@ def _resolved_root(args) -> str:
 
 def _adapters():
     """Lazily import + build the format->adapter registry (numpy-backed)."""
-    from omx_core.ingest.eval_summary import EvalSummaryAdapter
     from omx_core.ingest.csv_longform import LongFormCsvAdapter
+    from omx_core.ingest.eval_summary import EvalSummaryAdapter
     from omx_core.ingest.tensorboard import TensorboardAdapter
     from omx_core.ingest.wandb_offline import WandbAdapter
     return {
@@ -79,8 +83,8 @@ def _adapters():
 
 def _ingest(path, fmt, max_scalars=None, max_bytes=None):
     if fmt == "npz":
-        from omx_core.reduce.series import load_npz
         from omx_core.ingest.base import IngestResult
+        from omx_core.reduce.series import load_npz
         arrs = load_npz(path)
         all_keys = set(arrs)
         # only 1-D numeric arrays are plottable series; keep those
@@ -148,7 +152,7 @@ def _cmd_ingest(args) -> int:
 
 
 def _cmd_reduce_summarize(args) -> int:
-    from omx_core.reduce.summarize import to_dataframe, add_cv
+    from omx_core.reduce.summarize import add_cv, to_dataframe
     ms, mb = _resolve_ingest_bounds(args)
     try:
         res = _ingest(args.path, args.format, max_scalars=ms, max_bytes=mb)
@@ -379,8 +383,9 @@ def _cmd_plot(args) -> int:
     matplotlib + scratch-path IO (design D8). Output filename = <metric>__<view>.png.
     """
     import numpy as np
-    from omx_core.reduce.series import downsample
+
     from omx_core.reduce.plot import line_plot
+    from omx_core.reduce.series import downsample
     ms, mb = _resolve_ingest_bounds(args)
     try:
         res = _ingest(args.path, args.format, max_scalars=ms, max_bytes=mb)
@@ -1150,8 +1155,7 @@ def _cmd_loop_health(args) -> int:
     is tripped (the authoritative stop path, D-R4-4). Loud-fails if the ledger
     is absent/corrupt (read_run_ledger)."""
     from omx_core.ledger import read_run_ledger
-    from omx_core.loop import (FAULT_STREAK_DEFAULT, PLATEAU_DISCARDS_DEFAULT,
-                               loop_health)
+    from omx_core.loop import FAULT_STREAK_DEFAULT, PLATEAU_DISCARDS_DEFAULT, loop_health
     paths = OmxPaths(root=_resolved_root(args))
     plateau = PLATEAU_DISCARDS_DEFAULT
     fault = FAULT_STREAK_DEFAULT
@@ -1197,6 +1201,7 @@ def _cmd_run_seed(args) -> int:
     below) is NOT a completed seed: it is treated as absent so the retry can
     claim and actually seed it, instead of being permanently locked out."""
     import os
+
     from omx_core.ledger import _default_ledger, read_run_ledger, seed_ledger
     paths = OmxPaths(root=_resolved_root(args))
     target = paths.ledger_json(args.run_id)
@@ -1367,6 +1372,7 @@ def _cmd_revert_config(args) -> int:
     + the resolved root tree when inside cwd), and prints the plan / applies it.
     Loud-fails: --cwd not a git repo, sha unresolvable, ledger absent."""
     from pathlib import Path as _Path
+
     from omx_core.ledger import read_run_ledger
     from omx_core.revert import apply_revert, plan_revert
     paths = OmxPaths(root=_resolved_root(args))

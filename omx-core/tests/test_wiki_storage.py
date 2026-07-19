@@ -1,8 +1,7 @@
 import pytest
-
 from omx_core.omx_paths import OmxPaths
-from omx_core.wiki.types import WikiPage, WikiError
 from omx_core.wiki import storage
+from omx_core.wiki.types import WikiError, WikiPage
 
 
 def _page(slug="alpha.md", title="Alpha", content="hello body"):

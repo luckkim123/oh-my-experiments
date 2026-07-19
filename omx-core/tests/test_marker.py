@@ -6,10 +6,8 @@ runs/<run_id>/loop-status.json; loop-status folds it into a phase field:
   idle   -> none of the above."""
 import json
 
-import pytest
-
-from omx_core.loop import arm_loop, disarm_loop, mark_loop_done
 from omx_core.lock import acquire_run_lease
+from omx_core.loop import arm_loop, mark_loop_done
 from omx_core.omx_paths import OmxPaths
 
 AWARE = "2026-07-11T10:00:00+00:00"

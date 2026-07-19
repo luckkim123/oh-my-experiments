@@ -1,6 +1,6 @@
 import pytest
-from omx_core.omx_paths import OmxPaths, Profile, OmxError
-from omx_core.profile import bootstrap_profile, load_profile, default_metrics
+from omx_core.omx_paths import OmxError, OmxPaths, Profile
+from omx_core.profile import bootstrap_profile, default_metrics, load_profile
 
 
 def _bootstrap(root):

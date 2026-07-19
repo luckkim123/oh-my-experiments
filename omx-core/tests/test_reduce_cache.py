@@ -1,6 +1,6 @@
 import numpy as np
 from omx_core.omx_paths import OmxPaths
-from omx_core.reduce.cache import write_cache, read_cache
+from omx_core.reduce.cache import read_cache, write_cache
 
 
 def test_read_missing_returns_none(tmp_path):

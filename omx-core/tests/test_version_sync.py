@@ -23,7 +23,8 @@ def test_versions_in_sync():
 
 
 def test_sync_script_is_idempotent(tmp_path):
-    import subprocess, sys
+    import subprocess
+    import sys
     r = subprocess.run([sys.executable, str(REPO / "scripts" / "sync_version.py")],
                        capture_output=True, text=True, cwd=str(REPO))
     assert r.returncode == 0, r.stderr

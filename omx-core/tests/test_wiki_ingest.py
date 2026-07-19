@@ -1,8 +1,7 @@
 import pytest
-
 from omx_core.omx_paths import OmxPaths
-from omx_core.wiki.types import WikiError
 from omx_core.wiki import ingest, storage
+from omx_core.wiki.types import WikiError
 
 
 def test_create_new_page(tmp_path):

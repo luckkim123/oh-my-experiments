@@ -3,7 +3,6 @@ import json
 
 from omx_core.cli import main
 from omx_core.tree_ops import INDEX_MARKER
-
 from tree_fixtures import GROUPED_TREE_YAML, build_grouped_tree
 
 
@@ -22,7 +21,7 @@ def test_index_written_newest_first_with_marker(tmp_path, capsys):
     assert out["action"] == "written" and out["runs"] == 2
     text = (tmp_path / "experiments" / "INDEX.md").read_text()
     assert text.startswith(INDEX_MARKER)
-    rows = [l for l in text.splitlines() if l.startswith("| alpha_")]
+    rows = [ln for ln in text.splitlines() if ln.startswith("| alpha_")]
     assert rows[0].startswith("| alpha_tune2_")     # newest first
     assert "latest" in rows[0]                       # alias mark on the target
 

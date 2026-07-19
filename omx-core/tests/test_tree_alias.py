@@ -2,7 +2,6 @@
 import json
 
 from omx_core.cli import main
-
 from tree_fixtures import GROUPED_TREE_YAML, build_grouped_tree
 
 

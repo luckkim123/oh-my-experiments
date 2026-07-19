@@ -1,6 +1,6 @@
 import pytest
-from omx_core.reduce.promote import promote_plots
 from omx_core.omx_paths import OmxError
+from omx_core.reduce.promote import promote_plots
 
 
 def _png(path, body=b"\x89PNG\r\n\x1a\n0"):

@@ -10,12 +10,15 @@ Wall-clock `now` is injected (no clock here), matching storage/ingest/lint.
 """
 from __future__ import annotations
 
+import re
+import subprocess
 from collections import Counter
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from omx_core.omx_paths import OmxPaths
 from omx_core.wiki import storage
-from omx_core.wiki.types import WikiError, WikiPage, RESERVED_FILES
+from omx_core.wiki.types import RESERVED_FILES, WikiError, WikiPage
 
 
 def _norm_slug(slug: str) -> str:
@@ -29,7 +32,6 @@ class GcPlan:
     deletes: list = field(default_factory=list)          # list[str] slug
     merges: list = field(default_factory=list)           # list[dict] {into:str, from:list[str]}
 
-import re
 
 _FM_RE = re.compile(r"\A---\n(.*?)\n---\n(.*)\Z", re.DOTALL)
 
@@ -126,10 +128,6 @@ def suggest_from_lint(lint_res: dict) -> dict:
             "proposal_skeleton": skeleton}
 
 
-import subprocess
-from pathlib import Path
-
-
 def is_git_tracked(repo_root, file_path) -> bool:
     """True iff `file_path` is a git-tracked file under `repo_root`. No git, no
     repo, or an untracked path all return False (never raises) — the caller turns
@@ -199,9 +197,9 @@ def merge_pages(paths: OmxPaths, *, into: str, from_slugs: list, now: str) -> No
         for s in src.sources:
             if s not in sources:
                 sources.append(s)
-        for l in src.links:
-            if l not in links:
-                links.append(l)
+        for link in src.links:
+            if link not in links:
+                links.append(link)
         if _CONF_RANK.get(src.confidence, 2) > _CONF_RANK.get(confidence, 2):
             confidence = src.confidence
         if _STATUS_RANK.get(src.status, 0) > _STATUS_RANK.get(status, 0):

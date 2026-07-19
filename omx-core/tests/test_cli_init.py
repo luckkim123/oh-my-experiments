@@ -1,9 +1,7 @@
 """CLI-level tests for `omx init` (build #3 task 3)."""
 import json
 
-import pytest
 import yaml
-
 from omx_core.cli import main
 from omx_core.omx_paths import OmxPaths
 

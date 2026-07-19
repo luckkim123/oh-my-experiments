@@ -6,8 +6,9 @@ headless (no display). Design 5: cap width so a vision-read PNG stays small.
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")          # MUST precede pyplot import (headless Docker)
-import matplotlib.pyplot as plt   # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
 
 _DPI = 100
 
