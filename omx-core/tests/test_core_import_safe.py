@@ -16,6 +16,21 @@ def test_core_imports_without_eager_heavy_deps():
     assert "OK" in r.stdout
 
 
+def test_cli_import_alone_skips_scientific_stack():
+    # omx-1 audit fix: metadata-only verbs (doctor, session-id, wiki list) must
+    # not pay numpy/pandas/matplotlib's import cost — those are lazy-imported
+    # inside the ingest/reduce/plot verbs that actually need them.
+    code = (
+        "import omx_core.cli, sys; "
+        "heavy = {'numpy', 'pandas', 'matplotlib'} & set(sys.modules); "
+        "assert not heavy, f'eagerly imported: {heavy}'; "
+        "print('OK')"
+    )
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert "OK" in r.stdout
+
+
 def test_loop_symbols_exported():
     import omx_core
     for name in ("compute_deadline", "deadline_passed",
