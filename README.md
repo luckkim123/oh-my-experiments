@@ -287,7 +287,7 @@ they never edit anything and return a verdict the calling session applies:
 
 ```
 oh-my-experiments/
-├── .claude-plugin/     # plugin.json (4 skills, 5 hooks) + marketplace.json
+├── .claude-plugin/     # plugin.json (4 skills, 5 hooks)
 ├── skills/             # exp-init / exp-analyze / exp-design / exp-loop
 ├── agents/             # 4 read-only review agents (report/proposal/campaign/wiki)
 ├── hooks/              # run_hook.py dispatch runner + handlers.py
