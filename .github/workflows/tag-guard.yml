@@ -1,0 +1,24 @@
+name: Tag Guard
+
+# Separate from ci.yml on purpose (another pending branch touches that file).
+# actions/checkout@v4 does NOT fetch tags by default — that's exactly how a
+# release commit can land on main with its git tag never pushed and still go
+# green. fetch-tags + fetch-depth: 0 make the tag surface actually reachable.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tag-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pytest
+      - run: python3 -m pytest omx-core/tests/test_tag_drift.py -q
