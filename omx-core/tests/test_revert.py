@@ -98,6 +98,19 @@ def test_apply_reverts_only_planned_paths(tmp_path):
     assert (repo / "config.yaml").read_text() == "lr: 0.001\n"  # back to base
 
 
+def test_apply_revert_failed_checkout_loud_fails(tmp_path):
+    # `git checkout <sha> -- <path>` fails (non-zero rc) for a path git has
+    # never heard of at that sha. This is the strict gate the module exists
+    # for: a failed checkout must raise, never return as if it succeeded.
+    repo = tmp_path / "proj"
+    base = _init_repo(repo)
+    with pytest.raises(OmxError) as ei:
+        apply_revert(str(repo), base, ["does/not/exist.txt"])
+    msg = str(ei.value)
+    assert "git checkout" in msg
+    assert base in msg
+
+
 # --- CLI: dry-run default / approve flag ---
 
 def _seed(tmp_path, base, last_kept=None):

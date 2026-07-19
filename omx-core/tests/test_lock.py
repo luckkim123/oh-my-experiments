@@ -259,3 +259,61 @@ def test_release_unheld_returns_false(tmp_path):
 def test_read_run_lease_absent_is_none(tmp_path):
     p = OmxPaths(root=str(tmp_path))
     assert read_run_lease(p, "run1") is None
+
+
+def test_acquire_stale_reap_tolerates_reaper_race_and_reclaim_race(tmp_path, monkeypatch):
+    # Two overlapping races on the stale-reap path (lines 144-156):
+    #   (a) our lock_path.unlink() raises FileNotFoundError - a concurrent
+    #       reaper already removed the stale lease - must be swallowed, not
+    #       propagate.
+    #   (b) our re-create then hits FileExistsError because a concurrent
+    #       session won the re-create race first - must surface as an OmxError
+    #       naming that winning session, not an unhandled FileExistsError.
+    import pathlib
+    from pathlib import Path
+
+    import omx_core.lock as lock_mod
+
+    p = OmxPaths(root=str(tmp_path))
+    old_now = "2026-07-11T00:00:00+00:00"
+    acquire_run_lease(p, "run1", session_id="sess-old", now_iso=old_now)
+    lock_path = p.loop_lock("run1")
+
+    real_unlink = pathlib.Path.unlink
+    unlink_calls = {"n": 0}
+
+    def fake_unlink(self, *a, **kw):
+        if self == lock_path and unlink_calls["n"] == 0:
+            unlink_calls["n"] += 1
+            # actually remove it (mimicking the concurrent reaper truly
+            # having won) then report it as already-gone, same as a real
+            # ENOENT would to the caller.
+            real_unlink(self, *a, **kw)
+            raise FileNotFoundError()
+        return real_unlink(self, *a, **kw)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", fake_unlink)
+
+    real_write = lock_mod._write_lease
+    write_calls = {"n": 0}
+
+    def fake_write(path_, payload_):
+        write_calls["n"] += 1
+        if write_calls["n"] == 1:
+            # the initial claim attempt (line 120): the seeded stale lease is
+            # still on disk at this point, so this must behave exactly like
+            # the real O_EXCL create and raise FileExistsError.
+            raise FileExistsError()
+        # the reclaim attempt after reap (line 150): a concurrent session
+        # wins the re-create race first.
+        Path(path_).write_text(json.dumps({"session_id": "winner",
+                                            "armed_at": old_now}))
+        raise FileExistsError()
+
+    monkeypatch.setattr(lock_mod, "_write_lease", fake_write)
+
+    with pytest.raises(OmxError) as ei:
+        acquire_run_lease(p, "run1", session_id="me", now_iso=AWARE_NOW)
+    assert "re-claimed concurrently by 'winner'" in str(ei.value)
+    assert unlink_calls["n"] == 1
+    assert write_calls["n"] == 2

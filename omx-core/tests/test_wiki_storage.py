@@ -153,3 +153,17 @@ def test_legacy_frontmatter_parses_to_status_none():
     parsed = storage.parse_page("alpha.md", storage.serialize_page(_page()))
     assert parsed.status is None
     assert parsed.blocked_on is None
+
+
+def test_update_index_skips_corrupt_page_without_crashing(tmp_path):
+    # One page with no '---' frontmatter block must not abort the whole index
+    # rebuild for every OTHER valid page (comment at storage.py update_index:
+    # "corrupt page: skip in the catalog ... never crash index").
+    p = OmxPaths(root=tmp_path)
+    storage.write_page(p, _page(slug="alpha.md", title="Alpha", content="alpha summary line"),
+                       now="2026-05-31T10:00:00")
+    p.wiki_page("broken").write_text("not a frontmatter page at all", encoding="utf-8")
+    storage.update_index(p, now="2026-05-31T10:00:00")
+    index = p.wiki_index().read_text(encoding="utf-8")
+    assert "[Alpha](alpha.md) - alpha summary line" in index
+    assert "broken" not in index
