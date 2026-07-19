@@ -45,3 +45,20 @@ def test_doctor_reports_ladder_fields(tmp_path):
     assert out["resolved_root"] == str(tmp_path)
     assert out["root_stage"] == "explicit"
     assert out["tree_yaml_present"] is False
+
+
+def test_doctor_python_floor_check_pass_on_current_interpreter():
+    # omx-3 fix: doctor must compare the running interpreter against
+    # requires-python, not just report python_version with no verdict.
+    out = run_doctor()
+    assert out["requires_python"] == ">=3.10"
+    assert out["python_ok"] is True
+    assert out["python_check"].startswith("PASS")
+
+
+def test_python_floor_ok_parses_and_compares():
+    from omx_core.doctor import _python_floor_ok
+    assert _python_floor_ok(">=3.99") is False  # well above any real interpreter
+    assert _python_floor_ok(">=3.0") is True
+    assert _python_floor_ok(None) is None
+    assert _python_floor_ok("some non-standard specifier") is None
