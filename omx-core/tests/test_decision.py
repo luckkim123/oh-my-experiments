@@ -128,3 +128,67 @@ def test_error_note_without_fault_class_is_stable():
     d = decide_outcome("pass_only", None, _eval("error", parse_error="x"))
     # no fault_class present -> note still reads sensibly (no "(None)")
     assert "(None)" not in d["notes"][0]
+
+
+# --- opt-in multi-seed significance gate (score_std/score_n on evaluation) ---
+
+def test_seed_noise_winner_rejected_by_gate():
+    # a bare '>' would keep this (0.51 > 0.5): the "improvement" is well inside
+    # one seed std of noise, so the significance gate must reject it.
+    d = decide_outcome("score_improvement", 0.5,
+                       _eval("pass", **{"pass": True, "score": 0.51,
+                                        "score_std": 0.2, "score_n": 5}))
+    assert d["decision"] == "discard"
+    assert "seed-noise gate" in d["decision_reason"]
+
+
+def test_genuine_improvement_accepted_by_gate():
+    # improvement (1.5) comfortably clears SEED_GATE_K (2.0) * score_std (0.1) = 0.2
+    d = decide_outcome("score_improvement", 0.5,
+                       _eval("pass", **{"pass": True, "score": 2.0,
+                                        "score_std": 0.1, "score_n": 5}))
+    assert d["decision"] == "keep"
+    assert d["keep"] is True
+    assert "seed-noise gate" in d["decision_reason"]
+
+
+def test_seed_gate_n_equal_1_falls_back_to_bare_compare():
+    # n=1: no variance to gate on -> old bare '>' behavior, unchanged
+    d = decide_outcome("score_improvement", 0.5,
+                       _eval("pass", **{"pass": True, "score": 0.51,
+                                        "score_std": 0.0, "score_n": 1}))
+    assert d["decision"] == "keep"
+    assert "seed-noise gate" not in d["decision_reason"]
+
+
+def test_seed_gate_zero_variance_falls_back_to_bare_compare():
+    # score_std == 0 despite n>1 (identical scores every seed) -> bare compare
+    d = decide_outcome("score_improvement", 0.5,
+                       _eval("pass", **{"pass": True, "score": 0.51,
+                                        "score_std": 0.0, "score_n": 5}))
+    assert d["decision"] == "keep"
+    assert "seed-noise gate" not in d["decision_reason"]
+
+
+def test_seed_gate_absent_fields_unchanged_single_seed_path():
+    # no score_std/score_n at all (the default, single-run path) -> identical
+    # to pre-existing behavior
+    d = decide_outcome("score_improvement", 0.5, _eval("pass", **{"pass": True, "score": 0.51}))
+    assert d["decision"] == "keep"
+    assert "seed-noise gate" not in d["decision_reason"]
+
+
+def test_seed_stats_mean_and_std():
+    from omx_core.decision import seed_stats
+    mean, std, n = seed_stats([1.0, 2.0, 3.0])
+    assert mean == 2.0
+    assert std == pytest.approx(0.8164965809277260)
+    assert n == 3
+
+
+def test_seed_stats_single_score_zero_std():
+    from omx_core.decision import seed_stats
+    mean, std, n = seed_stats([4.0])
+    assert mean == 4.0
+    assert std == 0.0
+    assert n == 1
