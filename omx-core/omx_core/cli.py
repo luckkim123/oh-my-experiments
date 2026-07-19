@@ -16,7 +16,7 @@ from pathlib import Path
 # metadata-only verbs (doctor, session-id, wiki list) must not pay their ~250ms
 # import cost, which otherwise eats most of the hook backlog-fetch budget.
 from omx_core.evaluator import run_evaluator
-from omx_core.decision import decide_outcome, parse_keep_policy
+from omx_core.decision import decide_outcome, parse_keep_policy, seed_stats
 from omx_core.omx_paths import OmxError, OmxPaths, validate_token, resolve_session_id, atomic_path
 from omx_core import integrity as _integrity
 from datetime import datetime, timezone
@@ -234,6 +234,37 @@ def _cmd_profile_seal(args) -> int:
     return 0
 
 
+def _aggregate_seed_evaluations(recs: list) -> dict:
+    """Combine N per-seed run_evaluator records (N>=2) into one evaluation dict
+    for decide_outcome's opt-in significance gate (--seeds).
+
+    Any per-seed error -> aggregate status=error (can't trust seed-noise stats
+    built on a broken run; surfaces the first error verbatim). Any per-seed
+    fail -> aggregate status=fail (can't cherry-pick only the passing seeds).
+    All pass with a numeric score on every seed -> score becomes the mean and
+    score_std/score_n/seed_scores are attached (stdlib statistics via
+    decision.seed_stats, the add_cv mean+std convention without pandas). All
+    pass but at least one seed has no score -> scoreless, same as a single
+    run without a score (decide_outcome's existing 'ambiguous' branch)."""
+    errored = next((r for r in recs if r["status"] == "error"), None)
+    if errored is not None:
+        return dict(errored)
+    failed = next((r for r in recs if not r.get("pass")), None)
+    if failed is not None:
+        return dict(failed)
+    out = dict(recs[-1])
+    scores = [r.get("score") for r in recs]
+    if all(isinstance(s, (int, float)) and not isinstance(s, bool) for s in scores):
+        mean, std, n = seed_stats(scores)
+        out["score"] = mean
+        out["score_std"] = std
+        out["score_n"] = n
+        out["seed_scores"] = scores
+    else:
+        out.pop("score", None)
+    return out
+
+
 def _cmd_eval(args) -> int:
     """Run an evaluator command, print its contract record (+ optional decision).
 
@@ -243,6 +274,11 @@ def _cmd_eval(args) -> int:
     embeds a 'decision' block (B5 coupling visible from the CLI). With --root,
     preflights the profile seal (#0) BEFORE running anything: rc 2 if the sealed
     evaluator/launch files were modified since the last `omx profile-seal`.
+
+    --seeds N (opt-in, N>=2): runs --command N times instead of once and gates
+    on mean±std across seeds (decide_outcome's significance gate) instead of a
+    single lucky/unlucky draw. Default (no --seeds) is unchanged: one run, bare
+    score comparison — this flag adds a path, it doesn't touch the old one.
     """
     from omx_core.seal import check_seal
     if args.root:
@@ -257,7 +293,14 @@ def _cmd_eval(args) -> int:
     else:
         print("WARNING: seal check skipped (no --root)", file=sys.stderr)
 
-    rec = run_evaluator(args.command, cwd=args.cwd or os.getcwd(), timeout=args.timeout)
+    if args.seeds is not None and args.seeds < 1:
+        raise SystemExit(f"--seeds must be >= 1, got {args.seeds}")
+    if args.seeds and args.seeds > 1:
+        recs = [run_evaluator(args.command, cwd=args.cwd or os.getcwd(), timeout=args.timeout)
+                for _ in range(args.seeds)]
+        rec = _aggregate_seed_evaluations(recs)
+    else:
+        rec = run_evaluator(args.command, cwd=args.cwd or os.getcwd(), timeout=args.timeout)
     out = dict(rec)
     if args.keep_policy is not None:
         try:
@@ -1769,6 +1812,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="pass_only | score_improvement; when set, embeds a decide_outcome block")
     pe.add_argument("--last-kept-score", type=float, default=None, dest="last_kept_score",
                     help="prior baseline score for score_improvement comparison")
+    pe.add_argument("--seeds", type=int, default=None,
+                    help="opt-in: run --command this many times (N>=2) and gate "
+                         "keep on mean±std across seeds instead of one score "
+                         "(decide_outcome's SEED_GATE_K significance gate)")
     pe.add_argument("--root", default=None, help="optional .omx anchor; enables the profile seal preflight (#0)")
     pe.set_defaults(func=_cmd_eval)
 
