@@ -95,6 +95,24 @@ _BACKLOG_FETCH_TIMEOUT_S = 1.2
 _OPEN_STATUSES = ("needs-experiment", "needs-apply-before-retrain")
 
 
+def _resolve_backlog_root(payload) -> str:
+    """Resolve the anchor for the backlog pre-fetch ONLY (omx-2 fix).
+    Raises when the payload cwd is missing/empty OR when the #13 ladder never
+    anchors (stage == "cwd") — resolve_omx_root itself never raises (root.py:36
+    always falls back at least to cwd), so THIS caller treats that weakest
+    fallback as "no omx root" and short-circuits before shelling out `omx wiki
+    list` against a bogus root. _omx_root (shared by the other handlers) stays
+    lenient on purpose — see its docstring."""
+    from omx_core.root import resolve_omx_root
+    cwd = payload.get("cwd")
+    if not isinstance(cwd, str) or not cwd:
+        raise ValueError("hook payload carries no usable cwd")
+    root, stage = resolve_omx_root(cwd=cwd)
+    if stage == "cwd":
+        raise ValueError(f"no omx root anchor found for cwd {cwd!r}")
+    return str(root)
+
+
 def _fetch_open_backlog(payload):
     """Pre-fetch the LIVE open actionable backlog and format it as an unmissable
     injected block. Turns the advisory 'go run omx wiki list' pointer into
@@ -115,7 +133,7 @@ def _fetch_open_backlog(payload):
         import subprocess
 
         try:
-            root = _omx_root(payload)  # raises if the payload cwd is not an omx project
+            root = _resolve_backlog_root(payload)
         except Exception:
             return ""  # not an omx project — silence is correct
         try:
@@ -174,12 +192,18 @@ def route_emit(payload):
 # --- shared root resolution for omx_core-backed handlers ---------------------
 def _omx_root(payload) -> str:
     """Resolve the .omx anchor from the hook payload's cwd via the #13 ladder.
-    Raises on failure — callers are fail-open and treat any raise as 'allow'."""
+    Raises ValueError ONLY when the payload cwd is missing/empty — resolve_omx_root
+    itself never raises (root.py:36 always falls back at least to cwd), so an
+    unanchored cwd (stage == "cwd") is NOT an error here; it is returned like any
+    other resolved root. A caller that must distinguish "genuinely no omx
+    project" from "weakest-signal cwd fallback" needs the stage too (see
+    _fetch_open_backlog, which checks it explicitly rather than relying on this
+    helper to raise). Callers are fail-open and treat any raise as 'allow'."""
     from omx_core.root import resolve_omx_root
     cwd = payload.get("cwd")
     if not isinstance(cwd, str) or not cwd:
         raise ValueError("hook payload carries no usable cwd")
-    root, _source = resolve_omx_root(cwd=cwd)
+    root, _stage = resolve_omx_root(cwd=cwd)
     return str(root)
 
 

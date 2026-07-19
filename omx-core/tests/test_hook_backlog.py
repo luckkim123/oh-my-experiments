@@ -42,7 +42,7 @@ def _fake_run(pages, returncode=0, stdout=None):
 
 def test_backlog_happy_path_formats_both_statuses(monkeypatch):
     mod = _load_handlers()
-    monkeypatch.setattr(mod, "_omx_root", lambda p: "/fake/root")
+    monkeypatch.setattr(mod, "_resolve_backlog_root", lambda p: "/fake/root")
     monkeypatch.setattr(subprocess, "run", _fake_run([
         {"slug": "gate_b.md", "status": "needs-apply-before-retrain", "blocked_on": "m4 remeasure"},
         {"slug": "lead_a.md", "status": "needs-experiment", "blocked_on": None},
@@ -60,7 +60,7 @@ def test_backlog_happy_path_formats_both_statuses(monkeypatch):
 
 def test_backlog_empty_pages_returns_empty(monkeypatch):
     mod = _load_handlers()
-    monkeypatch.setattr(mod, "_omx_root", lambda p: "/fake/root")
+    monkeypatch.setattr(mod, "_resolve_backlog_root", lambda p: "/fake/root")
     monkeypatch.setattr(subprocess, "run", _fake_run([]))
     assert mod._fetch_open_backlog({"cwd": "/fake/root"}) == ""
 
@@ -70,7 +70,7 @@ def test_backlog_nonzero_rc_emits_visible_warning(monkeypatch):
     # silently dropped backlog re-arms the 2026-07-15 stranded-instruction
     # incident (open leads exist but vanish with zero signal).
     mod = _load_handlers()
-    monkeypatch.setattr(mod, "_omx_root", lambda p: "/fake/root")
+    monkeypatch.setattr(mod, "_resolve_backlog_root", lambda p: "/fake/root")
     monkeypatch.setattr(subprocess, "run", _fake_run(
         [{"slug": "x.md", "status": "needs-experiment"}], returncode=2))
     out = mod._fetch_open_backlog({"cwd": "/fake/root"})
@@ -80,7 +80,7 @@ def test_backlog_nonzero_rc_emits_visible_warning(monkeypatch):
 
 def test_backlog_subprocess_timeout_emits_visible_warning(monkeypatch):
     mod = _load_handlers()
-    monkeypatch.setattr(mod, "_omx_root", lambda p: "/fake/root")
+    monkeypatch.setattr(mod, "_resolve_backlog_root", lambda p: "/fake/root")
 
     def boom(cmd, **kwargs):
         raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 0))
@@ -93,7 +93,7 @@ def test_backlog_wrong_shape_json_emits_visible_warning(monkeypatch):
     # Valid JSON with the wrong shape ({"pages": null}) must hit the visible
     # WARN path too, not slip past json.loads into the silent outer catch.
     mod = _load_handlers()
-    monkeypatch.setattr(mod, "_omx_root", lambda p: "/fake/root")
+    monkeypatch.setattr(mod, "_resolve_backlog_root", lambda p: "/fake/root")
     monkeypatch.setattr(subprocess, "run", _fake_run([], stdout='{"pages": null}'))
     out = mod._fetch_open_backlog({"cwd": "/fake/root"})
     assert "WARN" in out and "<omx-open-backlog>" in out
@@ -104,7 +104,7 @@ def test_backlog_unparseable_stdout_emits_visible_warning(monkeypatch):
     # WARN, cache-vs-repo output-shape skew) previously erased the entire injected
     # backlog with zero signal. Must now degrade to the visible WARN block.
     mod = _load_handlers()
-    monkeypatch.setattr(mod, "_omx_root", lambda p: "/fake/root")
+    monkeypatch.setattr(mod, "_resolve_backlog_root", lambda p: "/fake/root")
     monkeypatch.setattr(subprocess, "run",
                         _fake_run([], stdout="DeprecationWarning: ...\n{\"pages\": []}"))
     out = mod._fetch_open_backlog({"cwd": "/fake/root"})
@@ -113,8 +113,21 @@ def test_backlog_unparseable_stdout_emits_visible_warning(monkeypatch):
 
 def test_backlog_no_omx_root_fail_open():
     mod = _load_handlers()
-    # /  has no .omx anchor: _omx_root raises inside, fetch degrades to ""
+    # /  has no .omx anchor: _resolve_backlog_root raises inside, fetch degrades to ""
     assert mod._fetch_open_backlog({"cwd": "/"}) == ""
+
+
+def test_backlog_unanchored_cwd_short_circuits_before_subprocess(tmp_path, monkeypatch):
+    """omx-2 regression: stage == "cwd" (no anchor found by the #13 ladder) must
+    short-circuit BEFORE the subprocess ever runs — not silently shell out
+    `omx wiki list` against a bogus root (handlers.py:175-183 vs root.py:36,
+    which never raises)."""
+    mod = _load_handlers()
+
+    def boom(cmd, **kwargs):
+        raise AssertionError("subprocess.run must not be called for an unanchored cwd")
+    monkeypatch.setattr(subprocess, "run", boom)
+    assert mod._fetch_open_backlog({"cwd": str(tmp_path)}) == ""
 
 
 def test_backlog_fetch_fits_sigalrm_budget():
