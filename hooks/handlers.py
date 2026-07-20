@@ -9,7 +9,7 @@ intentional friction on one-character fixes is accepted (that WAS the incident).
 Fail-open: unparseable input or an unavailable omx_core -> allow (None).
 """
 import re
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 _GATED_NAMES = frozenset({"report.md", "report.ko.md", "manifest.json"})
 
@@ -178,7 +178,69 @@ def _fetch_open_backlog(payload):
         return ""  # last-resort fail-open: never break the per-prompt route hook
 
 
-def route_emit(payload):
+# --- route_emit relevance gate (wave-17) -------------------------------------
+# High-specificity experiment-domain tokens only. Deliberately excludes bare
+# run/report/analyze (다의성 심각 — "run the tests"/"report a bug" false-positive;
+# run is especially risky) — only verb-prefixed skill names (exp-analyze etc.)
+# are included. 리포트/report stays excluded too (boundary call, spec §3.3/§5):
+# marker covers the in-project case, keeping the out-of-project miss rare.
+_CJK_TOKENS_EXP = ("실험", "런", "훈련", "학습 런", "재현", "퇴행", "프로파일")
+_ASCII_TOKENS_EXP = (
+    "omx", "experiment", "experiments", "exp-analyze", "exp-design", "exp-loop",
+    "exp-init", "metrics.yaml", "wandb", "tensorboard", "checkpoint", "eval",
+    "regress", "hyperparam", "proposal",
+)
+_EXP_ASCII_RE = re.compile(r"\b(?:" + "|".join(re.escape(t) for t in _ASCII_TOKENS_EXP) + r")\b")
+
+
+def _has_omx_marker(cwd) -> bool:
+    """Checkpoint-gate marker probe: cheap pathlib .omx/ check ONLY -- no
+    subprocess, unlike _fetch_open_backlog's resolve_omx_root ladder (which
+    shells out to git). Avoids paying that cost on every prompt."""
+    return isinstance(cwd, str) and bool(cwd) and (Path(cwd) / ".omx").is_dir()
+
+
+def is_exp_related(prompt, cwd) -> bool:
+    """True when the .omx/ marker is present, prompt is missing/not-a-string
+    (fail-toward-inject), or any experiment-domain token matches. Never raises
+    -- an internal error (marker probe included) also fails toward injection."""
+    try:
+        if _has_omx_marker(cwd):
+            return True
+        if not isinstance(prompt, str):
+            return True
+        lowered = prompt.lower()
+        if any(tok in lowered for tok in _CJK_TOKENS_EXP):
+            return True
+        return bool(_EXP_ASCII_RE.search(lowered))
+    except Exception:
+        return True  # gate exception -> inject
+
+
+def _route_gate_mode() -> str:
+    import os
+    try:
+        v = os.environ.get("OMX_ROUTE_GATE", "off").strip().lower()
+    except Exception:
+        return "off"
+    return v if v in ("off", "observe", "on") else "off"
+
+
+def _log_would_suppress_route(prompt) -> None:
+    """observe-mode audit trail (rollout §6): one stderr line per turn the gate
+    would have suppressed. Best-effort — never raises, never touches stdout."""
+    try:
+        import hashlib
+        import json as _json
+        import sys
+        digest = (hashlib.sha256(prompt.encode("utf-8", "replace")).hexdigest()[:16]
+                  if isinstance(prompt, str) else "none")
+        sys.stderr.write(_json.dumps({"decision": "would-suppress", "prompt_hash": digest}) + "\n")
+    except Exception:
+        pass
+
+
+def _assemble_route_context(payload):
     ctx = _ROUTE_CHECKPOINT
     backlog = _fetch_open_backlog(payload)
     if backlog:
@@ -187,6 +249,22 @@ def route_emit(payload):
         "hookEventName": "UserPromptSubmit",
         "additionalContext": ctx,
     }}
+
+
+def route_emit(payload):
+    mode = _route_gate_mode()
+    if mode == "off":
+        return _assemble_route_context(payload)  # today's unconditional inject, unchanged
+    prompt = payload.get("prompt") if isinstance(payload, dict) else None
+    cwd = payload.get("cwd") if isinstance(payload, dict) else None
+    relevant = is_exp_related(prompt, cwd)
+    if mode == "observe":
+        if not relevant:
+            _log_would_suppress_route(prompt)
+        return _assemble_route_context(payload)  # observe never suppresses — logging only
+    if not relevant:
+        return None  # mode == "on": enforce
+    return _assemble_route_context(payload)
 
 
 # --- shared root resolution for omx_core-backed handlers ---------------------
