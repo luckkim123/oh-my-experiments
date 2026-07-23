@@ -89,6 +89,8 @@ _ROUTE_CHECKPOINT = (
 # (filtered locally by status) must fit inside run_hook.py's default 3s SIGALRM
 # budget for route_emit (1.2s < 3s); pinned by test_hook_backlog.py. The cost is
 # startup-bound (~0.4s wall), not corpus-bound (parsing 253 pages is ~3ms).
+# The campaign-drift check (_fetch_campaign_drift) is in-process file I/O, no
+# subprocess — it shares this same 3s SIGALRM budget without its own timeout.
 _BACKLOG_FETCH_TIMEOUT_S = 1.2
 
 #: Injection order: soft leads first, blocking gates last (closest to the ack).
@@ -178,6 +180,47 @@ def _fetch_open_backlog(payload):
         return ""  # last-resort fail-open: never break the per-prompt route hook
 
 
+def _fetch_campaign_drift(payload):
+    """Conditional campaign-drift block (v0.8.0): empty string unless drift
+    exists — the zero-tax-when-healthy pattern (cf. oms scholar_resume_emit).
+    In-process lazy import, pure file I/O (no subprocess); ANY failure —
+    omx_core absent (poison-import contract), no root anchor, no tree.yaml,
+    yaml missing, schema error — fails open to ""."""
+    try:
+        root = _resolve_backlog_root(payload)
+    except Exception:
+        return ""
+    try:
+        from omx_core.campaign import campaign_drift
+        from omx_core.omx_paths import OmxPaths
+        from omx_core.tree import load_tree_schema
+        paths = OmxPaths(root=root)
+        tree_fp = paths.tree_yaml()
+        if not tree_fp.is_file():
+            return ""
+        drift = campaign_drift(paths, load_tree_schema(tree_fp), Path(root))
+    except Exception:
+        return ""
+    if drift.get("ok", True):
+        return ""
+    lines = ["<omx-campaign-drift>"]
+    unreg = [d["group"] for d in drift.get("unregistered", [])]
+    empty = [d["group"] for d in drift.get("empty_ledger", [])]
+    if unreg:
+        shown = ", ".join(unreg[:5]) + (" ..." if len(unreg) > 5 else "")
+        lines.append(f"runs on disk but NO campaign entry: {shown}")
+    if empty:
+        shown = ", ".join(empty[:5]) + (" ..." if len(empty) > 5 else "")
+        lines.append(f"campaign ledger EMPTY despite runs on disk: {shown}")
+    lines.append(
+        "Campaign state is the machine answer to 'what is done and what is "
+        "left'. Fix once: `omx campaign-drift --adopt` (or `omx campaign-init "
+        "--id <group>` per group); report-coverage/queue-launch keep it alive "
+        "automatically afterwards.")
+    lines.append("</omx-campaign-drift>")
+    return "\n".join(lines)
+
+
 # --- route_emit relevance gate (wave-17) -------------------------------------
 # High-specificity experiment-domain tokens only. Deliberately excludes bare
 # run/report/analyze (다의성 심각 — "run the tests"/"report a bug" false-positive;
@@ -245,6 +288,9 @@ def _assemble_route_context(payload):
     backlog = _fetch_open_backlog(payload)
     if backlog:
         ctx = ctx + "\n\n" + backlog
+    drift = _fetch_campaign_drift(payload)
+    if drift:
+        ctx = ctx + "\n\n" + drift
     return {"hookSpecificOutput": {
         "hookEventName": "UserPromptSubmit",
         "additionalContext": ctx,
