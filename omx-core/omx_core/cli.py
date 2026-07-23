@@ -1764,6 +1764,30 @@ def _cmd_campaign_status(args) -> int:
     return 0
 
 
+def _cmd_program_init(args) -> int:
+    from omx_core.campaign import init_program
+    campaigns = [c.strip() for c in args.campaigns.split(",") if c.strip()]
+    try:
+        header = init_program(OmxPaths(root=_resolved_root(args)), args.id,
+                              campaigns, now=clock.now_iso())
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(header))
+    print("note: PLAN.md is not generated — move the program narrative into "
+          "place with git mv (see README: program layer)", file=sys.stderr)
+    return 0
+
+
+def _cmd_program_status(args) -> int:
+    from omx_core.campaign import program_status
+    try:
+        print(json.dumps(program_status(OmxPaths(root=_resolved_root(args)),
+                                        args.id)))
+    except OmxError as e:
+        raise SystemExit(str(e))
+    return 0
+
+
 def _cmd_campaign_list(args) -> int:
     from omx_core.campaign import list_campaigns
     print(json.dumps({"campaigns": list_campaigns(OmxPaths(root=_resolved_root(args)))}))
@@ -2301,6 +2325,20 @@ def build_parser() -> argparse.ArgumentParser:
     pcd.add_argument("--adopt", action="store_true",
                      help="init missing campaigns + note-adopt empty ledgers")
     pcd.set_defaults(func=_cmd_campaign_drift)
+
+    ppi = sub.add_parser("program-init", help="create .omx/programs/<id>/ "
+                         "(program.json header; PLAN.md arrives via git mv)")
+    ppi.add_argument("--id", required=True)
+    ppi.add_argument("--campaigns", required=True,
+                     help="comma-separated member campaign ids")
+    ppi.add_argument("--root", default=None)
+    ppi.set_defaults(func=_cmd_program_init)
+
+    pps = sub.add_parser("program-status", help="aggregate member campaigns "
+                         "into one cross-group program view")
+    pps.add_argument("--id", default=None)
+    pps.add_argument("--root", default=None)
+    pps.set_defaults(func=_cmd_program_status)
 
     return p
 
