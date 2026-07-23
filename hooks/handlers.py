@@ -199,26 +199,26 @@ def _fetch_campaign_drift(payload):
         if not tree_fp.is_file():
             return ""
         drift = campaign_drift(paths, load_tree_schema(tree_fp), Path(root))
+        if drift.get("ok", True):
+            return ""
+        lines = ["<omx-campaign-drift>"]
+        unreg = [d["group"] for d in drift.get("unregistered", [])]
+        empty = [d["group"] for d in drift.get("empty_ledger", [])]
+        if unreg:
+            shown = ", ".join(unreg[:5]) + (" ..." if len(unreg) > 5 else "")
+            lines.append(f"runs on disk but NO campaign entry: {shown}")
+        if empty:
+            shown = ", ".join(empty[:5]) + (" ..." if len(empty) > 5 else "")
+            lines.append(f"campaign ledger EMPTY despite runs on disk: {shown}")
+        lines.append(
+            "Campaign state is the machine answer to 'what is done and what is "
+            "left'. Fix once: `omx campaign-drift --adopt` (or `omx campaign-init "
+            "--id <group>` per group); report-coverage/queue-launch keep it alive "
+            "automatically afterwards.")
+        lines.append("</omx-campaign-drift>")
+        return "\n".join(lines)
     except Exception:
-        return ""
-    if drift.get("ok", True):
-        return ""
-    lines = ["<omx-campaign-drift>"]
-    unreg = [d["group"] for d in drift.get("unregistered", [])]
-    empty = [d["group"] for d in drift.get("empty_ledger", [])]
-    if unreg:
-        shown = ", ".join(unreg[:5]) + (" ..." if len(unreg) > 5 else "")
-        lines.append(f"runs on disk but NO campaign entry: {shown}")
-    if empty:
-        shown = ", ".join(empty[:5]) + (" ..." if len(empty) > 5 else "")
-        lines.append(f"campaign ledger EMPTY despite runs on disk: {shown}")
-    lines.append(
-        "Campaign state is the machine answer to 'what is done and what is "
-        "left'. Fix once: `omx campaign-drift --adopt` (or `omx campaign-init "
-        "--id <group>` per group); report-coverage/queue-launch keep it alive "
-        "automatically afterwards.")
-    lines.append("</omx-campaign-drift>")
-    return "\n".join(lines)
+        return ""  # structurally total: covers malformed campaign_drift shapes too
 
 
 # --- route_emit relevance gate (wave-17) -------------------------------------

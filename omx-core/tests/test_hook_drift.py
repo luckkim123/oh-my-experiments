@@ -93,6 +93,19 @@ def test_drift_tree_yaml_absent_fail_open(tmp_path, monkeypatch):
     assert mod._fetch_campaign_drift({"cwd": str(tmp_path)}) == ""
 
 
+def test_drift_malformed_campaign_drift_shape_fails_open(tmp_path, monkeypatch):
+    # Structural fail-open regression: if campaign_drift's return shape ever
+    # drifts (renamed/missing key), the post-processing must not raise —
+    # the whole function body after root resolution is inside one try/except.
+    import omx_core.campaign as campaign_mod
+    _make_project(tmp_path, {"groupa": ["runa_tag_260722_120000"]})
+    mod = _load_handlers()
+    monkeypatch.setattr(mod, "_resolve_backlog_root", lambda p: str(tmp_path))
+    monkeypatch.setattr(campaign_mod, "campaign_drift",
+                        lambda paths, schema, base: {"ok": False, "unregistered": [{"runs": 1}]})
+    assert mod._fetch_campaign_drift({"cwd": str(tmp_path)}) == ""
+
+
 def test_drift_poison_import_fails_open_and_route_emit_still_works(tmp_path, monkeypatch):
     # Poison-import contract (test_hook_registration.py pattern): omx_core
     # entirely absent must not raise, and route_emit must keep working.
