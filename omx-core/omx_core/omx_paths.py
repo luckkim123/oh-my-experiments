@@ -329,6 +329,19 @@ class OmxPaths:
     def campaign_ledger(self, campaign_id) -> Path:
         return self.campaign_dir(campaign_id) / "ledger.jsonl"
 
+    # --- programs/<program-id>/ (cross-campaign program layer, v0.9.0) ---
+    def program_dir(self, program_id) -> Path:
+        """programs/<program-id>/ — cross-campaign program artifact
+        (PLAN.md narrative + program.json header). program_id shares the
+        campaign/run_id charset."""
+        return self.omx_dir / "programs" / validate_run_id(program_id)
+
+    def program_json(self, program_id) -> Path:
+        return self.program_dir(program_id) / "program.json"
+
+    def program_plan_md(self, program_id) -> Path:
+        return self.program_dir(program_id) / "PLAN.md"
+
     # --- permanent output tree (output_root passed per-getter; design 10.1) ---
     # These live OUTSIDE .omx/. output_root originates from metrics.yaml and is
     # supplied by the caller every call; it is never derived from self.root.

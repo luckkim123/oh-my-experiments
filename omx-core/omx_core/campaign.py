@@ -276,3 +276,67 @@ def adopt_drift(paths: OmxPaths, schema, base, *, now) -> dict:
                            "source": "campaign-drift --adopt"})
         adopted.append(g)
     return {"adopted": adopted, "drift_before": drift}
+
+
+# --- program layer (v0.9.0): cross-campaign view over the group-keyed store ---
+
+def init_program(paths: OmxPaths, program_id, campaigns, *, now) -> dict:
+    """Create .omx/programs/<program_id>/program.json.
+
+    PLAN.md is NOT created here — the documented migration procedure
+    (git mv of the existing narrative) supplies it.
+    """
+    if not campaigns:
+        raise CampaignError("program needs at least one member campaign")
+    missing = [c for c in campaigns if not paths.campaign_plan(c).is_file()]
+    if missing:
+        raise CampaignError(
+            f"member campaign(s) not initialized: {missing} — "
+            "run campaign-init first")
+    d = paths.program_dir(program_id)
+    if d.exists():
+        raise CampaignError(f"program {program_id!r} already exists at {d}")
+    d.mkdir(parents=True)
+    header = {"program_id": program_id, "campaigns": list(campaigns),
+              "status": "active", "created": now}
+    with atomic_path(paths.program_json(program_id)) as tmp:
+        tmp.write_text(json.dumps(header, indent=2))
+    return header
+
+
+def list_programs(paths: OmxPaths) -> list:
+    root = paths.omx_dir / "programs"
+    if not root.is_dir():
+        return []
+    return sorted(d.name for d in root.iterdir()
+                  if d.is_dir() and (d / "program.json").is_file())
+
+
+def program_status(paths: OmxPaths, program_id=None) -> dict:
+    """Aggregate member campaigns' status into one cross-group view.
+
+    Read-only over the campaign store; a vanished member degrades to an
+    error entry instead of killing the view.
+    """
+    if program_id is None:
+        ids = list_programs(paths)
+        if len(ids) != 1:
+            raise CampaignError(
+                f"--id required (programs found: {ids if ids else 'none'})")
+        program_id = ids[0]
+    pj = paths.program_json(program_id)
+    if not pj.is_file():
+        raise CampaignError(
+            f"program {program_id!r} has no program.json at {pj} — was it "
+            "initialized with `omx program-init`?")
+    header = json.loads(pj.read_text())
+    members = []
+    for cid in header.get("campaigns", []):
+        try:
+            members.append(campaign_status(paths, cid))
+        except OmxError as e:
+            members.append({"campaign_id": cid, "error": str(e)})
+    return {"program_id": program_id,
+            "status": header.get("status", "active"),
+            "plan_md": paths.program_plan_md(program_id).is_file(),
+            "campaigns": members}
