@@ -222,3 +222,57 @@ def record_launched(paths: OmxPaths, proposal_id, run_id, *, now) -> dict:
                                      "source": "queue-launch"})
             return {"status": "logged", "campaign_id": d.name, "event": rec}
     return {"status": "unplanned", "campaign_id": None}
+
+
+def campaign_drift(paths: OmxPaths, schema, base) -> dict:
+    """Runs-on-disk vs .omx/campaigns/ drift (v0.8.0). Report-only.
+
+    (a) unregistered — an index-tree group holds runs but no campaign dir;
+    (b) empty_ledger — the campaign exists, its group holds runs, the ledger
+    has 0 events. Exactly the July-2026 field condition that doctor/tree-audit
+    never saw. Group = the run dir's parent segment (D-R2-5)."""
+    from omx_core.tree import runs_at_declared_depth, walk_runs
+    groups = {}
+    for e in runs_at_declared_depth(walk_runs(schema, Path(base))):
+        if e["role"] != "index":
+            continue
+        run = Path(e["path"])
+        groups.setdefault(run.parent.name, []).append(run.name)
+    unregistered, empty = [], []
+    for g in sorted(groups):
+        try:
+            cdir = paths.campaign_dir(g)
+        except OmxError:
+            continue  # parent segment not campaign-id-shaped (e.g. tree root)
+        if not cdir.is_dir():
+            unregistered.append({"group": g, "runs": len(groups[g])})
+            continue
+        ledger = paths.campaign_ledger(g)
+        n = 0
+        if ledger.is_file():
+            n = sum(1 for ln in
+                    ledger.read_text(encoding="utf-8").splitlines()
+                    if ln.strip())
+        if n == 0:
+            empty.append({"group": g, "runs": len(groups[g])})
+    return {"ok": not unregistered and not empty,
+            "unregistered": unregistered, "empty_ledger": empty}
+
+
+def adopt_drift(paths: OmxPaths, schema, base, *, now) -> dict:
+    """One-shot remediation for campaign_drift: init missing campaigns and
+    append one `note {kind: adopted}` to empty ledgers. Idempotent — a second
+    run adopts nothing."""
+    drift = campaign_drift(paths, schema, base)
+    adopted = []
+    for item in drift["unregistered"] + drift["empty_ledger"]:
+        g = item["group"]
+        if not paths.campaign_dir(g).is_dir():
+            init_campaign(paths, g, now=now,
+                          extra={"auto_initialized": True,
+                                 "source": "campaign-drift --adopt"})
+        append_event(paths, g, now=now, event="note",
+                     data={"kind": "adopted",
+                           "source": "campaign-drift --adopt"})
+        adopted.append(g)
+    return {"adopted": adopted, "drift_before": drift}
