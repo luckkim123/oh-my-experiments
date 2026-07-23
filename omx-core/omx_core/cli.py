@@ -716,6 +716,17 @@ def _cmd_report_coverage(args) -> int:
         except OSError as e:
             print(f"WARNING: produced-reports ledger append failed: {e}",
                   file=sys.stderr)
+        # v0.8.0 campaign liveness: gating a report also records an `analyzed`
+        # campaign event (auto-inits the group campaign). Advisory like the
+        # produced-reports append — never fails the gate.
+        try:
+            from omx_core.campaign import record_analyzed
+            cres = record_analyzed(OmxPaths(root=_resolved_root(args)), path,
+                                   now=stamp_now)
+            out["campaign_event"] = cres["status"]
+        except (OmxError, OSError, ValueError) as e:
+            print(f"WARNING: campaign analyzed-event append failed: {e}",
+                  file=sys.stderr)
     print(json.dumps(out))
     if res.partial_groups:
         # Warn loudly to stderr so the analyst cannot silently miss sub-group fields.
@@ -965,6 +976,18 @@ def _cmd_queue_launch(args) -> int:
         print(json.dumps(read_pending_launch(paths, args.run_id)))
     except OmxError as e:
         raise SystemExit(str(e))
+    # v0.8.0 campaign liveness: a queued launch is a `launched` event on the
+    # campaign that planned this proposal. Advisory — never fails the queue.
+    try:
+        from omx_core.campaign import record_launched
+        lres = record_launched(paths, args.proposal_id, args.run_id, now=now)
+        if lres["status"] == "unplanned":
+            print("WARNING: proposal not planned in any campaign — record "
+                  "intent with `omx campaign-plan-add --id <group> "
+                  f"--proposal-id {args.proposal_id}`", file=sys.stderr)
+    except (OmxError, OSError, ValueError) as e:
+        print(f"WARNING: campaign launched-event append failed: {e}",
+              file=sys.stderr)
     if soft:
         print(f"WARNING: {len(soft)} open experiment lead(s) not resolved: "
               f"{', '.join(pg['slug'] for pg in soft)} "
@@ -1704,7 +1727,8 @@ def _cmd_campaign_init(args) -> int:
             raise SystemExit("--plan file must contain a JSON object")
     try:
         plan = init_campaign(paths, args.id, now=clock.now_iso(), goal=args.goal,
-                             baseline_run_id=args.baseline_run, extra=extra)
+                             baseline_run_id=args.baseline_run,
+                             predecessor=args.predecessor, extra=extra)
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(plan))
@@ -1751,10 +1775,27 @@ def _cmd_campaign_plan_add(args) -> int:
     paths = OmxPaths(root=_resolved_root(args))
     try:
         plan = plan_add(paths, args.id, proposal_id=args.proposal_id,
-                        summary=args.summary, now=clock.now_iso())
+                        summary=args.summary, label=args.label, now=clock.now_iso())
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(plan))
+    return 0
+
+
+def _cmd_campaign_drift(args) -> int:
+    from omx_core.campaign import adopt_drift, campaign_drift
+    from omx_core.tree import load_tree_schema
+    root = _resolved_root(args)
+    paths = OmxPaths(root=root)
+    try:
+        schema = load_tree_schema(paths.tree_yaml())
+        if args.adopt:
+            print(json.dumps(adopt_drift(paths, schema, Path(root),
+                                         now=clock.now_iso())))
+        else:
+            print(json.dumps(campaign_drift(paths, schema, Path(root))))
+    except OmxError as e:
+        raise SystemExit(str(e))
     return 0
 
 
@@ -2218,6 +2259,8 @@ def build_parser() -> argparse.ArgumentParser:
     pci.add_argument("--id", required=True)
     pci.add_argument("--goal", default=None)
     pci.add_argument("--baseline-run", default=None, dest="baseline_run")
+    pci.add_argument("--predecessor", default=None,
+                     help="campaign this one continues (recorded link only)")
     pci.add_argument("--plan", default=None, help="optional JSON file merged into plan.json")
     pci.set_defaults(func=_cmd_campaign_init)
 
@@ -2247,7 +2290,17 @@ def build_parser() -> argparse.ArgumentParser:
     pcp.add_argument("--id", required=True)
     pcp.add_argument("--proposal-id", required=True, dest="proposal_id")
     pcp.add_argument("--summary", default=None)
+    pcp.add_argument("--label", default=None,
+                     help="short human label (e.g. C2) — the handle prose uses")
     pcp.set_defaults(func=_cmd_campaign_plan_add)
+
+    pcd = sub.add_parser("campaign-drift",
+                         help="compare runs-on-disk against .omx/campaigns/ "
+                              "(report-only; --adopt = one-shot remediation)")
+    pcd.add_argument("--root", default=None)
+    pcd.add_argument("--adopt", action="store_true",
+                     help="init missing campaigns + note-adopt empty ledgers")
+    pcd.set_defaults(func=_cmd_campaign_drift)
 
     return p
 
