@@ -159,7 +159,8 @@ is what they approve (minimum-change revert, never-auto-git repo rule).
   The `proposal_id` is the one captured in step 2 — it MUST be in `--data`:
   `campaign-status` resolves a planned proposal to kept/discarded by joining
   on exactly this key, so an outcome event without it leaves the proposal
-  stuck at `planned` forever.
+  stuck at `planned` forever. `launched` is auto-recorded by `omx queue-launch`;
+  this step records the DECISION (kept/discarded), which no byproduct can infer.
 
 ### 4.5 Circuit check (stop a churning loop)
 

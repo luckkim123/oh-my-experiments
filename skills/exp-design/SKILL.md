@@ -281,6 +281,10 @@ hypothesis and the one-variable probe in 2-3 lines, and remind them it is
 analyze→design→eval loop is exp-loop's job (#6).
 - Record the adopted proposal as campaign INTENT (replayable plan, not an
   outcome): `omx campaign-plan-add --id <group> --proposal-id <proposal_id>
-  --summary "<one-line probe>"`. The campaign ledger's `note`/`kept`/`discarded`
-  events still record what HAPPENS to the proposal later (via exp-loop); this
-  line records that it was PLANNED.
+  --summary "<one-line probe>" --label <short-handle>`. The campaign ledger's
+  `note`/`kept`/`discarded` events still record what HAPPENS to the proposal
+  later (via exp-loop); this line records that it was PLANNED. Give every
+  planned proposal a short `--label` (C2-style) — the label is the handle
+  humans will use in prose; without it, parallel ad-hoc id schemes appear.
+  The `launched`/`analyzed` events are auto-recorded later as byproducts of
+  `queue-launch`/`report-coverage` — nothing further to do here.

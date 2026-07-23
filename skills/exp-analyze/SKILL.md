@@ -625,6 +625,10 @@ never silent.
 
 ## When done
 
+Passing `report-coverage` also records an `analyzed` campaign event for the
+run's group (auto-initializing the campaign on first contact) — no action
+needed; `omx campaign-status --id <group>` shows the trail.
+
 Tell the user where the report is (`<output_root>/<run_id>/analysis/<analysis_id>/report.md`),
 summarize the top findings (with their confidence), and **prove the completeness gate
 passed before declaring done** — show that `omx report-coverage ... --min-coverage 0.5`

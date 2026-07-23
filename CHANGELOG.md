@@ -4,6 +4,95 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.8.0] - 2026-07-23 — campaign liveness
+
+### Added
+
+- **Byproduct campaign events**: `report-coverage`, when the coverage gate passes and
+  the report is stamped, now also records an `analyzed` campaign event for the run's
+  group (`record_analyzed` — derives `run_id`/`group` from the report path, auto-inits
+  the group campaign on first contact marking it `auto_initialized: true`, dedups by
+  report path). `queue-launch`, after queuing succeeds, records a `launched` event via
+  `record_launched` — appended to whichever campaign's `plan.json` planned that
+  `proposal_id` (a search across `.omx/campaigns/*/plan.json`, not the run's own group),
+  so the join survives a proposal planned in one group landing runs in another (the
+  exact multi-group failure the field diagnosis found). Both writers are advisory: a
+  failure warns on stderr and never fails the verb, matching the existing
+  produced-reports-ledger contract. New `analyzed` event type added to `EVENTS`;
+  `campaign_status` already treats unknown events as non-terminal, so derived-status
+  semantics for the 3 pre-existing event types are unchanged.
+- **`campaign-drift` verb** (`--root`, `--adopt`): walks the tree at its declared depth
+  and flags `unregistered` (a group has runs on disk, no campaign dir) and
+  `empty_ledger` (campaign dir exists, group has runs, 0 ledger events). `--adopt` is
+  one-shot idempotent remediation — inits missing campaigns (`auto_initialized: true`)
+  and appends one `note {kind: "adopted"}` event to silence empty ledgers.
+- **`--label`** on `campaign-plan-add` — optional short human handle stored per planned
+  entry, surfaced by `campaign-status`'s plan view (so status output IS the label ↔
+  proposal_id mapping table). **`--predecessor`** on `campaign-init` — stored in
+  `plan.json`, surfaced by `campaign-list`/`campaign-status`; link only, no join logic
+  across predecessors yet (YAGNI until a real consumer needs it).
+- **Conditional `<omx-campaign-drift>` hook block**: `_fetch_campaign_drift` in
+  `hooks/handlers.py`, appended to `_assemble_route_context` after the backlog block.
+  In-process lazy import of `omx_core` (fail-open on any exception, including a poisoned
+  import — same contract as the existing poison-import test), silent (`""`) when there
+  is no drift, no root, or no `tree.yaml`. Resolves its root via the same
+  `_resolve_backlog_root` helper as the backlog fetch (an independent second call, a few
+  ms of cost, to keep `_fetch_open_backlog`'s signature untouched). When drift exists,
+  the block is ≤6 lines naming the drifted groups (capped) and the fix commands.
+
+### Changed
+
+- **`report-coverage` stdout gains an additive, optional `campaign_event` key** — the
+  status string returned by `record_analyzed` when a campaign write happens (absent
+  when the report isn't in an analysis tree, or the report-coverage gate didn't pass).
+  Existing consumers reading `ok`/other keys are unaffected.
+
+### Verification
+
+- `cd omx-core && python3 -m pytest tests/ -q` → **1021 passed / 11 failed (pre-existing,
+  optional deps: 8 `tests/test_cli*.py`/`test_ingest_tensorboard.py`/
+  `test_ingest_wandb_offline.py` cases needing `wandb`/`tensorboard`, not installed in
+  this environment) / 2 skipped**.
+- `ruff check .` → clean, no findings.
+- `omx doctor --root /workspace/constrained-albc` → environment/deps/profile/hooks all
+  reported healthy.
+- `omx card-check --card /root/oh-my-heroacademia/cards/omx.json --plugin-root
+  /root/oh-my-experiments` → `{"ok": true, "card_version": "0.8.0", "plugin_version":
+  "0.8.0", "failures": []}`.
+- **Field verification** (`/workspace/constrained-albc`, read-only, no `--adopt` run):
+  `campaign-drift` now returns `{"ok": false, "unregistered": [{"group":
+  "albc_trpo_student", "runs": 3}, {"group": "teacher_baseline_opt", "runs": 5}],
+  "empty_ledger": []}` — down from the 2026-07-23 diagnosis's original 4 unregistered
+  groups + 1 empty ledger, because a parallel plan-consolidation session remediated
+  3 of them (`teacher_baseline_buoyfix`, `seed_floor_dgx`, `e3_dgxscale_buoyfix`) mid-day
+  using this release's `--predecessor` flag (the CLI is pip-editable from this repo, so
+  the new flag was live at commit time) and separately backfilled
+  `teacher_baseline_posttam`'s full ledger (now 32 events, no longer empty). Remaining
+  drift (`albc_trpo_student`, `teacher_baseline_opt`) is real and untouched by this
+  release — `campaign-drift --adopt` or manual `campaign-init` is the fix, left for the
+  field project to run. `campaign-list` reads 6 campaigns (3 pre-existing +
+  3 same-day-registered) with `p7_tail` unchanged at 18 events; `campaign-status --id
+  p7_tail` and `--id teacher_baseline_posttam` both resolve their plan lists correctly
+  (`teacher_baseline_posttam`'s plan carries 6 proposals with `derived_status` populated,
+  no longer stuck at `planned` since its ledger was backfilled).
+
+### Notes
+
+- Deliberate non-goals (from the design spec): no hard gate forcing
+  `campaign-plan-add` at exp-design time (byproduct + drift surfacing is the lighter
+  lever; revisit only if drift recurs); `doctor`/`tree-audit` are not extended (drift has
+  its own verb + hook surfacing, a doctor one-liner would be a third surface for the same
+  fact); the `.sp/plans` workspace convention split is out of scope (a separate
+  plan-consolidation job); the hook block reaches live sessions only after a plugin cache
+  refresh + restart (the cache is a plain copy of the repo — hand-patching it is
+  forbidden).
+- Closes the field condition this release was diagnosed against: 2026-07-23,
+  `/workspace/constrained-albc` had 4 groups with runs on disk and no campaign entry, and
+  one campaign (`teacher_baseline_posttam`) with 6 planned proposals but 0 ledger events.
+  By the time this release's field verification ran (same day, ~06:35 UTC), a sibling
+  session had already remediated most of it using the new CLI surface — the remaining
+  2-group drift is recorded above, not silently closed.
+
 ## [0.7.5] - 2026-07-19 — extract atomic_path/atomic_dir into om-core
 
 ### Changed
