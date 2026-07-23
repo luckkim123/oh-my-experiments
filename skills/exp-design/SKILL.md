@@ -88,6 +88,10 @@ read time). Do NOT re-propose a probe family already marked `discarded` (it was
 tried and rejected) or still `planned` (it is queued) — feed this mechanical
 signal into the novelty judgment `probe-novelty` also informs.
 
+If the campaign belongs to a program (`.omx/programs/` exists), read the cross-group
+view too: `omx program-status --root <root>` — a settled probe may live in a sibling
+campaign's ledger, not this group's.
+
 ### Recipes (promoted procedures)
 
 Also list `.omx/recipes/` — a recipe matching the regression's symptom

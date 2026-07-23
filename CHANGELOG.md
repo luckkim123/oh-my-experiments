@@ -4,6 +4,76 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.9.0] - 2026-07-23 — program layer
+
+### Added
+
+- **Program artifact**: `.omx/programs/<program-id>/{PLAN.md, program.json}` — the
+  cross-campaign umbrella over several group-keyed campaigns. `program.json` (member
+  list, status, created timestamp) is written once by `program-init` and is the
+  membership SSOT; `PLAN.md` is the human/agent narrative and is never parsed or
+  merged by omx. A program never carries its own ledger — one campaign per run group
+  stays the rule, the program only aggregates existing campaign ledgers.
+- **`omx program-init --id <id> --campaigns a,b,c [--root <r>]`**: creates
+  `.omx/programs/<id>/program.json`, refusing a duplicate program dir and any member
+  campaign that hasn't been through `campaign-init` yet. Does not create `PLAN.md` —
+  migrating an existing plan document into place is a documented `git mv` procedure
+  (README), not a verb.
+- **`omx program-status [--id <id>] [--root <r>]`**: aggregates each member
+  campaign's `campaign_status` into one cross-group view; a vanished member degrades
+  to an `{"campaign_id", "error"}` entry instead of failing the whole read. `--id` is
+  optional when exactly one program exists (mirrors `campaign-status`'s single-item
+  default resolution); ambiguous or absent otherwise.
+- **Core functions** (`omx_core/campaign.py`): `init_program`, `list_programs`,
+  `program_status`. **`OmxPaths` getters**: `program_dir`, `program_json`,
+  `program_plan_md` (registered in `test_omx_paths.py`'s public-getter coverage
+  guard, which fails loudly when a new getter is added without exercising it).
+
+### Changed
+
+- **README**: two new rows in the Campaigns verb table (`program-init`,
+  `program-status`) plus a new "Program layer (cross-campaign)" subsection
+  documenting the artifact and the migration procedure.
+- **`skills/exp-design/SKILL.md`**: "Check the campaign plan" now also points at
+  `omx program-status --root <root>` when the campaign belongs to a program — a
+  settled probe may live in a sibling campaign's ledger, not the current group's.
+
+### Verification
+
+- `cd omx-core && python3 -m pytest tests/ -q` → **1035 passed / 11 failed
+  (pre-existing, optional deps: the same 8 `tests/test_cli*.py` /
+  `test_ingest_tensorboard.py` / `test_ingest_wandb_offline.py` cases needing
+  `wandb`/`tensorboard`, not installed in this environment, unrelated to this
+  release) / 2 skipped**. This release's own coverage: 9 new tests in
+  `test_program_layer.py` (Task 1: init/status/list core-function behavior) + 5 new
+  tests in `test_program_cli.py` (Task 2: CLI wiring + the `tree_audit` regression
+  confirming `.omx/programs/` never trips the output-tree auditor) = 14 new tests,
+  all passing.
+- `ruff check omx-core/` → clean, no findings.
+- `omx doctor --root /workspace/constrained-albc` → healthy (the stale
+  `omx_version` metadata warning is pre-existing, unrelated to this release).
+- `omx card-check` → may report version drift against the omha routing card
+  (still pinned at 0.8.0) until the card is bumped — that sync is the controller's
+  post-merge step, out of this repo's scope.
+- Field demo against `/workspace/constrained-albc`: see release report
+  (performed by the controller after merge, not run from this task).
+
+### Notes
+
+- `PLAN.md` is never parsed by omx — it is pure human/agent narrative; only
+  `program.json`'s member list is machine-read.
+- No hook injection for the program layer — the existing backlog and
+  `campaign-drift` blocks already surface what needs attention; a program-level
+  hook block would be a third surface for facts already visible via
+  `campaign-status`/`campaign-drift`, deferred until a real gap shows up.
+- Campaign store schema is untouched: `campaign.py`'s ledger/plan.json format,
+  event types, and `campaign_status` aggregation logic are unchanged. The program
+  layer only reads them.
+- Migrating an existing plan document into a program is a documented procedure
+  (`git mv` + a redirect stub, per the README subsection above), not a CLI verb —
+  deliberately so: the migration is a one-time, human-reviewed move, not a
+  repeatable operation that needs a loud-fail gate.
+
 ## [0.8.0] - 2026-07-23 — campaign liveness
 
 ### Added

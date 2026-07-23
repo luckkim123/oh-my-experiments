@@ -208,8 +208,28 @@ users only need the four skills above.
 | `omx campaign-status --id <id>` | Aggregate one campaign's ledger. |
 | `omx campaign-list` | List campaigns with event counts. |
 | `omx campaign-plan-add --id <id> --proposal-id <id>` | Record a planned proposal into `plan.json`; status derived at read time. |
+| `omx program-init --id <id> --campaigns a,b,c` | Create `.omx/programs/<id>/` (program.json header; PLAN.md arrives via git mv). |
+| `omx program-status [--id <id>]` | Aggregate member campaigns into one cross-group program view. |
 
 </details>
+
+### Program layer (cross-campaign)
+
+A program is the umbrella over several group-keyed campaigns (one campaign per run
+group stays the rule — a program never has its own ledger). Artifact:
+`.omx/programs/<program-id>/{PLAN.md, program.json}`. `PLAN.md` is the human/agent
+narrative — omx never parses or merges it; `program.json` (member list, written once
+by `program-init`) is the membership SSOT.
+
+Migrating an existing plan document into a program (documented procedure — there is
+deliberately no verb that runs git):
+
+    omx program-init --id <program-id> --campaigns a,b,c --root <r>
+    git mv <old-plan-path> .omx/programs/<program-id>/PLAN.md
+    # leave a one-line redirect stub at the old path, then commit both
+
+`omx program-status` + PLAN.md together are the authoritative cross-group answer to
+"what is done and what is left".
 
 <details>
 <summary><b>Output-tree discipline</b></summary>
