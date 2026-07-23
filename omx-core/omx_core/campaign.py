@@ -7,6 +7,7 @@ multi-writer). Nothing here launches anything (D4)."""
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from omx_core.omx_paths import OmxError, OmxPaths, atomic_path
 
@@ -15,11 +16,11 @@ class CampaignError(OmxError):
     """Loud-fail for campaign misuse (exists/uninitialized/bad event)."""
 
 
-EVENTS = ("launched", "kept", "discarded", "eval", "note")
+EVENTS = ("launched", "kept", "discarded", "eval", "note", "analyzed")
 
 
 def init_campaign(paths: OmxPaths, campaign_id, *, now, goal=None,
-                  baseline_run_id=None, extra=None) -> dict:
+                  baseline_run_id=None, predecessor=None, extra=None) -> dict:
     d = paths.campaign_dir(campaign_id)
     if d.exists():
         raise CampaignError(f"campaign {campaign_id!r} already exists at {d}")
@@ -29,6 +30,8 @@ def init_campaign(paths: OmxPaths, campaign_id, *, now, goal=None,
         plan["goal"] = goal
     if baseline_run_id:
         plan["baseline_run_id"] = baseline_run_id
+    if predecessor:
+        plan["predecessor"] = predecessor
     if extra:
         for k, v in extra.items():
             plan.setdefault(k, v)
@@ -38,7 +41,8 @@ def init_campaign(paths: OmxPaths, campaign_id, *, now, goal=None,
     return plan
 
 
-def plan_add(paths: OmxPaths, campaign_id, *, proposal_id, summary=None, now) -> dict:
+def plan_add(paths: OmxPaths, campaign_id, *, proposal_id, summary=None,
+             label=None, now) -> dict:
     """Append a planned proposal to plan.json's `planned` list (intent — D-R4-10).
     plan.json is the replayable statement of what exp-design decided to try;
     ledger.jsonl records what happened. Duplicate proposal_id loud-fails (a
@@ -55,7 +59,7 @@ def plan_add(paths: OmxPaths, campaign_id, *, proposal_id, summary=None, now) ->
             f"proposal {proposal_id!r} already planned in campaign {campaign_id!r} "
             "(a proposal is planned once)")
     planned.append({"proposal_id": proposal_id, "summary": summary or "",
-                    "added_at": now})
+                    "label": label or "", "added_at": now})
     with atomic_path(plan_path) as tmp:
         tmp.write_text(json.dumps(plan, indent=2))
     return plan
@@ -136,6 +140,7 @@ def campaign_status(paths: OmxPaths, campaign_id) -> dict:
         plan_view.append({
             "proposal_id": pid,
             "summary": entry.get("summary", ""),
+            "label": entry.get("label", ""),
             "added_at": entry.get("added_at"),
             "derived_status": derived,
         })
@@ -157,6 +162,63 @@ def list_campaigns(paths: OmxPaths) -> list:
             plan = {}
         ledger = d / "ledger.jsonl"
         n = len(ledger.read_text().splitlines()) if ledger.is_file() else 0
-        out.append({"campaign_id": d.name, "created": plan.get("created"),
-                    "events": n})
+        entry = {"campaign_id": d.name, "created": plan.get("created"),
+                 "events": n}
+        if plan.get("predecessor"):
+            entry["predecessor"] = plan["predecessor"]
+        out.append(entry)
     return out
+
+
+def record_analyzed(paths: OmxPaths, report_path, *, now) -> dict:
+    """Byproduct event for a gated report (v0.8.0 campaign liveness).
+
+    Derives run_id/group from the report's tree position (caller has already
+    passed is_analysis_report), auto-inits the group campaign when absent, and
+    appends one `analyzed` event. Dedup by resolved report path — the coverage
+    verb re-runs on the same report and must not spam the ledger."""
+    p = Path(report_path).resolve()
+    run_dir = p.parents[2]
+    group = run_dir.parent.name
+    if not paths.campaign_dir(group).is_dir():
+        init_campaign(paths, group, now=now,
+                      extra={"auto_initialized": True,
+                             "source": "report-coverage"})
+    for e in read_ledger(paths, group):
+        if (e.get("event") == "analyzed"
+                and (e.get("data") or {}).get("report") == str(p)):
+            return {"status": "duplicate", "campaign_id": group}
+    rec = append_event(paths, group, now=now, event="analyzed",
+                       run_id=run_dir.name, data={"report": str(p)})
+    return {"status": "logged", "campaign_id": group, "event": rec}
+
+
+def record_launched(paths: OmxPaths, proposal_id, run_id, *, now) -> dict:
+    """Byproduct `launched` event at queue-launch time (v0.8.0).
+
+    Appends to the campaign whose plan.json planned this proposal_id — NOT the
+    run's group — so the plan-to-outcome join survives a campaign that spans
+    groups. Dedup by (proposal_id, run_id)."""
+    root = paths.omx_dir / "campaigns"
+    if root.is_dir():
+        for d in sorted(root.iterdir()):
+            plan_fp = d / "plan.json"
+            if not d.is_dir() or not plan_fp.is_file():
+                continue
+            try:
+                plan = json.loads(plan_fp.read_text())
+            except ValueError:
+                continue
+            if not any(e.get("proposal_id") == proposal_id
+                       for e in plan.get("planned", [])):
+                continue
+            for e in read_ledger(paths, d.name):
+                if (e.get("event") == "launched" and e.get("run_id") == run_id
+                        and (e.get("data") or {}).get("proposal_id") == proposal_id):
+                    return {"status": "duplicate", "campaign_id": d.name}
+            rec = append_event(paths, d.name, now=now, event="launched",
+                               run_id=run_id,
+                               data={"proposal_id": proposal_id,
+                                     "source": "queue-launch"})
+            return {"status": "logged", "campaign_id": d.name, "event": rec}
+    return {"status": "unplanned", "campaign_id": None}
