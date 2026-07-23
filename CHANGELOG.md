@@ -53,7 +53,7 @@ project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.jso
 - `omx doctor --root /workspace/constrained-albc` → healthy (the stale
   `omx_version` metadata warning is pre-existing, unrelated to this release).
 - `omx card-check` → may report version drift against the omha routing card
-  (still pinned at 0.8.0) until the card is bumped — that sync is the controller's
+  (still pinned at 0.7.5) until the card is bumped — that sync is the controller's
   post-merge step, out of this repo's scope.
 - Field demo against `/workspace/constrained-albc`: see release report
   (performed by the controller after merge, not run from this task).
