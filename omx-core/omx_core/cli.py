@@ -2329,8 +2329,10 @@ def build_parser() -> argparse.ArgumentParser:
     ppi = sub.add_parser("program-init", help="create .omx/programs/<id>/ "
                          "(program.json header; PLAN.md arrives via git mv)")
     ppi.add_argument("--id", required=True)
-    ppi.add_argument("--campaigns", required=True,
-                     help="comma-separated member campaign ids")
+    ppi.add_argument("--campaigns", default="",
+                     help="comma-separated member campaign ids; omit to open "
+                          "a program before its first campaign exists, then "
+                          "re-run with them later to attach (append-only)")
     ppi.add_argument("--root", default=None)
     ppi.set_defaults(func=_cmd_program_init)
 

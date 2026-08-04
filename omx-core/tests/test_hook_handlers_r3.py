@@ -43,12 +43,20 @@ def test_route_emit_shape():
     assert "STAGE(exp)" in hso["additionalContext"]
 
 
-def test_route_emit_names_all_seven_stages():
+def test_route_emit_names_all_eight_stages():
     mod = _load_handlers()
     text = mod._ROUTE_CHECKPOINT
     for stage in ("exp-init", "exp-analyze", "exp-design", "exp-loop",
-                  "wiki", "tree", "recipe"):
+                  "program", "wiki", "tree", "recipe"):
         assert stage in text
+
+
+def test_route_emit_sends_multi_stage_plans_to_the_program_tree():
+    # the gap that put a koopman experiment plan in .sp/plans (2026-08-04):
+    # a plan not derived from a report.md had no omx destination named here.
+    text = _load_handlers()._ROUTE_CHECKPOINT
+    assert ".omx/programs/" in text
+    assert ".sp/plans/" in text            # named explicitly as the wrong home
 
 
 def test_route_emit_restates_the_three_non_negotiables():

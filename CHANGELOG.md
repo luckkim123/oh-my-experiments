@@ -4,6 +4,26 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [Unreleased]
+
+### Changed
+
+- **`program-init` opens a program with zero campaigns, and re-init attaches members.**
+  `--campaigns` is now optional and re-running on an existing program APPENDS new member
+  ids (append-only; `created` and existing members are preserved) instead of raising
+  "already exists". The old contract — at least one already-`campaign-init`ed member,
+  create-only — made the program layer reachable *only after* the runs it was supposed to
+  plan already existed, so a research line planned before its first run had nowhere in
+  omx to live. The duplicate guard survives for the genuinely dangerous case: a program
+  directory with no `program.json`.
+- **Routing checkpoint names the program stage.** `_ROUTE_CHECKPOINT` gains `program` to
+  the stage list and the `STAGE(exp)` enum, plus a clause stating that a multi-stage
+  experiment-line plan belongs in `.omx/programs/<id>/PLAN.md` and not in `.sp/plans/`.
+  The prior stage list had no destination for a plan that is not derived from a
+  `report.md`, so such plans fell through to the superpowers scratch tree — observed
+  2026-08-04 with a Koopman experiment plan. To stay under the 2 KiB per-prompt cap the
+  knowledge-SSOT clause was compressed; every token the hook tests assert is unchanged.
+
 ## [0.9.0] - 2026-07-23 — program layer
 
 ### Added

@@ -281,25 +281,35 @@ def adopt_drift(paths: OmxPaths, schema, base, *, now) -> dict:
 # --- program layer (v0.9.0): cross-campaign view over the group-keyed store ---
 
 def init_program(paths: OmxPaths, program_id, campaigns, *, now) -> dict:
-    """Create .omx/programs/<program_id>/program.json.
+    """Create .omx/programs/<program_id>/program.json, or attach members to it.
+
+    `campaigns` may be empty: a research line is planned BEFORE its first run
+    exists, so the program has to be openable with zero members (the PLAN.md
+    is the point, the campaigns arrive later). Re-running with `--campaigns`
+    on an existing program APPENDS the new members — that is the attach-later
+    path, and it is append-only so a re-run can never drop a member.
 
     PLAN.md is NOT created here — the documented migration procedure
     (git mv of the existing narrative) supplies it.
     """
-    if not campaigns:
-        raise CampaignError("program needs at least one member campaign")
     missing = [c for c in campaigns if not paths.campaign_plan(c).is_file()]
     if missing:
         raise CampaignError(
             f"member campaign(s) not initialized: {missing} — "
             "run campaign-init first")
     d = paths.program_dir(program_id)
-    if d.exists():
+    pj = paths.program_json(program_id)
+    if pj.is_file():
+        header = json.loads(pj.read_text())
+        known = header.get("campaigns", [])
+        header["campaigns"] = known + [c for c in campaigns if c not in known]
+    elif d.exists():
         raise CampaignError(f"program {program_id!r} already exists at {d}")
-    d.mkdir(parents=True)
-    header = {"program_id": program_id, "campaigns": list(campaigns),
-              "status": "active", "created": now}
-    with atomic_path(paths.program_json(program_id)) as tmp:
+    else:
+        d.mkdir(parents=True)
+        header = {"program_id": program_id, "campaigns": list(campaigns),
+                  "status": "active", "created": now}
+    with atomic_path(pj) as tmp:
         tmp.write_text(json.dumps(header, indent=2))
     return header
 

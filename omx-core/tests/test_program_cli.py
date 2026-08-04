@@ -92,6 +92,32 @@ def test_program_init_stderr_plan_md_reminder(tmp_path, capsys):
     assert "PLAN.md" in capsys.readouterr().err
 
 
+def test_program_init_no_campaigns_then_attach_later(tmp_path, capsys):
+    """A research line is planned before any run exists: the program must open
+    with zero members, and a later re-run must APPEND (never replace) them."""
+    rc = main(["program-init", "--root", str(tmp_path), "--id", "koop"])
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["campaigns"] == []
+
+    main(["campaign-init", "--root", str(tmp_path), "--id", "grp_a"])
+    capsys.readouterr()
+    rc2 = main(["program-init", "--root", str(tmp_path), "--id", "koop",
+                "--campaigns", "grp_a"])
+    assert rc2 == 0
+    assert json.loads(capsys.readouterr().out)["campaigns"] == ["grp_a"]
+
+    main(["campaign-init", "--root", str(tmp_path), "--id", "grp_b"])
+    capsys.readouterr()
+    main(["program-init", "--root", str(tmp_path), "--id", "koop",
+          "--campaigns", "grp_a,grp_b"])
+    assert json.loads(capsys.readouterr().out)["campaigns"] == ["grp_a", "grp_b"]
+
+    rc3 = main(["program-status", "--root", str(tmp_path), "--id", "koop"])
+    assert rc3 == 0
+    out = json.loads(capsys.readouterr().out)
+    assert [c["campaign_id"] for c in out["campaigns"]] == ["grp_a", "grp_b"]
+
+
 def test_auditor_ignores_program_dir(tmp_path):
     schema, base = _make_project(tmp_path, {"grp_a": ["runa_tag_260722_120000"]})
     prog_dir = tmp_path / ".omx" / "programs" / "prog"

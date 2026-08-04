@@ -36,15 +36,30 @@ def test_init_program_writes_header(paths):
     assert not paths.program_plan_md("teacher-final-closeout").is_file()
 
 
-def test_init_program_refuses_duplicate(paths):
-    _campaigns(paths, ["grp_a"])
+def test_init_program_reinit_appends_and_preserves_created(paths):
+    """Re-init is an append-only upsert (the attach-later path), not an error:
+    new members are added, existing ones are never dropped or duplicated, and
+    the original `created` stamp survives."""
+    _campaigns(paths, ["grp_a", "grp_b"])
     init_program(paths, "prog", ["grp_a"], now=NOW)
+    later = "2026-08-04T00:00:00+00:00"
+    h = init_program(paths, "prog", ["grp_a", "grp_b"], now=later)
+    assert h["campaigns"] == ["grp_a", "grp_b"]
+    assert h["created"] == NOW
+    assert json.loads(paths.program_json("prog").read_text()) == h
+
+
+def test_init_program_allows_empty_members(paths):
+    """A research line is planned before its first run exists — the program
+    must open with zero members so PLAN.md has a home from day one."""
+    h = init_program(paths, "prog", [], now=NOW)
+    assert h["campaigns"] == []
+    assert program_status(paths, "prog")["campaigns"] == []
+
+
+def test_init_program_refuses_dir_without_program_json(paths):
+    paths.program_dir("prog").mkdir(parents=True)
     with pytest.raises(CampaignError, match="already exists"):
-        init_program(paths, "prog", ["grp_a"], now=NOW)
-
-
-def test_init_program_refuses_empty_members(paths):
-    with pytest.raises(CampaignError, match="at least one"):
         init_program(paths, "prog", [], now=NOW)
 
 
