@@ -1,6 +1,6 @@
 {
   "name": "oh-my-experiments",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Experiment-analysis & design harness for RL/ML research. Analyze training runs, diagnose regressions, design the next experiment, and run a semi-autonomous analyze-design-eval loop. Self-contained: an omx CLI over .omx/ JSON state, with zero runtime dependency on other harnesses.",
   "author": {
     "name": "luckkim123"
@@ -30,7 +30,10 @@
           {
             "type": "command",
             "command": "python3",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.py", "report_guard"]
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.py",
+              "report_guard"
+            ]
           }
         ]
       }
@@ -41,7 +44,10 @@
           {
             "type": "command",
             "command": "python3",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.py", "route_emit"]
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.py",
+              "route_emit"
+            ]
           }
         ]
       }
@@ -52,7 +58,10 @@
           {
             "type": "command",
             "command": "python3",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.py", "capture_flush"],
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.py",
+              "capture_flush"
+            ],
             "async": true
           }
         ]
@@ -65,7 +74,10 @@
           {
             "type": "command",
             "command": "python3",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.py", "compact_breadcrumb"]
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.py",
+              "compact_breadcrumb"
+            ]
           }
         ]
       }
@@ -76,7 +88,10 @@
           {
             "type": "command",
             "command": "python3",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.py", "loop_gate"]
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.py",
+              "loop_gate"
+            ]
           }
         ]
       }

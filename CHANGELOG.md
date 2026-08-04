@@ -4,7 +4,7 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
-## [Unreleased]
+## [0.10.0] - 2026-08-04 — the program layer is reachable before its first run
 
 ### Changed
 
