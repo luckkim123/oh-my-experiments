@@ -150,7 +150,7 @@ def _init_repo(cwd):
 
 
 def _queue_launch(tmp_path, repo, run_id, proposal_id):
-    return main(["queue-launch", "--root", str(tmp_path), "--run-id", run_id,
+    return main(["queue-launch", "--predicted-outcome", "test prediction", "--root", str(tmp_path), "--run-id", run_id,
                  "--proposal-id", proposal_id, "--launch-delta", "d",
                  "--gpu-gate", "g", "--cwd", str(repo)])
 

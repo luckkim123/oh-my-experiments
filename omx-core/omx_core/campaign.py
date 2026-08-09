@@ -289,9 +289,13 @@ def init_program(paths: OmxPaths, program_id, campaigns, *, now) -> dict:
     on an existing program APPENDS the new members — that is the attach-later
     path, and it is append-only so a re-run can never drop a member.
 
-    PLAN.md is NOT created here — the documented migration procedure
-    (git mv of the existing narrative) supplies it.
+    PLAN.md and HANDOFF.md are seeded from the program templates when absent, so
+    a plan starts with the sections `program-lint` gates (objective verbatim,
+    decision list, predicted outcome). An existing file is NEVER overwritten —
+    the git-mv migration path for a pre-existing narrative still works, and the
+    lint tells that plan what it is missing.
     """
+    from omx_core.program import HANDOFF_TEMPLATE, PLAN_TEMPLATE
     missing = [c for c in campaigns if not paths.campaign_plan(c).is_file()]
     if missing:
         raise CampaignError(
@@ -311,6 +315,11 @@ def init_program(paths: OmxPaths, program_id, campaigns, *, now) -> dict:
                   "status": "active", "created": now}
     with atomic_path(pj) as tmp:
         tmp.write_text(json.dumps(header, indent=2))
+    for name, tpl in (("PLAN.md", PLAN_TEMPLATE), ("HANDOFF.md", HANDOFF_TEMPLATE)):
+        target = d / name
+        if not target.exists():
+            with atomic_path(target) as tmp:
+                tmp.write_text(tpl.format(program_id=program_id))
     return header
 
 

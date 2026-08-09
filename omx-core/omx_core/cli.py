@@ -972,6 +972,7 @@ def _cmd_queue_launch(args) -> int:
             paths, args.run_id,
             proposal_id=args.proposal_id, launch_delta=args.launch_delta,
             gpu_gate=args.gpu_gate, queued_at=now, queued_commit=queued_commit,
+            predicted_outcome=args.predicted_outcome,
             open_leads=open_leads, acknowledged_gates=acked_present)
         print(json.dumps(read_pending_launch(paths, args.run_id)))
     except OmxError as e:
@@ -1773,9 +1774,28 @@ def _cmd_program_init(args) -> int:
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(header))
-    print("note: PLAN.md is not generated — move the program narrative into "
-          "place with git mv (see README: program layer)", file=sys.stderr)
+    print("note: PLAN.md / HANDOFF.md seeded from the program templates (existing "
+          "files are left alone — the git-mv migration path still works). Fill the "
+          "objective verbatim, then gate with `omx program-lint`.", file=sys.stderr)
     return 0
+
+
+def _cmd_program_lint(args) -> int:
+    """Gate a programs/<id>/PLAN.md before it commits machine time.
+
+    Enforces what the dgx-final-scaleup incident showed prose cannot: the
+    requester's objective is carried verbatim, and every coupling the plan
+    itself calls a decision reaches the user's decision list. rc 2 on any
+    issue, same contract as proposal-lint."""
+    from omx_core.program import lint_program
+    path = Path(args.path)
+    try:
+        text = path.read_text()
+    except OSError as e:
+        raise SystemExit(f"cannot read {path}: {e}")
+    result = lint_program(text)
+    print(json.dumps(result))
+    return 0 if result["ok"] else 2
 
 
 def _cmd_program_status(args) -> int:
@@ -2049,6 +2069,10 @@ def build_parser() -> argparse.ArgumentParser:
     pq.add_argument("--proposal-id", required=True)
     pq.add_argument("--launch-delta", required=True)
     pq.add_argument("--gpu-gate", required=True)
+    pq.add_argument("--predicted-outcome", required=True,
+                    help="one line: what this run is expected to produce. Required — the "
+                         "approver is betting machine time on it, and a predicted null "
+                         "belongs in the artifact while it is still cheap to read.")
     pq.add_argument("--cwd", default=None,
                     help="training git repo; when given, records queued_commit = HEAD "
                          "for launch provenance (#12)")
@@ -2327,7 +2351,8 @@ def build_parser() -> argparse.ArgumentParser:
     pcd.set_defaults(func=_cmd_campaign_drift)
 
     ppi = sub.add_parser("program-init", help="create .omx/programs/<id>/ "
-                         "(program.json header; PLAN.md arrives via git mv)")
+                         "(program.json header + PLAN.md/HANDOFF.md skeletons; "
+                         "existing files are never overwritten)")
     ppi.add_argument("--id", required=True)
     ppi.add_argument("--campaigns", default="",
                      help="comma-separated member campaign ids; omit to open "
@@ -2335,6 +2360,12 @@ def build_parser() -> argparse.ArgumentParser:
                           "re-run with them later to attach (append-only)")
     ppi.add_argument("--root", default=None)
     ppi.set_defaults(func=_cmd_program_init)
+
+    ppl = sub.add_parser("program-lint",
+                         help="gate a programs/<id>/PLAN.md: objective carried verbatim + "
+                              "every [DECISION-REQUIRED] escalated to the user (rc 2 on issues)")
+    ppl.add_argument("--path", required=True, help="path to a programs/<id>/PLAN.md")
+    ppl.set_defaults(func=_cmd_program_lint)
 
     pps = sub.add_parser("program-status", help="aggregate member campaigns "
                          "into one cross-group program view")

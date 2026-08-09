@@ -4,6 +4,56 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.11.0] - 2026-08-09 — a plan may not both declare a decision necessary and take it
+
+The program layer was the only omx artifact with no gate. `report.md` has coverage +
+review + verify + an integrity stamp; `proposals/<id>.md` has `proposal-lint`;
+`programs/<id>/PLAN.md`, the document that commits days of a reserved machine, had
+nothing. This release closes that, and the rules are shaped by the specific way it
+failed rather than by a general wish for rigor.
+
+The reference case is the 2026-08 `dgx-final-scaleup` plan. Its coupling section named
+`step_interval` under a tier titled *"real coupling; a decision is required"*, correctly
+predicted in writing that holding it would spend ~12,252 iterations at frozen difficulty,
+resolved it internally against **measurement readability** — and never listed it in the
+section titled "decisions this program cannot make". The requester's actual objective
+("find the best-performing setting, adjust the coupled parameters") was never written
+into the document at all, so there was no line for that trade to be argued against. The
+resulting run spent ~11x the compute of its 4096-env reference (`0.4968` vs `0.5070` /
+`0.5067` deg `none` ss_error, seed 30, same plant) to land 2% away from it.
+
+### Added
+
+- **`omx program-lint --path <PLAN.md>`** — loud-fail gate (rc 2), same contract as
+  `proposal-lint`. Six rules: the objective section must exist and must carry a `>`
+  blockquote (verbatim, not paraphrased); a `## Decisions for the user` section must
+  exist; every `[DECISION-REQUIRED: <slug>]` marker must appear in it (slug matching is
+  normalized, so `step_interval` and `step-interval` are one knob); a populated tier-2
+  coupling section with no marker at all fails; prose asserting that a decision is
+  required, outside the decision list and with no marker, fails (headings are exempt as
+  section labels, and the Korean phrasings are matched alongside the English since these
+  plans are authored bilingually); and a `## Predicted outcome` section must exist.
+  Run against the plan that failed, it reports four findings.
+- **`omx_core.program`** — the lint plus `PLAN_TEMPLATE` / `HANDOFF_TEMPLATE`. The
+  handoff skeleton carries held decisions as **decision / alternative considered / why
+  held / what it costs**, never as a bare prohibition: `HANDOFF-DGX.md` compressed six
+  reasoned dispositions into "change NOTHING except the two knobs", which left the
+  receiving session no way to see that any of them had ever been a choice.
+
+### Changed
+
+- **`program-init` seeds `PLAN.md` and `HANDOFF.md`** from those templates when absent.
+  An existing file is never overwritten, so the documented git-mv migration path is
+  unaffected. `program-status`'s `plan_md` now reports that a plan EXISTS; whether it is
+  adequate moved to `program-lint`, which is the right place for it.
+- **BREAKING — `omx queue-launch --predicted-outcome` is required**, and
+  `queue_pending_launch(..., predicted_outcome=...)` with it; the pending-launch artifact
+  is `schema_version` 2 and carries the field. The handoff for the run above contained
+  the sentence "the mechanism behind the measured gain is exhausted there", and nobody
+  restated it as "this run is predicted to produce a null past saturation". A predicted
+  null is cheap to read and expensive to discover. Readers are unaffected (additive
+  field); every writer must supply it.
+
 ## [0.10.0] - 2026-08-04 — the program layer is reachable before its first run
 
 ### Changed

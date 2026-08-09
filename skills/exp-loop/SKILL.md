@@ -189,8 +189,15 @@ The proposal from step 2 is the next experiment. Queue it for human approval:
 omx queue-launch --root <root> --run-id <run_id> \
     --proposal-id <proposal_id> \
     --launch-delta "<the one-line change vs profile launch.sh, from the proposal>" \
-    --gpu-gate "<the nvidia-smi precondition, e.g. 'GPU0 free per nvidia-smi'>"
+    --gpu-gate "<the nvidia-smi precondition, e.g. 'GPU0 free per nvidia-smi'>" \
+    --predicted-outcome "<one line: what this run is expected to produce>"
 ```
+
+`--predicted-outcome` is required and it is not a formality. State the honest
+prediction, including "equivalent to what we already have" — a run whose own plan
+predicted a null, never restated as one, has already cost this project days of a
+reserved machine. The approver is betting that time on this sentence and is
+entitled to read it before spending it.
 
 This writes `runs/<run_id>/pending-launch.json` marked `pending approval`. STOP
 here for the launch. You have NOT trained anything. Tell the user the proposal +

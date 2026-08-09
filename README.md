@@ -208,8 +208,9 @@ users only need the four skills above.
 | `omx campaign-status --id <id>` | Aggregate one campaign's ledger. |
 | `omx campaign-list` | List campaigns with event counts. |
 | `omx campaign-plan-add --id <id> --proposal-id <id>` | Record a planned proposal into `plan.json`; status derived at read time. |
-| `omx program-init --id <id> --campaigns a,b,c` | Create `.omx/programs/<id>/` (program.json header; PLAN.md arrives via git mv). |
-| `omx program-status [--id <id>]` | Aggregate member campaigns into one cross-group program view. |
+| `omx program-init --id <id> --campaigns a,b,c` | Create `.omx/programs/<id>/` (program.json header + PLAN.md/HANDOFF.md skeletons; an existing file is never overwritten, so the git-mv migration path still works). |
+| `omx program-lint --path <programs/id/PLAN.md>` | Loud-fail gate — the requester's objective must be carried verbatim, and every `[DECISION-REQUIRED: <slug>]` must reach the user's decision list. |
+| `omx program-status [--id <id>]` | Aggregate member campaigns into one cross-group program view. `plan_md` reports that a plan EXISTS; whether it is adequate is `program-lint`'s question. |
 
 </details>
 
@@ -230,6 +231,23 @@ deliberately no verb that runs git):
 
 `omx program-status` + PLAN.md together are the authoritative cross-group answer to
 "what is done and what is left".
+
+**A plan is gated before it commits machine time.** `omx program-lint --path
+<PLAN.md>` enforces the two things a program document can otherwise lose quietly:
+
+- the requester's objective is carried **verbatim**, in a blockquote, so every knob
+  held or changed is argued against *that* line — a paraphrased objective drifts, and
+  a drifted objective makes every downstream trade look correct; and
+- every coupling the plan itself calls a decision (`[DECISION-REQUIRED: <slug>]`, and
+  any populated tier-2 section) appears in `## Decisions for the user` — **a plan may
+  not both declare a decision necessary and take it.**
+
+That second rule exists because a plan in this project did exactly that: its coupling
+section named `step_interval`, correctly predicted that holding it would spend ~12k
+iterations at frozen difficulty, resolved it internally against *measurement
+readability* rather than the stated goal, and never listed it among "decisions this
+program cannot make". The run then spent 11x the compute of its 4096-env reference to
+land 2% away from it. The lint reports four findings on that document.
 
 <details>
 <summary><b>Output-tree discipline</b></summary>

@@ -33,7 +33,23 @@ def test_init_program_writes_header(paths):
                  "status": "active", "created": NOW}
     on_disk = json.loads(paths.program_json("teacher-final-closeout").read_text())
     assert on_disk == h
-    assert not paths.program_plan_md("teacher-final-closeout").is_file()
+    # The skeletons are seeded so a plan starts with the sections program-lint
+    # gates; whether they are FILLED is program-lint's question, not init's.
+    plan = paths.program_plan_md("teacher-final-closeout").read_text()
+    assert "## Objective" in plan
+    assert "## Decisions for the user" in plan
+    assert "## Predicted outcome" in plan
+    handoff = (paths.program_dir("teacher-final-closeout") / "HANDOFF.md").read_text()
+    assert "## Held decisions" in handoff
+
+
+def test_init_program_never_overwrites_an_existing_plan(paths):
+    """The git-mv migration path stays open: a narrative already in place wins."""
+    _campaigns(paths, ["grp_a"])
+    init_program(paths, "prog", ["grp_a"], now=NOW)
+    paths.program_plan_md("prog").write_text("# hand-written\n")
+    init_program(paths, "prog", [], now=NOW)
+    assert paths.program_plan_md("prog").read_text() == "# hand-written\n"
 
 
 def test_init_program_reinit_appends_and_preserves_created(paths):
@@ -85,7 +101,8 @@ def test_program_status_aggregates_members(paths):
     st = program_status(paths, "prog")
     assert st["program_id"] == "prog"
     assert st["status"] == "active"
-    assert st["plan_md"] is False
+    # init seeds the skeleton, so plan_md reports existence; adequacy is program-lint's job
+    assert st["plan_md"] is True
     assert [c["campaign_id"] for c in st["campaigns"]] == ["grp_a", "grp_b"]
     assert st["campaigns"][0]["plan"][0]["derived_status"] == "planned"
 

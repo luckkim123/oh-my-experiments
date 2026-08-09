@@ -388,7 +388,7 @@ def test_cli_report_parse_empty_report_rc0(tmp_path, capsys):
 
 def test_queue_launch_writes_pending(tmp_path, capsys):
     rc = main([
-        "queue-launch", "--root", str(tmp_path), "--run-id", "run-9",
+        "queue-launch", "--predicted-outcome", "test prediction", "--root", str(tmp_path), "--run-id", "run-9",
         "--proposal-id", "20260530-120000-next",
         "--launch-delta", "set radius=0.05",
         "--gpu-gate", "GPU0 free",
@@ -404,7 +404,7 @@ def test_queue_launch_writes_pending(tmp_path, capsys):
 
 def test_loop_status_reports_deadline_and_queue(tmp_path, capsys):
     main([
-        "queue-launch", "--root", str(tmp_path), "--run-id", "run-9",
+        "queue-launch", "--predicted-outcome", "test prediction", "--root", str(tmp_path), "--run-id", "run-9",
         "--proposal-id", "20260530-120000-next",
         "--launch-delta", "set radius=0.05", "--gpu-gate", "GPU0 free",
     ])

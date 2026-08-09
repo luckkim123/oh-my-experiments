@@ -87,5 +87,5 @@ def test_pending_launch_naive_queued_at_reads_cleanly(tmp_path):
     p = OmxPaths(root=str(tmp_path))
     queue_pending_launch(p, "run1", proposal_id="20260711-100000-x",
                          launch_delta="d", gpu_gate="g",
-                         queued_at="2026-07-11T10:00:00")  # naive — read-only field
+                         queued_at="2026-07-11T10:00:00", predicted_outcome="test prediction")  # naive — read-only field
     assert read_pending_launch(p, "run1")["queued_at"] == "2026-07-11T10:00:00"

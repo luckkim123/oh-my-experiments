@@ -52,8 +52,7 @@ def test_queue_pending_launch_writes_artifact(tmp_path):
         proposal_id="20260530-120000-next",
         launch_delta="set payload_cog_offset_xy_radius=0.05",
         gpu_gate="nvidia-smi shows GPU0 free",
-        queued_at="2026-05-30T12:00:00+00:00",
-    )
+        queued_at="2026-05-30T12:00:00+00:00", predicted_outcome="test prediction")
     target = p.pending_launch_json("run-7")
     assert target.exists()
     data = json.loads(target.read_text())
@@ -69,7 +68,7 @@ def test_queue_pending_launch_loud_fails_on_empty_proposal(tmp_path):
     with pytest.raises(OmxError):
         queue_pending_launch(
             p, "run-7", proposal_id="  ", launch_delta="x",
-            gpu_gate="g", queued_at="2026-05-30T12:00:00+00:00")
+            gpu_gate="g", queued_at="2026-05-30T12:00:00+00:00", predicted_outcome="test prediction")
 
 
 def test_queue_pending_launch_loud_fails_on_empty_delta(tmp_path):
@@ -77,14 +76,14 @@ def test_queue_pending_launch_loud_fails_on_empty_delta(tmp_path):
     with pytest.raises(OmxError):
         queue_pending_launch(
             p, "run-7", proposal_id="20260530-120000-next", launch_delta="",
-            gpu_gate="g", queued_at="2026-05-30T12:00:00+00:00")
+            gpu_gate="g", queued_at="2026-05-30T12:00:00+00:00", predicted_outcome="test prediction")
 
 
 def test_read_pending_launch_roundtrips(tmp_path):
     p = OmxPaths(root=tmp_path)
     queue_pending_launch(
         p, "run-7", proposal_id="20260530-120000-next",
-        launch_delta="x", gpu_gate="g", queued_at="2026-05-30T12:00:00+00:00")
+        launch_delta="x", gpu_gate="g", queued_at="2026-05-30T12:00:00+00:00", predicted_outcome="test prediction")
     out = read_pending_launch(p, "run-7")
     assert out["proposal_id"] == "20260530-120000-next"
     assert out["status"] == "pending approval"

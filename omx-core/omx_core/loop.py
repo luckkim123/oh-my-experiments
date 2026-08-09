@@ -61,7 +61,7 @@ def _require_nonempty(value, label: str) -> str:
 
 
 def queue_pending_launch(paths: OmxPaths, run_id, *, proposal_id, launch_delta,
-                         gpu_gate, queued_at, queued_commit=None,
+                         gpu_gate, queued_at, predicted_outcome, queued_commit=None,
                          open_leads=None, acknowledged_gates=None) -> None:
     """Write runs/<run_id>/pending-launch.json marked 'pending approval' (B8).
 
@@ -70,6 +70,12 @@ def queue_pending_launch(paths: OmxPaths, run_id, *, proposal_id, launch_delta,
     is the one-line change vs the profile's launch.sh; `gpu_gate` is the
     nvidia-smi precondition the human must confirm; `queued_at` is an ISO-8601
     instant supplied by the caller (the CLI injects the real clock).
+    `predicted_outcome` is what the requester is approving a bet ON, in one line,
+    and it is REQUIRED: the dgx-final-scaleup plan contained the sentence "the
+    mechanism behind the measured gain is exhausted there", nobody restated it as
+    "this run is predicted to produce a null past saturation", and it cost three
+    days of a reserved machine. A predicted null is cheap to read and expensive
+    to discover.
     `queued_commit` (optional, D-R4-6) is the training-repo HEAD at queue time,
     recorded for launch provenance; omitted from the artifact when None.
     `open_leads` (optional [slug]) records soft actionable wiki leads still open
@@ -82,14 +88,16 @@ def queue_pending_launch(paths: OmxPaths, run_id, *, proposal_id, launch_delta,
     delta = _require_nonempty(launch_delta, "launch_delta")
     gate = _require_nonempty(gpu_gate, "gpu_gate")
     when = _require_nonempty(queued_at, "queued_at")
+    predicted = _require_nonempty(predicted_outcome, "predicted_outcome")
     target = paths.pending_launch_json(run_id)
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "pending approval",
         "proposal_id": pid,
         "launch_delta": delta,
         "gpu_gate": gate,
+        "predicted_outcome": predicted,
         "queued_at": when,
     }
     if queued_commit:

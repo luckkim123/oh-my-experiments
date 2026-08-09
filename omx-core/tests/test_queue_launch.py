@@ -34,7 +34,7 @@ def test_queue_pending_launch_records_commit_when_given(tmp_path):
     queue_pending_launch(p, "run1", proposal_id="20260711-100000-x",
                          launch_delta="d", gpu_gate="g",
                          queued_at="2026-07-11T10:00:00+00:00",
-                         queued_commit="deadbeef")
+                         queued_commit="deadbeef", predicted_outcome="test prediction")
     data = read_pending_launch(p, "run1")
     assert data["queued_commit"] == "deadbeef"
 
@@ -43,7 +43,7 @@ def test_queue_pending_launch_omits_commit_when_none(tmp_path):
     p = _p(tmp_path)
     queue_pending_launch(p, "run1", proposal_id="20260711-100000-x",
                          launch_delta="d", gpu_gate="g",
-                         queued_at="2026-07-11T10:00:00+00:00")
+                         queued_at="2026-07-11T10:00:00+00:00", predicted_outcome="test prediction")
     data = read_pending_launch(p, "run1")
     assert "queued_commit" not in data  # backward-compatible shape
 
@@ -52,7 +52,7 @@ def test_cli_queue_launch_records_head(tmp_path, capsys):
     from omx_core import cli
     repo = tmp_path / "proj"
     head = _init_repo(repo)
-    rc = cli.main(["queue-launch", "--root", str(tmp_path), "--run-id", "run1",
+    rc = cli.main(["queue-launch", "--predicted-outcome", "test prediction", "--root", str(tmp_path), "--run-id", "run1",
                    "--proposal-id", "20260711-100000-x", "--launch-delta", "d",
                    "--gpu-gate", "g", "--cwd", str(repo)])
     out = json.loads(capsys.readouterr().out)
@@ -61,7 +61,7 @@ def test_cli_queue_launch_records_head(tmp_path, capsys):
 
 def test_cli_queue_launch_no_cwd_warns_and_omits(tmp_path, capsys):
     from omx_core import cli
-    rc = cli.main(["queue-launch", "--root", str(tmp_path), "--run-id", "run1",
+    rc = cli.main(["queue-launch", "--predicted-outcome", "test prediction", "--root", str(tmp_path), "--run-id", "run1",
                    "--proposal-id", "20260711-100000-x", "--launch-delta", "d",
                    "--gpu-gate", "g"])  # no --cwd
     cap = capsys.readouterr()
@@ -73,7 +73,7 @@ def test_cli_queue_launch_no_cwd_warns_and_omits(tmp_path, capsys):
 
 def test_cli_queue_launch_non_repo_cwd_warns(tmp_path, capsys):
     from omx_core import cli
-    rc = cli.main(["queue-launch", "--root", str(tmp_path), "--run-id", "run1",
+    rc = cli.main(["queue-launch", "--predicted-outcome", "test prediction", "--root", str(tmp_path), "--run-id", "run1",
                    "--proposal-id", "20260711-100000-x", "--launch-delta", "d",
                    "--gpu-gate", "g", "--cwd", str(tmp_path)])  # tmp_path is not a git repo
     cap = capsys.readouterr()
@@ -104,7 +104,7 @@ def test_queue_launch_refuses_on_open_hard_gate(tmp_path, capsys):
     from omx_core import cli
     p = _p(tmp_path)
     _seed(p, "TAM row rewrite", "needs-apply-before-retrain", "measure first")
-    rc = cli.main(["queue-launch", "--root", str(tmp_path), "--run-id", "run1",
+    rc = cli.main(["queue-launch", "--predicted-outcome", "test prediction", "--root", str(tmp_path), "--run-id", "run1",
                    "--proposal-id", "20260711-100000-x", "--launch-delta", "d",
                    "--gpu-gate", "g"])
     out = json.loads(capsys.readouterr().out)
@@ -118,7 +118,7 @@ def test_queue_launch_ack_gate_allows_and_records(tmp_path, capsys):
     from omx_core import cli
     p = _p(tmp_path)
     _seed(p, "TAM row rewrite", "needs-apply-before-retrain")
-    rc = cli.main(["queue-launch", "--root", str(tmp_path), "--run-id", "run1",
+    rc = cli.main(["queue-launch", "--predicted-outcome", "test prediction", "--root", str(tmp_path), "--run-id", "run1",
                    "--proposal-id", "20260711-100000-x", "--launch-delta", "d",
                    "--gpu-gate", "g", "--ack-gate", "tam_row_rewrite.md"])
     out = json.loads(capsys.readouterr().out)
@@ -132,7 +132,7 @@ def test_queue_launch_warns_on_soft_lead(tmp_path, capsys):
     from omx_core import cli
     p = _p(tmp_path)
     _seed(p, "Command box eval", "needs-experiment")
-    rc = cli.main(["queue-launch", "--root", str(tmp_path), "--run-id", "run1",
+    rc = cli.main(["queue-launch", "--predicted-outcome", "test prediction", "--root", str(tmp_path), "--run-id", "run1",
                    "--proposal-id", "20260711-100000-x", "--launch-delta", "d",
                    "--gpu-gate", "g"])
     cap = capsys.readouterr()
@@ -144,7 +144,7 @@ def test_queue_launch_warns_on_soft_lead(tmp_path, capsys):
 
 def test_queue_launch_empty_wiki_passes_clean(tmp_path, capsys):
     from omx_core import cli
-    rc = cli.main(["queue-launch", "--root", str(tmp_path), "--run-id", "run1",
+    rc = cli.main(["queue-launch", "--predicted-outcome", "test prediction", "--root", str(tmp_path), "--run-id", "run1",
                    "--proposal-id", "20260711-100000-x", "--launch-delta", "d",
                    "--gpu-gate", "g"])
     out = json.loads(capsys.readouterr().out)
@@ -157,7 +157,7 @@ def test_queue_launch_corrupt_page_does_not_block(tmp_path, capsys):
     p = _p(tmp_path)
     p.wiki_dir().mkdir(parents=True, exist_ok=True)
     (p.wiki_dir() / "broken.md").write_text("no frontmatter here", encoding="utf-8")
-    rc = cli.main(["queue-launch", "--root", str(tmp_path), "--run-id", "run1",
+    rc = cli.main(["queue-launch", "--predicted-outcome", "test prediction", "--root", str(tmp_path), "--run-id", "run1",
                    "--proposal-id", "20260711-100000-x", "--launch-delta", "d",
                    "--gpu-gate", "g"])
     assert rc == 0   # a corrupt page is surfaced elsewhere (lint), never blocks a launch
@@ -167,7 +167,7 @@ def test_queue_pending_launch_records_open_leads_and_acks(tmp_path):
     p = _p(tmp_path)
     queue_pending_launch(p, "run1", proposal_id="x", launch_delta="d", gpu_gate="g",
                          queued_at="2026-07-11T10:00:00+00:00",
-                         open_leads=["a.md"], acknowledged_gates=["b.md"])
+                         open_leads=["a.md"], acknowledged_gates=["b.md"], predicted_outcome="test prediction")
     data = read_pending_launch(p, "run1")
     assert data["open_leads"] == ["a.md"]
     assert data["acknowledged_gates"] == ["b.md"]
@@ -176,6 +176,6 @@ def test_queue_pending_launch_records_open_leads_and_acks(tmp_path):
 def test_queue_pending_launch_omits_gate_fields_when_none(tmp_path):
     p = _p(tmp_path)
     queue_pending_launch(p, "run1", proposal_id="x", launch_delta="d", gpu_gate="g",
-                         queued_at="2026-07-11T10:00:00+00:00")
+                         queued_at="2026-07-11T10:00:00+00:00", predicted_outcome="test prediction")
     data = read_pending_launch(p, "run1")
     assert "open_leads" not in data and "acknowledged_gates" not in data
