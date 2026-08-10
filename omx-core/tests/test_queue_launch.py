@@ -179,3 +179,37 @@ def test_queue_pending_launch_omits_gate_fields_when_none(tmp_path):
                          queued_at="2026-07-11T10:00:00+00:00", predicted_outcome="test prediction")
     data = read_pending_launch(p, "run1")
     assert "open_leads" not in data and "acknowledged_gates" not in data
+
+
+def test_queue_launch_records_wiki_coverage_and_warns_on_an_empty_roster(tmp_path, capsys):
+    """An empty gate and a gate nobody ever filed against are the same zero.
+
+    albc 2026-08-10: 540 pages, 0 with a blocking status. Every launch that
+    round cleared a gate that had never held anything, and the pass read as
+    'nothing un-applied'. The denominator has to travel with the verdict.
+    """
+    from omx_core import cli
+    p = _p(tmp_path)
+    _seed(p, "some finding nobody gave a status", None)
+    rc = cli.main(["queue-launch", "--predicted-outcome", "test prediction",
+                   "--root", str(tmp_path), "--run-id", "run1",
+                   "--proposal-id", "20260711-100000-x", "--launch-delta", "d",
+                   "--gpu-gate", "g"])
+    cap = capsys.readouterr()
+    assert rc == 0
+    assert read_pending_launch(p, "run1")["wiki_coverage"] == {"pages": 1, "with_status": 0}
+    assert "EMPTY roster" in cap.err
+
+
+def test_queue_launch_does_not_warn_once_the_wiki_is_filed_against(tmp_path, capsys):
+    from omx_core import cli
+    p = _p(tmp_path)
+    _seed(p, "a lead someone filed", "needs-experiment")
+    rc = cli.main(["queue-launch", "--predicted-outcome", "test prediction",
+                   "--root", str(tmp_path), "--run-id", "run1",
+                   "--proposal-id", "20260711-100000-x", "--launch-delta", "d",
+                   "--gpu-gate", "g"])
+    cap = capsys.readouterr()
+    assert rc == 0
+    assert read_pending_launch(p, "run1")["wiki_coverage"] == {"pages": 1, "with_status": 1}
+    assert "EMPTY roster" not in cap.err

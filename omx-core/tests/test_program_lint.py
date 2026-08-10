@@ -115,3 +115,59 @@ def test_cli_loud_fails_on_a_missing_file(tmp_path, capsys):
     """main() intercepts SystemExit(str) and maps it to rc 2 with the message on stderr."""
     assert main(["program-lint", "--path", str(tmp_path / "nope.md")]) == 2
     assert "cannot read" in capsys.readouterr().err
+
+
+# --- tier1-held-key-rescaled (the 2026-08 dgx-final-teacher Arm D incident) ---
+#
+# `num_envs` 4096 -> 16384 while the DORAEMON knobs it feeds kept their 4096
+# values. The plan's own tier-1 table printed "boundaries fired 80 -> 40" under
+# "nothing to set". The number was computed, displayed, and never argued.
+
+RESCALED = """# Program: p
+## Objective
+> train the final teacher
+
+## Parameter coupling
+### Tier 1 — follows mechanically; nothing to set
+| quantity | Arm W (4096) | Arm D (16384) |
+|:--|--:|--:|
+| boundaries fired (`max_iterations` / `step_interval`) | 80 | 40 |
+
+### Tier 3 — no coupling that this plan moves; byte-identical
+`step_interval` 250 (the dwell window); `gamma`/`lam` 0.99/0.95.
+
+## Decisions for the user
+- (nothing escalated)
+
+## Predicted outcome
+Equivalent to the 4096-env reference.
+"""
+
+
+def test_held_key_whose_meaning_moved_is_flagged():
+    assert "tier1-held-key-rescaled" in _rules(RESCALED)
+
+
+def test_derived_assertion_clears_the_row():
+    """The author types the assertion; the gate is satisfied by an argument."""
+    assert "tier1-held-key-rescaled" not in _rules(
+        RESCALED.replace("| 80 | 40 |", "| 80 | 40 | [DERIVED]"))
+
+
+def test_escalating_the_row_also_clears_it():
+    text = RESCALED.replace("| 80 | 40 |", "| 80 | 40 | [DECISION-REQUIRED: dwell]"
+                            ).replace("- (nothing escalated)",
+                                      "- `[DECISION-REQUIRED: dwell]` re-derive step_interval at 16384")
+    assert "tier1-held-key-rescaled" not in _rules(text)
+
+
+def test_unmoved_row_is_not_flagged():
+    """A held key in a row whose value did NOT move is exactly tier 1's job."""
+    assert "tier1-held-key-rescaled" not in _rules(
+        RESCALED.replace("| 80 | 40 |", "| 80 | 80 |"))
+
+
+def test_key_not_held_in_tier3_is_not_flagged():
+    """Only the value-held-meaning-moved shape; a moving knob is tier 2's problem."""
+    assert "tier1-held-key-rescaled" not in _rules(
+        RESCALED.replace("`step_interval` 250 (the dwell window); ", ""))

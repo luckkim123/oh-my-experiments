@@ -196,6 +196,11 @@ This is the only wiki write exp-init makes. It records workspace conventions, no
 findings (those come from exp-analyze). If `omx wiki add` loud-fails, surface the
 message and continue - the profile is already written; the seed is best-effort.
 
+No `--status` here, deliberately: a conventions page has nothing pending. `--status`
+belongs on FINDINGS, and exp-analyze owns that call (see its "Decide `--status` on every
+page you write" section) — it is the only input `queue-launch`'s pre-launch gate and the
+per-turn backlog hook ever read.
+
 Then project the profile into the wiki (repeatable, unlike the one-shot seed):
 `omx wiki sync-profile --root "<anchor>"` — regenerates the reserved `profile.md`
 page from `.omx/profile/*` so wiki readers always see the CURRENT profile.

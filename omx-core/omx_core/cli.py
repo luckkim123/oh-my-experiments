@@ -953,6 +953,13 @@ def _cmd_queue_launch(args) -> int:
             and pg["status"] != "resolved"]
     open_leads = [pg["slug"] for pg in soft] or None
     acked_present = sorted(pg["slug"] for pg in blocking if pg["slug"] in acked) or None
+    # Carry the DENOMINATOR of the gate above, not just its verdict: "no open
+    # gates" and "nobody has ever filed one" are the same zero. See
+    # queue_pending_launch's docstring for the 0-of-540 measurement.
+    n_pages = len(catalog["pages"])
+    coverage = ({"pages": n_pages,
+                 "with_status": sum(1 for pg in catalog["pages"] if pg["status"])}
+                if n_pages else None)
     queued_commit = None
     if args.cwd:
         try:
@@ -973,7 +980,8 @@ def _cmd_queue_launch(args) -> int:
             proposal_id=args.proposal_id, launch_delta=args.launch_delta,
             gpu_gate=args.gpu_gate, queued_at=now, queued_commit=queued_commit,
             predicted_outcome=args.predicted_outcome,
-            open_leads=open_leads, acknowledged_gates=acked_present)
+            open_leads=open_leads, acknowledged_gates=acked_present,
+            wiki_coverage=coverage)
         print(json.dumps(read_pending_launch(paths, args.run_id)))
     except OmxError as e:
         raise SystemExit(str(e))
@@ -989,6 +997,12 @@ def _cmd_queue_launch(args) -> int:
     except (OmxError, OSError, ValueError) as e:
         print(f"WARNING: campaign launched-event append failed: {e}",
               file=sys.stderr)
+    if coverage and not coverage["with_status"]:
+        print(f"WARNING: the pre-launch wiki gate passed on an EMPTY roster — none of "
+              f"{coverage['pages']} pages carry any status, so this gate has never had "
+              "anything to refuse. Its pass is not evidence that nothing is un-applied; "
+              "check what this round's own analyses should have filed "
+              "(`omx wiki add --status`)", file=sys.stderr)
     if soft:
         print(f"WARNING: {len(soft)} open experiment lead(s) not resolved: "
               f"{', '.join(pg['slug'] for pg in soft)} "

@@ -62,7 +62,8 @@ def _require_nonempty(value, label: str) -> str:
 
 def queue_pending_launch(paths: OmxPaths, run_id, *, proposal_id, launch_delta,
                          gpu_gate, queued_at, predicted_outcome, queued_commit=None,
-                         open_leads=None, acknowledged_gates=None) -> None:
+                         open_leads=None, acknowledged_gates=None,
+                         wiki_coverage=None) -> None:
     """Write runs/<run_id>/pending-launch.json marked 'pending approval' (B8).
 
     This is the ONLY thing exp-loop does with a launch — it queues it, never
@@ -83,6 +84,13 @@ def queue_pending_launch(paths: OmxPaths, run_id, *, proposal_id, launch_delta,
     the human acked to launch over — the handler computes both from the wiki so the
     approval artifact CARRIES the un-applied corrections (the fix for 'no artifact
     surfaced that fact'). Both omitted from the artifact when falsy.
+    `wiki_coverage` (optional {pages, with_status}) records how much of the wiki
+    carries ANY status at queue time, so an EMPTY gate can be read rather than
+    trusted. The gate REFUSES on an open hard page and passes silently on none —
+    and "none open" is indistinguishable from "nobody ever filed one" unless the
+    denominator travels with it. One workspace measured 0 of 540 pages carrying
+    any status (2026-08-10): every launch that round passed a gate that had
+    never held anything. Omitted from the artifact when falsy.
     All non-optional args are required and loud-fail when empty. Atomic write."""
     pid = _require_nonempty(proposal_id, "proposal_id")
     delta = _require_nonempty(launch_delta, "launch_delta")
@@ -106,6 +114,8 @@ def queue_pending_launch(paths: OmxPaths, run_id, *, proposal_id, launch_delta,
         payload["open_leads"] = open_leads
     if acknowledged_gates:
         payload["acknowledged_gates"] = acknowledged_gates
+    if wiki_coverage:
+        payload["wiki_coverage"] = wiki_coverage
     with atomic_path(target) as tmp:
         tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))
 

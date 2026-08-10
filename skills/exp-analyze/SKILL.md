@@ -450,6 +450,43 @@ Auto-capture discipline (append-only, non-destructive, frictionless):
   run-specific noise writes ZERO pages. Skip silently — a wiki full of every run's
   noise stops being useful.
 
+### Decide `--status` on every page you write — this field is the launch gate's only input
+
+`omx wiki add` takes `--status` and `--blocked-on`, and **four mechanisms read that
+field while nothing else writes it**: `queue-launch` REFUSES on an open
+`needs-apply-before-retrain`, the per-turn route hook injects the open roster into
+context, and exp-design / exp-loop enumerate it before choosing the next probe. A page
+written without a status is invisible to all four. Analysis is where findings are made,
+so analysis is the only place the field can be set.
+
+Left to discretion it simply goes unused. Measured on one workspace 2026-08-10:
+540 pages, **0 blocking, 459 with no status at all** — the launch gate had never had
+anything to refuse, and a program plan had to hand-write a section titled "why the
+machine backlog reads empty" to warn its reader that the zero meant nothing.
+
+So make the status an explicit call per page. The *decision* is required; a status
+*value* is not — most pages correctly have none:
+
+| what the finding is | status |
+|:--|:--|
+| knowledge with nothing pending — a pattern, a threshold, a cause now settled | omit `--status` (the honest default, and most pages) |
+| an open lead — something worth testing that nobody has tested | `--status needs-experiment` |
+| a correction NOT yet in the code, which makes any dependent run's numbers wrong until it is applied | `--status needs-apply-before-retrain --blocked-on "<what unblocks it>"` |
+
+**Reserve the blocking value narrowly.** It refuses every future launch until resolved
+or `--ack-gate`d, so it is for facts that INVALIDATE dependent runs (a wrong TAM row, a
+mis-signed axis, a mis-scaled reward), never for a treatment that merely measured well.
+A gain measured in one regime is `needs-experiment` unless you can also say the runs
+without it are *wrong*; a scale-specific fix transfers only as far as its regime does.
+Inflating the blocking status teaches the next session to ack past the gate, which costs
+more than the empty roster ever did.
+
+Closing is a write too: when this analysis settles a previously-open lead, add the page
+again under its **same title** with `--status resolved` (append-only merge) so the roster
+shrinks. A lead moved off the experiment queue for a non-code reason (hardware, scope) is
+`resolved` with that reason in the body — `resolved` means "off this queue", not "applied
+in code", and the body is the only place that distinction survives.
+
 ### Write the CONCLUSION *and* its evidence — never a bare label (re-read-cost rule)
 
 A wiki note must carry the load-bearing evidence that backs its claim, not just the

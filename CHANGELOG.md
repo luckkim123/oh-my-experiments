@@ -4,6 +4,70 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.11.1] - 2026-08-10 — an empty gate is not a clean one
+
+v0.11.0 gated the plan. This one gates the two ways a gate reports "clear" when it
+was never given anything to hold.
+
+The reference case is a two-arm final teacher round. Its `PLAN.md` passes
+`program-lint` at rc 0 and deserves to: the objective is verbatim, all nine
+couplings are marked and escalated, and the author even hand-wrote a section
+titled *"Deferred — and why the machine backlog reads empty"* stating that the
+machine's zero "is not evidence that nothing is open". A human compensating in
+prose for a mechanism that returns nothing is the defect, stated by the person
+who hit it.
+
+Measured on that workspace: **540 wiki pages, 0 carrying a blocking status, 459
+carrying no status at all.** `--status` is read by four mechanisms — `queue-launch`'s
+pre-launch REFUSE, the per-turn backlog hook, and exp-design / exp-loop's enumeration
+— and written by none of them. Every launch there cleared a gate that had never held
+anything, and cleared it silently.
+
+The second failure is upstream of that. The same plan's tier-1 table printed
+`boundaries fired 80 -> 40` and `DORAEMON buffer time window ~11.4 -> ~2.9 iters`
+under a heading reading *"follows mechanically; nothing to set"*, because `num_envs`
+went 4096 -> 16384 while the episode-count knobs it feeds held their 4096 values. The
+distortion was computed, displayed, and never argued. That run was killed an hour in.
+
+### Added
+
+- **`tier1-held-key-rescaled`** (program-lint rule 7) — a tier-1 row naming a key that
+  tier 3 declares byte-identical, whose own value moves across the columns, is the
+  value-held-meaning-moved shape. The row must escalate with
+  `[DECISION-REQUIRED: <slug>]` or type out `[DERIVED]` (follows by arithmetic, nothing
+  downstream reads the changed quantity). The document cannot tell the two apart, and
+  making the author assert it is the mechanism, not a limitation of it. Run against the
+  plan above it reports three rows and flips it to rc 2.
+- **`wiki_coverage` in `pending-launch.json`** (`{pages, with_status}`) — the gate's
+  denominator now travels with its verdict, so an approval artifact records whether
+  "no open gates" meant a clean roster or an empty one. `queue-launch` additionally
+  warns on stderr when nothing in the wiki carries any status.
+
+### Changed
+
+- **exp-analyze now decides `--status` on every page it writes** (new section, "Decide
+  `--status` on every page you write"). Findings are made during analysis, so analysis
+  is the only place the field can be set; leaving it implicit is why it measured 0/540.
+  The *decision* is required, a status *value* is not — most pages correctly have none.
+  The blocking value stays narrow on purpose: it is for facts that INVALIDATE dependent
+  runs, never for a treatment that measured well in one regime, because a gate that
+  refuses too often trains the next session to `--ack-gate` past it.
+- **The backlog hook states its coverage instead of falling silent.** Zero open leads
+  on a populated wiki now injects `N/M pages carry NO status` rather than the empty
+  string, which had made "nothing is open" and "nobody ever filed one" identical in
+  context. A wiki with no pages at all still says nothing.
+- **`PLAN_TEMPLATE` tier 1** documents the backtick requirement and the `[DERIVED]`
+  escape. A held key left unquoted is a key the lint cannot see — the buffer-window row
+  above escapes rule 7 for exactly that reason.
+
+### Notes
+
+Not adopted: a rule forcing every PASS-verdict probe into
+`needs-apply-before-retrain`. The incident it was proposed for turns out not to be one
+— that plan's tier 2(c) escalated the excluded treatment as `[DECISION-REQUIRED:
+entropy_coef_per_dim]` and recorded why it did not transfer regimes. Mechanizing it
+would have inflated the blocking status against a case that was argued correctly.
+
 ## [0.11.0] - 2026-08-09 — a plan may not both declare a decision necessary and take it
 
 The program layer was the only omx artifact with no gate. `report.md` has coverage +

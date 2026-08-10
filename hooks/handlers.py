@@ -168,7 +168,25 @@ def _fetch_open_backlog(payload):
                 blocked = page.get("blocked_on") or "unblocked"
                 lines.append(f"  [{st}] {page.get('slug', '?')} (blocked: {blocked})")
         if not lines:
-            return ""
+            if not pages:
+                return ""   # no wiki yet — there is genuinely nothing to say
+            # An empty backlog is ALSO what a wiki whose writers never set
+            # --status looks like, and the zero alone cannot tell the two apart.
+            # Measured on one workspace 2026-08-10: 540 pages, 0 blocking,
+            # 459 with no status at all — the launch gate had never had anything
+            # to refuse, and a plan author had to hand-write a section titled
+            # "why the machine backlog reads empty" to say so. State the
+            # coverage so the zero can be read instead of trusted.
+            unstatused = sum(1 for p in pages if not p.get("status"))
+            return (
+                "<omx-open-backlog>\n"
+                f"0 open leads. Coverage: {unstatused}/{len(pages)} pages carry NO status — "
+                "an empty backlog is not evidence that nothing is open, it is also what a "
+                "wiki nobody files against looks like. Do not report 'no blockers' from this "
+                "zero alone; check what this round's own findings should have filed "
+                "(`omx wiki add --status`).\n"
+                "</omx-open-backlog>"
+            )
         return (
             "<omx-open-backlog>\n"
             "LIVE actionable leads on THIS omx root (auto-fetched every turn). Before "

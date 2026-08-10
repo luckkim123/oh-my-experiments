@@ -152,3 +152,22 @@ def test_route_emit_plain_when_backlog_empty(monkeypatch):
     monkeypatch.setattr(mod, "_fetch_open_backlog", lambda p: "")
     ctx = mod.route_emit({"prompt": "hi"})["hookSpecificOutput"]["additionalContext"]
     assert ctx == mod._ROUTE_CHECKPOINT
+
+
+def test_backlog_zero_open_but_populated_wiki_states_the_coverage(monkeypatch):
+    """Zero open leads is not silence when nobody files statuses (albc 0/540).
+
+    The old `return ""` made "nothing is open" and "nobody ever filed one"
+    identical in context, so a launch decision read the absence as a clean bill.
+    """
+    mod = _load_handlers()
+    monkeypatch.setattr(mod, "_resolve_backlog_root", lambda p: "/fake/root")
+    monkeypatch.setattr(subprocess, "run", _fake_run([
+        {"slug": "a.md", "status": None},
+        {"slug": "b.md", "status": None},
+        {"slug": "c.md", "status": "resolved"},
+    ]))
+    out = mod._fetch_open_backlog({"cwd": "/fake/root"})
+    assert "<omx-open-backlog>" in out
+    assert "2/3 pages carry NO status" in out
+    assert "omx wiki add --status" in out

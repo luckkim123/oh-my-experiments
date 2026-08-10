@@ -29,6 +29,13 @@ from omx_core.proposal import _section as _md_section
 _MARKER = re.compile(r"\[DECISION-REQUIRED:\s*([^\]]+?)\s*\]")
 _ANY_HEADING = re.compile(r"(?m)^(#{2,})\s+(.*)$")
 
+#: A tier-1 row may assert "this moved by arithmetic and nothing downstream
+#: reads it" instead of escalating. The assertion has to be typed out — that is
+#: the whole mechanism (see `_TIER1_RULE` below).
+_DERIVED = re.compile(r"\[DERIVED\]")
+#: Config keys are written in backticks throughout these plans.
+_BACKTICKED = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)`")
+
 # The phrase family that means "this is not settled". Korean forms are kept
 # alongside the English: these repos treat Korean trigger words as functional
 # data, and the plan that failed was authored bilingually.
@@ -69,6 +76,51 @@ def _substantive(body: str) -> bool:
         if s and not set(s) <= set("|-: "):
             return True
     return False
+
+
+def _table_rows(body: str):
+    """Markdown table rows, minus the header rule (`|---|---|`)."""
+    for line in body.splitlines():
+        s = line.strip()
+        if s.startswith("|") and not set(s) <= set("|-: "):
+            yield s
+
+
+def _held_keys(tier3: str | None) -> set[str]:
+    """Config keys the plan declares byte-identical / not moved by this line."""
+    return set(_BACKTICKED.findall(tier3 or ""))
+
+
+def _rescaled_tier1_rows(text: str) -> list[str]:
+    """Tier-1 rows that couple a HELD key to a quantity that MOVED, unargued.
+
+    The 2026-08 `dgx-final-teacher` Arm D incident in one sentence: `num_envs`
+    went 4096 -> 16384 while the DORAEMON knobs it feeds stayed at their 4096
+    values, so the plan's own tier-1 table printed the distortion ("boundaries
+    fired 80 -> 40", "buffer time window ~11.4 -> ~2.9 iters") under a heading
+    that reads "follows mechanically; nothing to set". The number was computed,
+    displayed, and never argued.
+
+    A key that is byte-identical in tier 3 yet sits in a tier-1 row whose value
+    moved is exactly that shape: the value held, the MEANING did not. The row
+    must therefore either escalate (`[DECISION-REQUIRED: ...]`) or type out the
+    `[DERIVED]` assertion. Deriving the difference automatically is not
+    possible from the document — making the author assert it is the point.
+    """
+    tier1 = _section_any(text, "tier 1")
+    held = _held_keys(_section_any(text, "tier 3"))
+    if tier1 is None or not held:
+        return []
+    bad = []
+    for row in _table_rows(tier1):
+        if not held & set(_BACKTICKED.findall(row)):
+            continue
+        if _DERIVED.search(row) or _MARKER.search(row):
+            continue
+        cells = [c.strip() for c in row.strip("|").split("|")]
+        if len({c for c in cells[1:] if c}) > 1:   # label column excluded
+            bad.append(cells[0][:80])
+    return bad
 
 
 def lint_program(text: str) -> dict:
@@ -114,6 +166,15 @@ def lint_program(text: str) -> dict:
             "the tier-2 coupling section has content but no [DECISION-REQUIRED: <slug>] "
             "marker — a coupling real enough to list is real enough to escalate; mark each "
             "row, or move it to tier 1/3 if it is genuinely settled")
+
+    rescaled = _rescaled_tier1_rows(text)
+    if rescaled:
+        add("tier1-held-key-rescaled",
+            f"tier-1 row(s) {rescaled} name a key tier 3 holds byte-identical, yet the row's "
+            "value moves across the columns — the value held, the meaning did not, and "
+            "'nothing to set' is an assertion nobody made. Escalate the row with "
+            "[DECISION-REQUIRED: <slug>], or type [DERIVED] in it to assert it follows by "
+            "arithmetic with nothing downstream reading the changed quantity")
 
     # The incident signature in prose: a line asserting that a decision is required,
     # outside the decision list, carrying no marker. Headings are section labels
@@ -167,6 +228,13 @@ Three tiers. Anything in tier 2 needs a `[DECISION-REQUIRED: <slug>]` marker AND
 a matching entry in the decision list below.
 
 ### Tier 1 — follows mechanically; nothing to set
+
+Name every config key in backticks, including the held ones a derived quantity
+divides by — a key left unquoted is a key the lint cannot see. Any row that
+names a tier-3 held key while its own value moves across the columns must carry
+`[DERIVED]` (follows by arithmetic, nothing downstream reads it) or a
+`[DECISION-REQUIRED: <slug>]` marker. A value that held while its meaning moved
+is the one shape this tier is blind to.
 
 ### Tier 2 — real coupling; a decision is required
 
