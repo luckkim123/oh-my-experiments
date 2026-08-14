@@ -128,3 +128,57 @@ def test_invalid_status_loud_fails(tmp_path):
         ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="X",
                                 content="c", tags=[], category="pattern",
                                 confidence="high", sources=[], status="needs-typo")
+
+
+def test_identical_content_does_not_append_a_second_time(tmp_path):
+    """A re-capture of the same finding must be a no-op, not a duplicate block.
+
+    capture_flush keyed its dedupe on the raw path string, so one report reached
+    ingest twice (relative and absolute spelling) and produced byte-identical
+    Update blocks. Measured on one workspace: 141 of 550 pages, ~114 KB.
+    """
+    p = OmxPaths(root=tmp_path)
+    body = "roll ss_error 0.31 -> 0.76 from soft to hard (summary.json hard/roll)"
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Roll heavy-tail",
+                            content=body, tags=["roll"], category="pattern",
+                            confidence="high", sources=["rel/report.md"])
+    res = ingest.ingest_knowledge(p, now="2026-05-31T11:00:00", title="Roll heavy-tail",
+                                  content=body, tags=["dr-hard"], category="pattern",
+                                  confidence="high", sources=["/abs/report.md"])
+
+    page = storage.read_page(p, "roll_heavy_tail.md")
+    assert res["action"] == "unchanged"
+    assert page.content.count(body) == 1              # not appended twice
+    assert "## Update (2026-05-31T11:00:00)" not in page.content
+    # metadata still accrues -- INV-2 loses nothing
+    assert set(page.tags) == {"roll", "dr-hard"}
+    assert set(page.sources) == {"rel/report.md", "/abs/report.md"}
+    assert page.updated == "2026-05-31T11:00:00"
+
+
+def test_quality_score_reflects_the_merged_body_not_the_new_chunk(tmp_path):
+    """Closing a lead with a one-line note must not demote a rich page.
+
+    score_page() saw only the incoming chunk and ingest overwrote the stored
+    score with it, so a 113-char housekeeping update dropped well-sourced pages
+    to 40 (under-120 -30, no-source-marker -20, generic-tags -10).
+    """
+    p = OmxPaths(root=tmp_path)
+    rich = ("Measured 2026-08-04 in analysis diagnose-20260804-132500: att_norm ss_error "
+            "0.4968 -> 0.6644 deg between model_7500 and model_9000, a 34 percent "
+            "degradation that every training-side metric missed by under 1 percent.")
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Roll heavy-tail",
+                            content=rich, tags=["roll", "heavy-tail"], category="pattern",
+                            confidence="high", sources=["s1"], quality_score=100)
+    assert storage.read_page(p, "roll_heavy_tail.md").quality_score >= 80
+
+    ingest.ingest_knowledge(p, now="2026-05-31T11:00:00", title="Roll heavy-tail",
+                            content="2026-08-14 curation: status set to resolved.",
+                            tags=["roll"], category="pattern", confidence="high",
+                            sources=["s1"], status="resolved", quality_score=40,
+                            quality_reasons=("body-under-120-chars",))
+
+    page = storage.read_page(p, "roll_heavy_tail.md")
+    assert page.status == "resolved"
+    assert page.quality_score >= 80, "a terse close must not demote the page"
+    assert "body-under-120-chars" not in page.quality_reasons

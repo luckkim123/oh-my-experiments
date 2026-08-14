@@ -69,7 +69,14 @@ def flush_produced_reports(paths: OmxPaths, *, now: str) -> dict:
             print(f"WARNING: skipping unparseable ledger line: {line[:80]!r}",
                   file=_sys.stderr)
             continue
-        key = str(report_path)
+        # Normalise: the ledger records whatever cwd the producing session used, so
+        # one file arrives as both a relative and an absolute spelling. The captured
+        # content embeds `source report: <ref>`, so an unnormalised key produces a
+        # near-identical duplicate block that content-level dedupe cannot catch.
+        try:
+            key = str(report_path.resolve())
+        except OSError:
+            key = str(report_path)
         if key in seen:
             continue
         seen.add(key)
