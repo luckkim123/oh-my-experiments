@@ -1508,8 +1508,9 @@ def _cmd_wiki_add(args) -> int:
             status=args.status, blocked_on=args.blocked_on)
     except OmxError as e:
         raise SystemExit(str(e))
-    print(json.dumps({**res, "quality_score": score, "quality_forced_low": forced,
-                      "quality_reasons": reasons}))
+    # `forced` is a gate on the INCOMING chunk; the score/reasons reported are the
+    # page's own, which differ on a merge (recomputed from the merged body).
+    print(json.dumps({"quality_forced_low": forced, **res}))
     return 0
 
 

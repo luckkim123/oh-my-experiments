@@ -1,5 +1,6 @@
 """Tests for `omx wiki capture-session` (#11, spec 3.7)."""
 import json
+import os
 
 from omx_core.cli import main
 
@@ -62,3 +63,33 @@ def test_capture_loud_fails_on_tampered_report(tmp_path, capsys):
     rp.write_text(REPORT + "\ntampered byte\n")
     rc = main(["wiki", "capture-session", "--root", str(tmp_path), "--from-report", str(rp)])
     assert rc == 2
+
+
+def test_flush_dedupes_two_spellings_of_one_report_path(tmp_path, capsys):
+    """One report reachable by two path spellings must be captured once.
+
+    flush keyed dedupe on the raw ledger string, so a relative and an absolute
+    spelling of the same file were two keys. The content embeds `source report:
+    <ref>`, so the second capture is NOT byte-identical and slips past append
+    dedupe -- the page ends up with a duplicated block differing only in that
+    line. Measured on one workspace: 141 of 550 pages.
+    """
+    from omx_core.omx_paths import OmxPaths
+    from omx_core.wiki import capture, storage
+
+    rp = _write_report(tmp_path)
+    paths = OmxPaths(root=tmp_path)
+    ledger = paths.produced_reports_ledger()
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    rel = os.path.relpath(rp, os.getcwd())
+    ledger.write_text(
+        json.dumps({"report": str(rp)}) + "\n" +          # absolute
+        json.dumps({"report": rel}) + "\n"                # same file, relative
+    )
+
+    res = capture.flush_produced_reports(paths, now="2026-05-31T10:00:00")
+    assert res["captured"] == 1, "the same file under two spellings is one report"
+
+    slug = storage.list_pages(paths)[0]
+    page = storage.read_page(paths, slug)
+    assert page.content.count("source report:") == 1

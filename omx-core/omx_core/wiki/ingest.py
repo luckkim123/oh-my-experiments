@@ -12,6 +12,7 @@ import re
 
 from omx_core.omx_paths import OmxPaths
 from omx_core.wiki import storage
+from omx_core.wiki.quality import score_page
 from omx_core.wiki.types import (
     CATEGORIES,
     CONFIDENCES,
@@ -23,6 +24,22 @@ from omx_core.wiki.types import (
 
 _LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 _CONF_RANK = {"high": 3, "medium": 2, "low": 1}
+_UPDATE_HDR_RE = re.compile(r"^## Update \([^)]*\)\s*", re.M)
+_H1_RE = re.compile(r"^\s*#\s+.*?$\n?", re.M)
+
+
+def _blocks(content: str) -> list[str]:
+    """The page's content blocks, normalised for equality comparison.
+
+    A page is an original block plus `---`-separated `## Update (ts)` blocks.
+    The timestamp differs on every append, so it is stripped before comparing.
+    """
+    out = []
+    for part in content.split("\n---\n"):
+        part = _UPDATE_HDR_RE.sub("", part)
+        part = _H1_RE.sub("", part, count=1)   # the original block carries the title H1
+        out.append(" ".join(part.split()))
+    return out
 
 
 def _extract_links(content: str) -> list[str]:
@@ -83,13 +100,22 @@ def ingest_knowledge(paths: OmxPaths, *, now: str, title: str, content: str,
                 merged_conf = confidence
             else:
                 merged_conf = existing.confidence
-            new_qs = quality_score if quality_score is not None else existing.quality_score
-            new_qr = list(quality_reasons) if quality_score is not None else existing.quality_reasons
             # explicit-wins / None-keeps: a status-less re-add (capture stub) never
             # clobbers a flag; an explicit --status resolves or re-opens the lead.
             new_status = status if status is not None else existing.status
             new_blocked_on = blocked_on if blocked_on is not None else existing.blocked_on
-            appended = existing.content.rstrip() + f"\n\n---\n\n## Update ({now})\n\n{content}\n"
+            # An identical re-add adds no knowledge, so appending it would only
+            # repeat a block (INV-2 loses nothing by skipping). Metadata still merges.
+            duplicate = " ".join(content.split()) in _blocks(existing.content)
+            appended = existing.content if duplicate else (
+                existing.content.rstrip() + f"\n\n---\n\n## Update ({now})\n\n{content}\n")
+            # qualityScore describes the PAGE, so score the merged body -- scoring the
+            # incoming chunk let a one-line close permanently demote a rich page.
+            if quality_score is not None:
+                new_qs, reasons = score_page(appended, merged_tags, title=existing.title)
+                new_qr = list(reasons)
+            else:
+                new_qs, new_qr = existing.quality_score, existing.quality_reasons
             page = WikiPage(
                 slug=slug, title=existing.title,
                 tags=merged_tags, created=existing.created, updated=now,
@@ -100,12 +126,16 @@ def ingest_knowledge(paths: OmxPaths, *, now: str, title: str, content: str,
                 status=new_status, blocked_on=new_blocked_on,
                 content=appended,
             )
-            action = "updated"
+            action = "unchanged" if duplicate else "updated"
 
         storage.write_page(paths, page, now=now)
         storage.update_index(paths, now=now)
         storage.append_log(paths, now=now, operation="add", pages=[slug],
                            summary=f"{action} {title!r}")
-        return {"action": action, "slug": slug}
+        # Report the score the PAGE ended up with: on a merge it is recomputed from
+        # the merged body, so the caller's chunk score is not what was stored.
+        return {"action": action, "slug": slug,
+                "quality_score": page.quality_score,
+                "quality_reasons": list(page.quality_reasons)}
 
     return storage.with_wiki_lock(paths, _do)

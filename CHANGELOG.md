@@ -4,6 +4,72 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.11.2] - 2026-08-14 — append-only is not the same as idempotent
+
+`capture_flush`'s own docstring already promised this: *"capture_session is
+append-merge so re-flushing is a no-op merge."* It was not. Two defects made the
+append path add mass without adding knowledge, and a third made the quality signal
+punish the person cleaning up after them.
+
+Measured on one workspace at 550 pages: **141 pages carried a duplicated block,
+about 114 KB of pure repetition**, every one of them a `session-log` capture stub.
+The mechanism needs both halves. `flush_produced_reports` keyed its dedupe on
+`str(report_path)` exactly as the producing session spelled it, so one file arrived
+as both `experiments/.../report.md` and `/workspace/constrained-albc/experiments/.../report.md`
+and counted as two reports. Content-level dedupe could not have caught the second
+pass either, because the captured body embeds `source report: <ref>` — the two blocks
+differ in precisely that line and are otherwise identical.
+
+The third defect ran the other way. `qualityScore` was computed on the incoming chunk
+and then *overwrote* the stored value, so closing a lead with a one-line note demoted
+the page that recorded it. All three pages flagged `low-quality` on that workspace were
+victims rather than weak pages — 2404, 4733 and 9394 bytes with sources, each scored 40
+because its final block was a 113-character housekeeping line: 100 − 30 (under 120 chars)
+− 20 (no source marker) − 10 (generic tags). A curator was penalised for being terse.
+
+### Fixed
+
+- **`flush_produced_reports` normalises the dedupe key** (`report_path.resolve()`,
+  falling back to the raw string on `OSError`). One file under two spellings is now one
+  report, so it is read, integrity-verified and captured once instead of twice.
+- **`ingest_knowledge` skips an identical re-add** instead of appending it again.
+  Comparison is block-level against the existing content with the `## Update (ts)`
+  header and the title `H1` stripped, so a genuine re-capture is recognised across its
+  changing timestamp. The action is reported as `unchanged` — the same value
+  `wiki sync` already uses. INV-2 is untouched: an identical block carries no knowledge
+  to lose, and `tags` / `sources` / `links` / `confidence` / `status` still merge, with
+  `updated` still advancing.
+- **`qualityScore` is computed on the merged body**, not the incoming chunk, whenever a
+  score is supplied. A short, correct housekeeping update can no longer drag a long,
+  well-sourced page under the `low-quality` threshold.
+- **`wiki add` reports the score the page actually carries.** `ingest_knowledge` now
+  returns `quality_score` / `quality_reasons` and the CLI prints those instead of its own
+  chunk score, which after the change above is a different number on every merge.
+  `quality_forced_low` still reflects the incoming chunk, because that gate is about what
+  is being written, not about what the page already holds.
+
+### Verification
+
+`pytest -q`: 1070 passed, 2 skipped. The 4 failures in `tests/test_ingest_wandb_offline.py`
+and `test_cli.py::test_cli_ingest_wandb_offline` are a missing optional `wandb` dependency
+in this environment and reproduce identically on `main` at the same commit.
+
+Three regression tests, each failing before its fix:
+`test_flush_dedupes_two_spellings_of_one_report_path`,
+`test_identical_content_does_not_append_a_second_time`,
+`test_quality_score_reflects_the_merged_body_not_the_new_chunk`.
+
+### Notes
+
+Not adopted: rewriting the stored `sources` entry to a repo-relative path. It would make
+a pointer survive a worktree retirement — the same workspace has 16 stubs naming a
+`constrained-albc-student` worktree that no longer exists, while the file itself is alive
+at the same run path under the main repo — but it changes the format of data already on
+disk and needs a migration, which does not belong in a patch. The verification rule stands
+in the meantime: **a wiki source pointer that fails to resolve is not evidence the source
+is gone.** Re-resolve the run path against the main repo before treating a page as the sole
+surviving copy of a finding.
+
 ## [0.11.1] - 2026-08-10 — an empty gate is not a clean one
 
 v0.11.0 gated the plan. This one gates the two ways a gate reports "clear" when it
