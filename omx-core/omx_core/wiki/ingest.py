@@ -132,6 +132,10 @@ def ingest_knowledge(paths: OmxPaths, *, now: str, title: str, content: str,
         storage.update_index(paths, now=now)
         storage.append_log(paths, now=now, operation="add", pages=[slug],
                            summary=f"{action} {title!r}")
-        return {"action": action, "slug": slug}
+        # Report the score the PAGE ended up with: on a merge it is recomputed from
+        # the merged body, so the caller's chunk score is not what was stored.
+        return {"action": action, "slug": slug,
+                "quality_score": page.quality_score,
+                "quality_reasons": list(page.quality_reasons)}
 
     return storage.with_wiki_lock(paths, _do)

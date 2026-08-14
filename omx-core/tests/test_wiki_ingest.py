@@ -182,3 +182,21 @@ def test_quality_score_reflects_the_merged_body_not_the_new_chunk(tmp_path):
     assert page.status == "resolved"
     assert page.quality_score >= 80, "a terse close must not demote the page"
     assert "body-under-120-chars" not in page.quality_reasons
+
+
+def test_returns_the_score_the_page_actually_carries(tmp_path):
+    """The CLI prints ingest's score, so it must be the stored one, not the chunk's."""
+    p = OmxPaths(root=tmp_path)
+    rich = ("Measured 2026-08-04 in analysis diagnose-20260804-132500: att_norm ss_error "
+            "0.4968 -> 0.6644 deg between model_7500 and model_9000, a 34 percent swing.")
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Roll heavy-tail",
+                            content=rich, tags=["roll", "heavy-tail"], category="pattern",
+                            confidence="high", sources=["s1"], quality_score=100)
+    res = ingest.ingest_knowledge(p, now="2026-05-31T11:00:00", title="Roll heavy-tail",
+                                  content="2026-08-14 curation: closed.", tags=["roll"],
+                                  category="pattern", confidence="high", sources=["s1"],
+                                  quality_score=40, quality_reasons=("body-under-120-chars",))
+    page = storage.read_page(p, "roll_heavy_tail.md")
+    assert res["quality_score"] == page.quality_score
+    assert res["quality_reasons"] == list(page.quality_reasons)
+    assert res["quality_score"] >= 80

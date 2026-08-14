@@ -42,6 +42,11 @@ because its final block was a 113-character housekeeping line: 100 − 30 (under
 - **`qualityScore` is computed on the merged body**, not the incoming chunk, whenever a
   score is supplied. A short, correct housekeeping update can no longer drag a long,
   well-sourced page under the `low-quality` threshold.
+- **`wiki add` reports the score the page actually carries.** `ingest_knowledge` now
+  returns `quality_score` / `quality_reasons` and the CLI prints those instead of its own
+  chunk score, which after the change above is a different number on every merge.
+  `quality_forced_low` still reflects the incoming chunk, because that gate is about what
+  is being written, not about what the page already holds.
 
 ### Verification
 
