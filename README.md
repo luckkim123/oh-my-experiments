@@ -2,7 +2,7 @@
 
 > A self-contained Claude Code harness that **analyzes your ML/RL training runs, diagnoses regressions, and designs the next experiment** — with a semi-autonomous analyze → design → eval loop that never fires a training run without your approval.
 
-![version](https://img.shields.io/badge/version-0.11.2-blue)
+![version](https://img.shields.io/badge/version-0.12.0-blue)
 ![python](https://img.shields.io/badge/python-%3E%3D3.10-blue)
 ![tests](https://img.shields.io/badge/tests-950%20passed%20%2F%201%20skipped-brightgreen)
 ![license](https://img.shields.io/badge/license-MIT-green)

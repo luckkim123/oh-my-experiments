@@ -58,6 +58,36 @@ def test_cli_plot_npz_1d_series(fixtures_dir, tmp_path, capsys):
     assert Path(out["plot"]).name == "attitude__trajectory.png"
 
 
+def test_cli_plot_paper_flags_produce_labelled_vector(fixtures_dir, tmp_path, capsys):
+    """T24: the paper-figure flags must actually change the artifact.
+
+    Without them `omx plot` emits a 100-dpi, unlabelled, title-in-figure PNG —
+    a triage render by design (reduce/plot.py), and one no venue accepts.
+    """
+    from pathlib import Path
+    rc = main([
+        "plot", "--root", str(tmp_path), "--session-id", "20260530-101010-1",
+        "--path", str(fixtures_dir / "data_none.npz"), "--format", "npz",
+        "--series", "target_roll_deg", "--metric", "attitude", "--view", "trajectory",
+        "--ext", "pdf", "--dpi", "300", "--no-title",
+        "--xlabel", "step", "--ylabel", "roll (deg)",
+    ])
+    assert rc == 0
+    out = Path(json.loads(capsys.readouterr().out)["plot"])
+    assert out.name == "attitude__trajectory.pdf"
+    assert out.read_bytes()[:5] == b"%PDF-", "vector output must be a real PDF"
+
+
+def test_cli_plot_bad_ext_loud_fails(fixtures_dir, tmp_path):
+    rc = main([
+        "plot", "--root", str(tmp_path), "--session-id", "20260530-101010-1",
+        "--path", str(fixtures_dir / "data_none.npz"), "--format", "npz",
+        "--series", "target_roll_deg", "--metric", "attitude", "--view", "trajectory",
+        "--ext", "P NG",
+    ])
+    assert rc == 2
+
+
 def test_cli_plot_npz_2d_series_gives_nd_hint(fixtures_dir, tmp_path, capsys):
     npz = fixtures_dir / "data_none.npz"
     rc = main([

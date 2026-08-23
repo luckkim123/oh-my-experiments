@@ -4,6 +4,58 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.12.0] - 2026-08-24 — a render sized for one reader cannot serve the other
+
+`omx plot` had exactly one audience and never said so out loud. `reduce/plot.py`
+pinned `_DPI = 100` and capped the width because *"Design 5: cap width so a
+vision-read PNG stays small"* — correct for an agent reading a curve to triage a
+run, and a dead end for anything else.
+
+The dead end was reached from the other side. `promote-plots` exists to move a
+report-referenced PNG from scratch into the permanent analysis tree, and
+`oh-my-scholar`'s drafter surfaces a "needs figure" finding to the human as
+`fixable_by_llm=false` — two halves of one path that never met. Wiring them
+would have shipped the triage render into a paper, because `promote_plots` uses
+`os.replace`: it moves the same file and never re-renders.
+
+Measured before the change, on a 1,500-point synthetic curve: **552 x 435 px**.
+Laid out at an IEEE single-column 3.5 in that is **158 effective dpi**, against a
+300-600 dpi expectation for line art. No axis labels — `line_plot` never called
+`set_xlabel`/`set_ylabel`. Title inside the figure, where a caption belongs.
+Legend showing the raw series key. Raster only, no dpi flag.
+
+### Added
+
+- `omx plot --dpi N` — render dpi. Default stays 100.
+- `omx plot --xlabel/--ylabel` — axis labels. Default stays absent.
+- `omx plot --no-title` — omit the in-figure title, which a paper caption carries.
+- `omx plot --ext EXT` — output extension, validated by `validate_ext`. `pdf`/`svg`
+  give vector output; default stays `png`.
+- `line_plot`/`bar_plot` take `dpi`, `xlabel`, `ylabel` as keyword-only arguments.
+
+### Changed
+
+- `_save` computes its width cap from the **reference** dpi, not the requested one.
+  Quoting `max_px` at the requested dpi would have shrunk the figure in inches by
+  exactly the factor the caller raised dpi by, handing back the same pixel count —
+  a flag that reports success and changes nothing. At `dpi=100` the arithmetic is
+  unchanged.
+
+### Notes
+
+- **Defaults are byte-identical.** Every paper option is opt-in; a call that
+  passes none of them renders what it rendered before.
+- The two audiences are now written into `reduce/plot.py`'s module docstring, so
+  the next reader does not have to infer them from a constant.
+
+### Verification
+
+- `1075 passed, 2 skipped` on the full suite; `ruff check omx-core/` clean.
+- 5 pre-existing failures in the `route_emit` hook tests are unrelated — confirmed
+  by re-running them on a stashed-clean tree, where they fail identically.
+- New tests: dpi adds pixels rather than shrinking inches, `.pdf` output is a real
+  PDF, the triage default is unmoved, and a malformed `--ext` loud-fails with rc 2.
+
 ## [0.11.2] - 2026-08-14 — append-only is not the same as idempotent
 
 `capture_flush`'s own docstring already promised this: *"capture_session is

@@ -23,7 +23,14 @@ from omx_core.decision import decide_outcome, parse_keep_policy, seed_stats
 # import cost, which otherwise eats most of the hook backlog-fetch budget.
 from omx_core.evaluator import run_evaluator
 from omx_core.loop import compute_deadline, deadline_passed, queue_pending_launch, read_pending_launch
-from omx_core.omx_paths import OmxError, OmxPaths, atomic_path, resolve_session_id, validate_token
+from omx_core.omx_paths import (
+    OmxError,
+    OmxPaths,
+    atomic_path,
+    resolve_session_id,
+    validate_ext,
+    validate_token,
+)
 from omx_core.profile import bootstrap_profile, default_metrics, load_profile_metrics
 from omx_core.report import parse_findings
 from omx_core.wiki import gc as _wiki_gc
@@ -337,6 +344,30 @@ def _cmd_eval(args) -> int:
     return 0 if rec["status"] in ("pass", "fail") else 1
 
 
+def _plot_render_opts(args):
+    """Resolve the shared render options of `omx plot` -> (ext, title_ok, kwargs).
+
+    Defaults reproduce the triage render exactly (100 dpi PNG, in-figure title,
+    no axis labels). A paper figure opts in per flag — the renderer is the same,
+    the audience is not. See omx_core/reduce/plot.py's module docstring.
+    """
+    try:
+        ext = validate_ext(getattr(args, "ext", None) or "png")
+    except OmxError as e:
+        raise SystemExit(str(e))
+    kwargs = {}
+    dpi = getattr(args, "dpi", None)
+    if dpi is not None:
+        if dpi <= 0:
+            raise SystemExit(f"--dpi must be positive, got {dpi}")
+        kwargs["dpi"] = dpi
+    for name in ("xlabel", "ylabel"):
+        value = getattr(args, name, None)
+        if value:
+            kwargs[name] = value
+    return ext, not getattr(args, "no_title", False), kwargs
+
+
 def _cmd_plot_summary_bar(args, res) -> int:
     """Render a per-axis bar chart from eval_summary SummaryRecords (GAP B).
 
@@ -369,8 +400,11 @@ def _cmd_plot_summary_bar(args, res) -> int:
     pairs = sorted((r.axis, r.value) for r in recs_for_field if r.dr_level == dr)
     labels = [p[0] for p in pairs]
     values = [p[1] for p in pairs]
-    out = OmxPaths(root=_resolved_root(args)).scratch_plots(session_id=args.session_id) / f"{metric}__{view}.png"
-    bar_plot(labels, values, out, title=f"{metric} ({view}, dr={dr})")
+    ext, want_title, render_kw = _plot_render_opts(args)
+    out = OmxPaths(root=_resolved_root(args)).scratch_plots(session_id=args.session_id) / f"{metric}__{view}.{ext}"
+    bar_plot(labels, values, out,
+             title=f"{metric} ({view}, dr={dr})" if want_title else None,
+             **render_kw)
     print(json.dumps({"plot": str(out), "metric": metric, "view": view,
                       "dr_level": dr, "n_axes": len(labels)}))
     return 0
@@ -408,8 +442,11 @@ def _cmd_plot(args) -> int:
     y = downsample(res.series[args.series])
     step_key = f"_step/{args.series}"
     x = downsample(res.series[step_key]) if step_key in res.series else np.arange(len(y))
-    out = OmxPaths(root=_resolved_root(args)).scratch_plots(session_id=args.session_id) / f"{metric}__{view}.png"
-    line_plot(x, {args.series: y}, out, title=f"{metric} ({view})")
+    ext, want_title, render_kw = _plot_render_opts(args)
+    out = OmxPaths(root=_resolved_root(args)).scratch_plots(session_id=args.session_id) / f"{metric}__{view}.{ext}"
+    line_plot(x, {args.series: y}, out,
+              title=f"{metric} ({view})" if want_title else None,
+              **render_kw)
     print(json.dumps({"plot": str(out), "metric": metric, "view": view,
                       "n_points": int(len(y))}))
     return 0
@@ -1938,6 +1975,17 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--series", required=True, help="series key within the source")
     pp.add_argument("--metric", required=True, help="metric token (output filename field)")
     pp.add_argument("--view", required=True, help="view token (output filename field)")
+    # Paper-figure options. Every default reproduces the triage render, so a call
+    # that passes none of these behaves exactly as before (D8 / T24).
+    pp.add_argument("--dpi", type=int, default=None,
+                    help="render dpi (default 100 = vision-read triage; 300-600 for a paper)")
+    pp.add_argument("--xlabel", default=None,
+                    help="x-axis label — a paper figure needs one; triage renders omit it")
+    pp.add_argument("--ylabel", default=None, help="y-axis label")
+    pp.add_argument("--no-title", action="store_true", dest="no_title",
+                    help="omit the in-figure title (a paper caption carries it instead)")
+    pp.add_argument("--ext", default="png",
+                    help="output extension (default png); pdf/svg give vector output")
     _add_ingest_bounds(pp, with_root=False)
     pp.set_defaults(func=_cmd_plot)
 

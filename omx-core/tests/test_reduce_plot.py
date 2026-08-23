@@ -40,6 +40,38 @@ def test_bar_plot_writes_valid_png(tmp_path):
     assert _is_png(out)
 
 
+def _png_width(path):
+    return int.from_bytes(path.read_bytes()[16:20], "big")  # PNG IHDR width
+
+
+def test_line_plot_dpi_scales_pixels_not_inches(tmp_path):
+    # Raising dpi must ADD pixels. If _save computed the width cap from the
+    # requested dpi instead of the reference one, a 300-dpi render would be
+    # shrunk back in inches and land on the same pixel count — the flag would
+    # silently do nothing, which is the failure T24 was opened for.
+    x = np.arange(50)
+    lo, hi = tmp_path / "lo.png", tmp_path / "hi.png"
+    line_plot(x, {"a": x}, lo)
+    line_plot(x, {"a": x}, hi, dpi=300)
+    assert _png_width(hi) > 2 * _png_width(lo)
+
+
+def test_line_plot_writes_vector_pdf_with_labels(tmp_path):
+    out = tmp_path / "curve.pdf"
+    line_plot(np.arange(10), {"a": np.arange(10)}, out,
+              title=None, xlabel="step", ylabel="reward")
+    assert out.read_bytes()[:5] == b"%PDF-"
+
+
+def test_line_plot_defaults_unchanged(tmp_path):
+    # The triage render must not move: with no dpi/label arguments the output is
+    # the same 100-dpi PNG as before the paper-figure options existed.
+    out = tmp_path / "same.png"
+    line_plot(np.arange(50), {"a": np.arange(50)}, out, title="t")
+    assert _is_png(out)
+    assert _png_width(out) <= 640  # 6.4in * 100dpi, minus bbox_inches="tight"
+
+
 def test_plot_creates_parent_dir(tmp_path):
     out = tmp_path / "nested" / "deep" / "curve.png"
     line_plot(np.arange(10), {"a": np.arange(10)}, out)
