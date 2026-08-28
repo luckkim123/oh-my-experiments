@@ -84,10 +84,9 @@ def test_purge_requires_double_flag(tmp_path, capsys):
 
 def test_anchored_project_never_sweeps_legacy(tmp_path, capsys):
     """store-spec §7: the legacy store is not touched by anything but a
-    separate purge during the fallback window. An anchored clean --apply must
-    operate on the (empty) new .hq/ tree only, leaving every legacy-only
-    scratch/run/tmp entry untouched — the opposite of list_campaigns()/
-    list_programs(), which DO union both stores (Rule A)."""
+    separate purge, even after stage 2 removes the per-file read fallback.
+    An anchored clean --apply must operate on the (empty) new .hq/ tree only,
+    leaving every legacy-only scratch/run/tmp entry untouched."""
     omx = _build_omx(tmp_path)
     anchor = tmp_path / ".hq" / ".anchor"
     anchor.parent.mkdir(parents=True, exist_ok=True)

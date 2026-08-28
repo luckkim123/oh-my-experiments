@@ -7,25 +7,24 @@ registry/(wiki), campaigns/, state.json and the run trio are untouchable by
 construction — and the permanent output trees live outside the store,
 structurally unreachable.
 
-.hq/ cutover: unlike list_campaigns()/list_programs()/loop-status --all
-(campaign.py, cli.py), clean NEVER unions the two stores and never reaches
-into legacy once a project is anchored. store-spec §7 says the legacy store
-is not deleted, trashed, or git-rm'ed until a separate `purge` release — a
-sweep that moved legacy content into .trash (or a purge that rmtree'd it)
-would violate that fallback contract before its window has even closed. So a
-sweep operates on a single locus, chosen by anchor state, never both:
-unanchored -> the flat legacy .omx/ tree (unchanged from before this port);
-anchored -> the whole new .hq/ tree (scratch under runtime/experiments/,
-runs under work/experiments/ — different top-level subtrees now, unlike
-legacy's flat layout, so 'the resolved tree' for the orphaned-.tmp* rglob is
-all of .hq/, not one layer). .trash itself follows the same single-locus
-rule via OmxPaths.trash_root() (_write()-resolved like every other getter):
-runtime/experiments/trash/ for an anchored project — ephemeral, regenerated
-per sweep, matching the layer rules' 'loss harmless' condition, same class
-as other runtime/ state. This matters beyond tidiness: trash_root() staying
-on .omx/ unconditionally would mean the first `clean --apply` after a
-`--purge` on an anchored project recreates .omx/.trash and silently undoes
-the purge — resolving it the same way as every entity getter closes that."""
+.hq/ cutover (store-spec §7 stage 2): clean operates on a single locus,
+chosen by anchor state, never both — unanchored -> the flat legacy .omx/
+tree (unchanged from before this port); anchored -> the whole new .hq/ tree
+(scratch under runtime/experiments/, runs under work/experiments/ —
+different top-level subtrees now, unlike legacy's flat layout, so 'the
+resolved tree' for the orphaned-.tmp* rglob is all of .hq/, not one layer).
+The legacy store is never touched once anchored: stage 2 removes the
+per-file fallback for reads, but the legacy store itself is still not
+deleted, trashed, or git-rm'ed until a separate `purge` release, so a sweep
+reaching into it would still be premature. .trash itself follows the same
+single-locus rule via OmxPaths.trash_root() (_resolve()-resolved like every
+other getter): runtime/experiments/trash/ for an anchored project —
+ephemeral, regenerated per sweep, matching the layer rules' 'loss harmless'
+condition, same class as other runtime/ state. This matters beyond tidiness:
+trash_root() staying on .omx/ unconditionally would mean the first `clean
+--apply` after a `--purge` on an anchored project recreates .omx/.trash and
+silently undoes the purge — resolving it the same way as every entity
+getter closes that."""
 from __future__ import annotations
 
 import os
@@ -46,7 +45,7 @@ _SCOPES = ("session", "run", "all")
 def _clean_roots(paths: OmxPaths) -> dict:
     """{'base', 'scratch', 'runs', 'trash'} — the SINGLE tree clean.py
     operates on for this project. See module docstring: never both stores.
-    'trash' comes from OmxPaths.trash_root() (its own _write()-resolved
+    'trash' comes from OmxPaths.trash_root() (its own _resolve()-resolved
     getter), not computed inline here — that is what keeps a purge+clean
     cycle from ever landing trash back on .omx/ once anchored."""
     if has_anchor(paths.root):

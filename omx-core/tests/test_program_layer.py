@@ -93,21 +93,24 @@ def test_list_programs(paths):
     assert list_programs(paths) == ["prog_a", "prog_b"]
 
 
-# --- .hq/ cutover (team-lead Rule A): list_programs() reads BOTH stores -----
+# --- .hq/ cutover (store-spec §7 stage 2): list_programs() resolves ONE root
 
 def _write_anchor(tmp_path, anchor_id="test-anchor"):
-    """program_json() resolves via _write(), which short-circuits to legacy
-    unconditionally without a parseable anchor (branch 1) — a state real
-    .hq/ content never has, since only an anchored _write() puts content
-    there. Every fixture below must anchor to be realistic."""
+    """program_json() resolves via _resolve(), which short-circuits to
+    legacy unconditionally without a parseable anchor — a state real .hq/
+    content never has, since only an anchored _resolve() puts content there.
+    Every fixture below must anchor to be realistic."""
     f = tmp_path / ".hq" / ".anchor"
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(f"id: {anchor_id}\n", encoding="utf-8")
 
 
-def test_list_programs_unions_legacy_and_new_new_wins_collision(paths, tmp_path):
-    """Same three-way fixture as list_campaigns, but on the community/ layer
-    programs_root() enumerates."""
+def test_list_programs_anchored_never_sees_legacy_only_program(paths, tmp_path):
+    """Stage 2: an anchored project's programs_root() resolves to
+    community/programs/ ONLY — a program that exists solely under the legacy
+    .omx/programs/ tree is invisible (store-spec §6 GATE_LEGACY: 'reads will
+    not find it'). A program with content on BOTH sides still resolves to
+    the new record, since program_json() itself is anchor-gated."""
     import json as _json
 
     _write_anchor(tmp_path)
@@ -118,8 +121,8 @@ def test_list_programs_unions_legacy_and_new_new_wins_collision(paths, tmp_path)
     new_only = tmp_path / ".hq" / "community" / "programs" / "new_only"
     new_only.mkdir(parents=True)
     # program.json for a NEW program lives under config/, not community/ —
-    # this entry proves programs_root()'s union alone still finds it (its
-    # PLAN.md/HANDOFF.md narrative half is what's actually here).
+    # this entry proves programs_root()'s community/ scan alone still finds
+    # it (its PLAN.md/HANDOFF.md narrative half is what's actually here).
     (new_only / "PLAN.md").write_text("# plan\n")
     (tmp_path / ".hq" / "config" / "experiments" / "programs" / "new_only").mkdir(parents=True)
     (tmp_path / ".hq" / "config" / "experiments" / "programs" / "new_only" / "program.json"
@@ -134,7 +137,8 @@ def test_list_programs_unions_legacy_and_new_new_wins_collision(paths, tmp_path)
     both_new_config.mkdir(parents=True)
     (both_new_config / "program.json").write_text(_json.dumps({"program_id": "both", "src": "new"}))
 
-    assert list_programs(paths) == ["both", "legacy_only", "new_only"]
+    assert list_programs(paths) == ["both", "new_only"]
+    assert _json.loads((both_new_config / "program.json").read_text())["src"] == "new"
 
 
 def test_list_programs_finds_config_layer_only_program(paths, tmp_path):

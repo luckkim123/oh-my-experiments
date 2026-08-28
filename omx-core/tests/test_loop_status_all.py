@@ -54,12 +54,12 @@ def test_all_corrupt_marker_degrades_to_unknown(tmp_path, capsys):
     assert "run1" in cap.err  # stderr warn names the run
 
 
-# --- .hq/ cutover (team-lead Rule A): loop-status --all reads BOTH stores --
+# --- .hq/ cutover (store-spec §7 stage 2): loop-status --all resolves ONE root
 
-def test_all_unions_legacy_and_new_only_runs(tmp_path, capsys):
-    """A legacy-only run and a new-store-only run (anchored project, one
-    migrated, one not) must BOTH appear in --all — a single-root scan would
-    silently drop whichever half it didn't look at."""
+def test_all_anchored_never_sees_legacy_only_run(tmp_path, capsys):
+    """An anchored project resolves runs_root() to .hq/ only — a legacy-only
+    run (not yet migrated) is invisible to --all, exactly store-spec §6
+    GATE_LEGACY's 'reads will not find it'. A migrated run still appears."""
     from omx_core import cli
     anchor = tmp_path / ".hq" / ".anchor"
     anchor.parent.mkdir(parents=True, exist_ok=True)
@@ -68,7 +68,17 @@ def test_all_unions_legacy_and_new_only_runs(tmp_path, capsys):
     (tmp_path / ".hq" / "work" / "experiments" / "runs" / "new_run").mkdir(parents=True)
     cli.main(["loop-status", "--all", "--root", str(tmp_path)])
     out = json.loads(capsys.readouterr().out)
-    assert {r["run_id"] for r in out["runs"]} == {"legacy_run", "new_run"}
+    assert {r["run_id"] for r in out["runs"]} == {"new_run"}
+
+
+def test_all_unanchored_still_sees_legacy_runs(tmp_path, capsys):
+    """Unchanged from before the cutover: an unanchored project resolves
+    runs_root() to .omx/ only, and legacy runs list normally."""
+    from omx_core import cli
+    (tmp_path / ".omx" / "runs" / "legacy_run").mkdir(parents=True)
+    cli.main(["loop-status", "--all", "--root", str(tmp_path)])
+    out = json.loads(capsys.readouterr().out)
+    assert {r["run_id"] for r in out["runs"]} == {"legacy_run"}
 
 
 def test_all_mutually_exclusive_with_run_id(tmp_path, capsys):

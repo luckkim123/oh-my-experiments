@@ -1,6 +1,3 @@
-# OMX runtime state — never committed (per-user, per-machine)
-.omx/
-
 # OMC HUD/state leakage (OMC hooks write here when a session runs in this repo)
 .omc/
 
@@ -26,6 +23,8 @@ venv/
 # .hq unified store: work/ is regenerable output, runtime/ is session state,
 # locks, logs, and anything sensitive. community/ and config/ stay tracked
 # (store-spec §3, §5). The `**/` prefix is required because anchors nest.
-# `.omx/` above stays until the fallback-removal release (store-spec §7).
+# Legacy `.omx/` fallback removed this release (store-spec §7 stage 2,
+# §9.4 policy-shift) — `.omx/config/`, `.omx/community/`-equivalent content
+# is no longer exempt from tracking here.
 **/.hq/work/
 **/.hq/runtime/

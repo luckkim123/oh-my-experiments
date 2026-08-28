@@ -1,7 +1,8 @@
 """T11: revert-config (#5, spec 2.8). Two-phase git config revert: dry-run by
 default, mutation only with --i-approve-revert. Path-scoped allowlist protects
-.omx/ (and the resolved root tree inside cwd). The first mutating git call in
-omx-core -> the strictest gate (an approval FLAG that cannot be defaulted)."""
+BOTH .hq/ and legacy .omx/ (and the resolved anchor tree, wherever it sits
+relative to the git top-level). The first mutating git call in omx-core -> the
+strictest gate (an approval FLAG that cannot be defaulted)."""
 import json
 import subprocess
 
@@ -205,3 +206,65 @@ def test_cli_absent_ledger_rc2(tmp_path, capsys):
     rc = cli.main(["revert-config", "--cwd", str(repo), "--run-id", "ghost",
                    "--to", "baseline", "--root", str(tmp_path)])
     assert rc == 2  # read_run_ledger loud-fails
+
+
+# --- .hq/ cutover (store-spec §7): the allowlist must protect .hq/ too, and ---
+# --- must match regardless of --cwd/root nesting (team-lead findings 1 & 2) ---
+
+def test_cli_protects_hq_community_not_just_omx(tmp_path, capsys):
+    """Finding (1): the old allowlist only ever listed legacy `.omx/` — `.hq/`
+    was never protected at all, in ANY scenario. root == cwd == the repo here
+    (no nesting), which is the simplest case there is, and it still fails
+    before the fix."""
+    from omx_core import cli
+    from omx_core.ledger import seed_ledger
+    repo = tmp_path / "proj"
+    base = _init_repo(repo)
+    (repo / ".hq" / "community").mkdir(parents=True)
+    (repo / ".hq" / "community" / "note.md").write_text("original\n")
+    (repo / "config.yaml").write_text("lr: 0.5\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "bump+hq")
+    seed_ledger(OmxPaths(root=str(repo)), "run1", baseline_commit=base,
+               keep_policy="pass_only")
+    capsys.readouterr()
+    rc = cli.main(["revert-config", "--cwd", str(repo), "--run-id", "run1",
+                   "--to", "baseline", "--i-approve-revert", "--root", str(repo)])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert "config.yaml" in out["reverted"]
+    assert not any(".hq" in p for p in out["reverted"])
+    assert (repo / ".hq" / "community" / "note.md").read_text() == "original\n"
+
+
+def test_cli_protects_nested_anchor_when_cwd_is_not_toplevel(tmp_path, capsys):
+    """Finding (2): `git diff`/`git checkout` always match paths relative to
+    the git TOP-LEVEL, never to --cwd. --root nested two levels under the
+    repo (mid/anchor), with --cwd pointed at the INTERMEDIATE directory
+    (mid) rather than the true repo root, must still protect the anchor's
+    .hq/ and .omx/ — the old cwd-relative computation silently never
+    matched here, for either store (store-spec §7: a nested anchor, e.g.
+    `<vault>/0_Project/.../albc/.hq`, is the normal case, not an edge case)."""
+    from omx_core import cli
+    from omx_core.ledger import seed_ledger
+    repo = tmp_path / "repo"
+    base = _init_repo(repo)
+    anchor = repo / "mid" / "anchor"
+    (anchor / ".hq" / "community").mkdir(parents=True)
+    (anchor / ".hq" / "community" / "note.md").write_text("original\n")
+    (anchor / ".omx").mkdir(parents=True)
+    (anchor / ".omx" / "state.json").write_text("{}")
+    (repo / "config.yaml").write_text("lr: 0.5\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "seed nested anchor")
+    seed_ledger(OmxPaths(root=str(anchor)), "run1", baseline_commit=base,
+               keep_policy="pass_only")
+    capsys.readouterr()
+    rc = cli.main(["revert-config", "--cwd", str(repo / "mid"), "--run-id", "run1",
+                   "--to", "baseline", "--i-approve-revert", "--root", str(anchor)])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert "config.yaml" in out["reverted"]
+    assert not any(".hq" in p or ".omx" in p for p in out["reverted"])
+    assert (anchor / ".hq" / "community" / "note.md").read_text() == "original\n"
+    assert (anchor / ".omx" / "state.json").read_text() == "{}"

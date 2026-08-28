@@ -24,6 +24,19 @@ def _run_git(cwd, args) -> subprocess.CompletedProcess:
         raise OmxError(f"git unavailable for revert in {cwd!r}: {e}") from e
 
 
+def resolve_git_toplevel(cwd) -> Path:
+    """The git top-level for `cwd` (loud-fail OmxError if `cwd` is not a git
+    repository). This is what `git diff --name-only`/`git checkout` actually
+    match paths against, REGARDLESS of which subdirectory `-C cwd` points at
+    — `cwd` itself must never be used as the relative-path base for building
+    a protected-paths allowlist (store-spec §7: a nested anchor, e.g.
+    `<repo>/some/sub/project/.hq`, is the normal case, not an edge case)."""
+    top = _run_git(cwd, ["rev-parse", "--show-toplevel"])
+    if top.returncode != 0:
+        raise OmxError(f"--cwd {cwd!r} is not a git repository")
+    return Path(top.stdout.strip()).resolve()
+
+
 def _is_protected(path: str, protected) -> bool:
     """True if the repo-relative `path` falls under any protected prefix. Prefix
     match on '/'-normalized components (not a basename match) so an unrelated
@@ -39,8 +52,9 @@ def _is_protected(path: str, protected) -> bool:
 def plan_revert(cwd, sha, protected) -> dict:
     """Return the two-phase plan: {would_revert, skipped_allowlist}. Loud-fail
     (OmxError) if `cwd` is not a git repo or `sha` does not resolve. `protected`
-    is the list of repo-relative prefixes NEVER reverted (.omx/, plus the
-    resolved root tree when it lies inside cwd)."""
+    is the list of repo-relative prefixes NEVER reverted — the caller (cli.py)
+    builds it via `resolve_git_toplevel()` so it covers BOTH `.hq/` and legacy
+    `.omx/`, expressed relative to the git top-level rather than `cwd`."""
     cwd = Path(cwd)
     # not a repo, or sha unresolvable -> loud-fail
     top = _run_git(cwd, ["rev-parse", "--show-toplevel"])
@@ -66,11 +80,18 @@ def plan_revert(cwd, sha, protected) -> dict:
 def apply_revert(cwd, sha, paths) -> None:
     """git checkout <sha> -- <paths> (loud by design: returncode checked,
     OmxError raised on failure). `paths` is the validated would_revert list
-    from plan_revert; an empty list is a no-op the caller handles before
-    calling this."""
+    from plan_revert — repo-relative to the git TOP-LEVEL, since that is
+    what `git diff --name-only` always emits regardless of `-C`. `git
+    checkout`'s pathspec is the OPPOSITE convention: resolved relative to
+    `-C` itself, never the top-level. So this runs `-C <top-level>`, not
+    `-C cwd` — a `cwd` that is merely some directory inside the repo (not
+    necessarily the top-level; a nested anchor is the normal case) would
+    otherwise fail to find every path plan_revert just found. An empty
+    list is a no-op the caller handles before calling this."""
     if not paths:
         return
-    proc = _run_git(cwd, ["checkout", sha, "--", *paths])
+    top = resolve_git_toplevel(cwd)
+    proc = _run_git(top, ["checkout", sha, "--", *paths])
     if proc.returncode != 0:
         raise OmxError(
             f"git checkout {sha!r} failed in {cwd!r}: {proc.stderr.strip()}")

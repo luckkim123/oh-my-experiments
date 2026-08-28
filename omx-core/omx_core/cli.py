@@ -24,6 +24,7 @@ from omx_core.decision import decide_outcome, parse_keep_policy, seed_stats
 from omx_core.evaluator import run_evaluator
 from omx_core.loop import compute_deadline, deadline_passed, queue_pending_launch, read_pending_launch
 from omx_core.omx_paths import (
+    HQ_ROOT,
     LEGACY_ROOT,
     OmxError,
     OmxPaths,
@@ -911,9 +912,8 @@ def _cmd_probe_novelty(args) -> int:
                 similar.append({"path": fp, "jaccard": round(j, 3)})
     ledger_hits = []
     lp = OmxPaths(root=_resolved_root(args))
-    # Reads BOTH stores (store-spec §7 stage 1): a project mid-fallback can
-    # have some campaigns/runs already migrated and some not.
-    for name, d in sorted(iter_store_entries(*lp.campaigns_root()).items()):
+    # Single anchor-resolved root (store-spec §7 stage 2).
+    for name, d in sorted(iter_store_entries(lp.campaigns_root()).items()):
         led = d / "ledger.jsonl"
         if not led.is_file():
             continue
@@ -934,7 +934,7 @@ def _cmd_probe_novelty(args) -> int:
                                     "event": ev.get("event"),
                                     "run_id": ev.get("run_id"),
                                     "jaccard": round(j, 3)})
-    for name, d in sorted(iter_store_entries(*lp.runs_root()).items()):
+    for name, d in sorted(iter_store_entries(lp.runs_root()).items()):
         lj = d / "ledger.json"
         if not lj.is_file():
             continue
@@ -1115,10 +1115,9 @@ def _cmd_loop_status(args) -> int:
         raise SystemExit(f"state.json is corrupt: {e}")
 
     if args.all:
-        # Reads BOTH stores (store-spec §7 stage 1) — see the campaigns/runs
-        # scan above for why a single-root scan would silently miss entries.
+        # Single anchor-resolved root (store-spec §7 stage 2).
         rows = []
-        run_ids = sorted(iter_store_entries(*paths.runs_root()))
+        run_ids = sorted(iter_store_entries(paths.runs_root()))
         for rid in run_ids:
             try:
                 phase, lease, marker = _run_phase(paths, rid, armed=armed, now=now)
@@ -1450,13 +1449,15 @@ def _cmd_run_record(args) -> int:
 def _cmd_revert_config(args) -> int:
     """Two-phase config revert (#5, spec 2.8). Dry-run by default; mutation only
     with --i-approve-revert. Resolves the sha from the run ledger (--to
-    baseline|last-kept|<sha>), builds the path-scoped allowlist (.omx/ under cwd
-    + the resolved root tree when inside cwd), and prints the plan / applies it.
+    baseline|last-kept|<sha>), builds the path-scoped allowlist (BOTH `.hq/`
+    and legacy `.omx/`, unconditionally, expressed relative to the git
+    top-level — never to --cwd, which `git diff`/`git checkout` do not use as
+    their relative-path base), and prints the plan / applies it.
     Loud-fails: --cwd not a git repo, sha unresolvable, ledger absent."""
     from pathlib import Path as _Path
 
     from omx_core.ledger import read_run_ledger
-    from omx_core.revert import apply_revert, plan_revert
+    from omx_core.revert import apply_revert, plan_revert, resolve_git_toplevel
     paths = OmxPaths(root=_resolved_root(args))
     try:
         ledger = read_run_ledger(paths, args.run_id)
@@ -1473,17 +1474,25 @@ def _cmd_revert_config(args) -> int:
         raise SystemExit(
             f"cannot resolve --to {args.to!r} for run {args.run_id!r} "
             "(the ledger has no matching commit)")
-    # path-scoped allowlist: .omx relative to cwd, plus the resolved root tree
-    # when it lies inside cwd.
-    protected = [f"{LEGACY_ROOT}/"]
-    cwd_res = _Path(args.cwd).resolve()
-    root_res = _Path(_resolved_root(args)).resolve()
+    # path-scoped allowlist: both stores, unconditionally (an anchored
+    # project can still carry an unpurged .omx/ — protecting a path that
+    # does not exist costs nothing), relative to the git TOP-LEVEL rather
+    # than --cwd (store-spec §7: a nested anchor is the normal case, e.g.
+    # <repo>/some/sub/project/.hq — a bare-.hq/ prefix or one built
+    # relative to --cwd silently never matches there).
     try:
-        rel = root_res.relative_to(cwd_res)
-        if rel != _Path("."):  # root == cwd -> str(rel/LEGACY_ROOT) is just ".omx/" (already in protected)
+        git_top = resolve_git_toplevel(args.cwd)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    root_res = _Path(_resolved_root(args)).resolve()
+    protected = [f"{HQ_ROOT}/", f"{LEGACY_ROOT}/"]
+    try:
+        rel = root_res.relative_to(git_top)
+        if rel != _Path("."):  # root == the repo root -> bare prefixes already cover it
+            protected.append(str(rel / HQ_ROOT) + "/")
             protected.append(str(rel / LEGACY_ROOT) + "/")
     except ValueError:
-        pass  # root is not inside cwd -> the ".omx/" prefix already covers cwd's tree
+        pass  # root is not inside the repo -> the bare prefixes already cover its tree
     try:
         plan = plan_revert(args.cwd, sha, protected)
     except OmxError as e:

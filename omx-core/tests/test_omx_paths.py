@@ -619,17 +619,11 @@ def test_every_public_path_getter_is_exercised(tmp_path):
         "analysis_table": lambda: p.analysis_table(out, rid, aid, metric="m", agg="a"),
         "proposal_md": lambda: p.proposal_md(out, rid, pid),
     }
-    # Enumeration-root getters (Rule A) return (new, legacy) TUPLES of Paths,
-    # not a single Path — every other getter still must.
-    _TUPLE_GETTERS = {"campaigns_root", "programs_root", "runs_root"}
+    # Stage 2: every getter, including the enumeration-root getters, returns
+    # a single resolved Path — no more (new, legacy) tuples.
     for name, fn in calls.items():
         result = fn()
-        if name in _TUPLE_GETTERS:
-            assert (isinstance(result, tuple) and len(result) == 2
-                    and all(isinstance(x, Path) for x in result)), (
-                f"{name} did not return a (new, legacy) Path pair")
-        else:
-            assert isinstance(result, Path), f"{name} did not return a Path"
+        assert isinstance(result, Path), f"{name} did not return a Path"
 
     # Discover public callables on the instance; every path getter must be in `calls`.
     # Excludes: properties handled separately (profile_dir), non-path attrs (root,
@@ -797,66 +791,34 @@ def test_parse_anchor_id_raises_anchor_error_on_bad_shape(tmp_path):
         parse_anchor_id(f)
 
 
-# --- _write(): all four branches ---------------------------------------------
+# --- _resolve(): the anchor alone decides, in both directions (stage 2) -----
+# store-spec §7 stage 2: no per-file fallback window, no existence check.
+# These are the team-lead-specified regression pair: (a) an anchored project
+# whose entity exists ONLY at legacy still resolves to .hq/ — the exact case
+# stage 1's _write() used to protect by staying on legacy; (b) an unanchored
+# project keeps resolving to legacy regardless of what's on disk.
 
-def test_write_no_anchor_returns_legacy(tmp_path):
-    from omx_core.omx_paths import _write
-    new = tmp_path / "new-path"
+def test_resolve_anchored_ignores_existing_legacy_content(tmp_path):
+    from omx_core.omx_paths import _resolve
     legacy = tmp_path / "legacy-path"
-    assert _write(tmp_path, new, legacy) == legacy
-
-
-def test_write_anchor_and_new_exists_returns_new(tmp_path):
-    from omx_core.omx_paths import _write
+    legacy.mkdir()
     _anchor(tmp_path)
     new = tmp_path / "new-path"
-    new.mkdir()
+    assert _resolve(tmp_path, new, legacy) == new
+
+
+def test_resolve_unanchored_with_legacy_content_stays_legacy(tmp_path):
+    from omx_core.omx_paths import _resolve
     legacy = tmp_path / "legacy-path"
     legacy.mkdir()
-    assert _write(tmp_path, new, legacy) == new
-
-
-def test_write_anchor_and_only_legacy_exists_returns_legacy(tmp_path):
-    from omx_core.omx_paths import _write
-    _anchor(tmp_path)
     new = tmp_path / "new-path"
-    legacy = tmp_path / "legacy-path"
-    legacy.mkdir()
-    assert _write(tmp_path, new, legacy) == legacy
+    assert _resolve(tmp_path, new, legacy) == legacy
 
 
-def test_write_anchor_and_neither_exists_returns_new(tmp_path):
-    from omx_core.omx_paths import _write
-    _anchor(tmp_path)
-    new = tmp_path / "new-path"
-    legacy = tmp_path / "legacy-path"
-    assert _write(tmp_path, new, legacy) == new
-
-
-# --- _read(): new-then-legacy -------------------------------------------------
-
-def test_read_prefers_new_when_it_exists(tmp_path):
-    from omx_core.omx_paths import _read
-    new = tmp_path / "new-path"
-    new.mkdir()
-    legacy = tmp_path / "legacy-path"
-    legacy.mkdir()
-    assert _read(new, legacy) == new
-
-
-def test_read_falls_back_to_legacy_when_new_absent(tmp_path):
-    from omx_core.omx_paths import _read
-    new = tmp_path / "new-path"
-    legacy = tmp_path / "legacy-path"
-    legacy.mkdir()
-    assert _read(new, legacy) == legacy
-
-
-# --- getter resolution: legacy fallback (no anchor) vs new (anchor + fresh) --
+# --- getter resolution: legacy (no anchor) vs new (anchor) -------------------
 # Every base-directory getter must (a) resolve to the SAME .omx/ path as
-# before when no anchor exists (regression guard — covered implicitly by every
-# existing assertion above, since none of those tests write an anchor), and
-# (b) resolve under .hq/ for a brand-new entity once anchored.
+# before when no anchor exists, and (b) resolve under .hq/ once anchored —
+# unconditionally now, existence on disk no longer matters (stage 2).
 
 @pytest.mark.parametrize("getter_name,call,new_suffix", [
     ("profile_dir", lambda p: p.profile_dir, ("config", "experiments", "profile")),
@@ -880,6 +842,10 @@ def test_read_falls_back_to_legacy_when_new_absent(tmp_path):
      ("community", "programs", "prog1")),
     ("program_json", lambda p: p.program_json("prog1"),
      ("config", "experiments", "programs", "prog1", "program.json")),
+    ("campaigns_root", lambda p: p.campaigns_root(),
+     ("work", "experiments", "campaigns")),
+    ("programs_root", lambda p: p.programs_root(), ("community", "programs")),
+    ("runs_root", lambda p: p.runs_root(), ("work", "experiments", "runs")),
 ])
 def test_getter_resolves_new_on_fresh_anchored_entity(tmp_path, getter_name, call, new_suffix):
     from omx_core.omx_paths import HQ_ROOT
@@ -908,6 +874,9 @@ def test_getter_resolves_new_on_fresh_anchored_entity(tmp_path, getter_name, cal
     ("program_dir", lambda p: p.program_dir("prog1"), ("programs", "prog1")),
     ("program_json", lambda p: p.program_json("prog1"),
      ("programs", "prog1", "program.json")),
+    ("campaigns_root", lambda p: p.campaigns_root(), ("campaigns",)),
+    ("programs_root", lambda p: p.programs_root(), ("programs",)),
+    ("runs_root", lambda p: p.runs_root(), ("runs",)),
 ])
 def test_getter_falls_back_to_legacy_when_no_anchor(tmp_path, getter_name, call, legacy_suffix):
     p = _paths(tmp_path)
@@ -916,24 +885,15 @@ def test_getter_falls_back_to_legacy_when_no_anchor(tmp_path, getter_name, call,
         f"{getter_name}: expected .omx/ fallback with no anchor, got {result}")
 
 
-def test_getter_prefers_existing_legacy_content_even_when_anchored(tmp_path):
-    """Branch 3 of _write: anchor present but only the legacy path holds this
-    specific entity (not yet migrated) -> stays on legacy, avoiding split-brain."""
+def test_getter_ignores_existing_legacy_content_once_anchored(tmp_path):
+    """Stage 2 regression guard at the getter level (mirrors the bare
+    _resolve() pair above): an anchored project resolves campaign_dir() to
+    .hq/ even when the entity exists ONLY at legacy — no more split-brain
+    protection via per-file fallback."""
     p = _paths(tmp_path)
     (tmp_path / ".omx" / "campaigns" / "camp1").mkdir(parents=True)
     _anchor(tmp_path)
-    assert p.campaign_dir("camp1") == tmp_path / ".omx" / "campaigns" / "camp1"
-
-
-def test_getter_prefers_existing_new_content_when_anchored(tmp_path):
-    """Branch 2 of _write: the new path already holds this entity (e.g.
-    migrated) -> resolves there even if legacy also still exists."""
     from omx_core.omx_paths import HQ_ROOT
-    p = _paths(tmp_path)
-    (tmp_path / ".omx" / "campaigns" / "camp1").mkdir(parents=True)
-    (Path(tmp_path, HQ_ROOT, "work", "experiments", "campaigns", "camp1")
-     .mkdir(parents=True))
-    _anchor(tmp_path)
     assert p.campaign_dir("camp1") == Path(
         tmp_path, HQ_ROOT, "work", "experiments", "campaigns", "camp1")
 
@@ -969,62 +929,36 @@ def test_reference_dir_unaffected_by_anchor(tmp_path):
     assert p.reference_dir == before
 
 
-# --- iter_store_entries() and the *_root() enumeration getters --------------
-# (team-lead Rule A follow-up: list_campaigns/list_programs/loop-status --all
-# must READ BOTH stores, not resolve to one via _write()/_read().)
+# --- iter_store_entries() and the *_root() enumeration getters (stage 2) ----
+# An anchored project has exactly one enumeration root, not a union of two —
+# campaigns_root()/programs_root()/runs_root() now return a single resolved
+# Path (same _resolve() as every entity getter), folded into the same
+# new_suffix/legacy_suffix parametrize tables above (search "campaigns_root").
 
-def test_iter_store_entries_unions_both_missing_neither_errors(tmp_path):
+def test_iter_store_entries_empty_when_root_missing(tmp_path):
     from omx_core.omx_paths import iter_store_entries
-    new = tmp_path / "new"
-    legacy = tmp_path / "legacy"
-    assert iter_store_entries(new, legacy) == {}
+    assert iter_store_entries(tmp_path / "absent") == {}
 
 
-def test_iter_store_entries_unions_disjoint_names(tmp_path):
+def test_iter_store_entries_lists_children_keyed_by_name(tmp_path):
     from omx_core.omx_paths import iter_store_entries
-    new = tmp_path / "new"
-    legacy = tmp_path / "legacy"
-    (new / "b").mkdir(parents=True)
-    (legacy / "a").mkdir(parents=True)
-    entries = iter_store_entries(new, legacy)
-    assert set(entries) == {"a", "b"}
-    assert entries["a"] == legacy / "a"
-    assert entries["b"] == new / "b"
-
-
-def test_iter_store_entries_new_wins_name_collision(tmp_path):
-    from omx_core.omx_paths import iter_store_entries
-    new = tmp_path / "new"
-    legacy = tmp_path / "legacy"
-    (new / "camp1").mkdir(parents=True)
-    (legacy / "camp1").mkdir(parents=True)
-    entries = iter_store_entries(new, legacy)
-    assert entries["camp1"] == new / "camp1"
-
-
-@pytest.mark.parametrize("getter,new_suffix,legacy_suffix", [
-    ("campaigns_root", ("work", "experiments", "campaigns"), ("campaigns",)),
-    ("programs_root", ("community", "programs"), ("programs",)),
-    ("runs_root", ("work", "experiments", "runs"), ("runs",)),
-])
-def test_root_getters_return_new_then_legacy_pair(tmp_path, getter, new_suffix, legacy_suffix):
-    from omx_core.omx_paths import HQ_ROOT
-    p = _paths(tmp_path)
-    new, legacy = getattr(p, getter)()
-    assert new == Path(tmp_path, HQ_ROOT, *new_suffix)
-    assert legacy == Path(tmp_path, ".omx", *legacy_suffix)
+    root = tmp_path / "campaigns"
+    (root / "camp1").mkdir(parents=True)
+    (root / "camp2").mkdir(parents=True)
+    entries = iter_store_entries(root)
+    assert entries == {"camp1": root / "camp1", "camp2": root / "camp2"}
 
 
 def test_trash_root_no_leading_dot_on_new_no_anchor_stays_legacy(tmp_path):
     """runtime/ is already .gitignore'd wholesale, so the new-layout trash
     child drops the leading dot (unlike the .omx/.trash legacy name).
-    _write()-resolved like every other getter: no anchor -> legacy dotted
+    _resolve()-resolved like every other getter: no anchor -> legacy dotted
     name unchanged."""
     p = _paths(tmp_path)
     assert p.trash_root() == tmp_path / ".omx" / ".trash"
 
 
-def test_trash_root_resolves_new_when_anchored_and_fresh(tmp_path):
+def test_trash_root_resolves_new_when_anchored(tmp_path):
     from omx_core.omx_paths import HQ_ROOT
     p = _paths(tmp_path)
     _anchor(tmp_path)

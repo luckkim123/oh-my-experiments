@@ -155,10 +155,8 @@ def campaign_status(paths: OmxPaths, campaign_id) -> dict:
 
 
 def list_campaigns(paths: OmxPaths) -> list:
-    """Reads BOTH stores (store-spec §7 stage 1) — a project mid-fallback can
-    have some campaigns already migrated to .hq/ and some still legacy-only,
-    so scanning one root alone would silently omit the other half."""
-    entries = iter_store_entries(*paths.campaigns_root())
+    """Lists the single anchor-resolved campaigns root (store-spec §7 stage 2)."""
+    entries = iter_store_entries(paths.campaigns_root())
     out = []
     for name in sorted(entries):
         d = entries[name]
@@ -207,7 +205,7 @@ def record_launched(paths: OmxPaths, proposal_id, run_id, *, now) -> dict:
     Appends to the campaign whose plan.json planned this proposal_id — NOT the
     run's group — so the plan-to-outcome join survives a campaign that spans
     groups. Dedup by (proposal_id, run_id)."""
-    entries = iter_store_entries(*paths.campaigns_root())
+    entries = iter_store_entries(paths.campaigns_root())
     for name in sorted(entries):
         d = entries[name]
         plan_fp = d / "plan.json"
@@ -332,15 +330,15 @@ def init_program(paths: OmxPaths, program_id, campaigns, *, now) -> dict:
 
 
 def list_programs(paths: OmxPaths) -> list:
-    """Reads BOTH stores, like list_campaigns(). programs_root() alone is
-    NOT sufficient: it enumerates the community/ (narrative) layer, but a
-    program whose only file is program.json under config/experiments/
-    programs/<id>/ has no matching community/ entry yet — so also scan the
-    config-layer programs root directly (legacy needs no separate pairing
-    there: it has no config/community split, and is already fully covered
-    by programs_root()'s legacy half) and settle every candidate id by
-    asking program_json() itself whether it actually exists."""
-    ids = set(iter_store_entries(*paths.programs_root()))
+    """Lists the single anchor-resolved programs root (store-spec §7 stage
+    2). programs_root() alone is NOT sufficient: it enumerates the
+    community/ (narrative) layer, but a program whose only file is
+    program.json under config/experiments/programs/<id>/ has no matching
+    community/ entry yet — so also scan the config-layer programs root
+    directly (an unanchored project has no config/community split, and is
+    already fully covered by programs_root()'s legacy resolution) and settle
+    every candidate id by asking program_json() itself whether it exists."""
+    ids = set(iter_store_entries(paths.programs_root()))
     config_programs_root = config_dir(paths.root) / "programs"
     if config_programs_root.is_dir():
         ids.update(d.name for d in config_programs_root.iterdir() if d.is_dir())

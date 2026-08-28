@@ -414,15 +414,19 @@ def compact_breadcrumb(payload):
             return None
         import time
 
-        from omx_core.omx_paths import OmxPaths
+        from omx_core.omx_paths import OmxPaths, has_anchor, runtime_dir
         from omx_core.state import load_state
 
         paths = OmxPaths(root=_omx_root(payload))
-        omx = paths.omx_dir
+        # anchor-gated, same branch clean.py's _clean_roots() uses — omx_dir
+        # alone is unconditionally legacy and would miss .hq/ content on an
+        # anchored project (store-spec §7 stage 2: no per-file fallback).
+        scratch_root = (runtime_dir(paths.root) / "scratch" if has_anchor(paths.root)
+                        else paths.omx_dir / "scratch")
         lines = []
         try:
             cutoff = time.time() - _NOTES_FRESH_S
-            fresh = [str(p) for p in sorted(omx.glob("scratch/*/notes.md"))
+            fresh = [str(p) for p in sorted(scratch_root.glob("*/notes.md"))
                      if p.stat().st_mtime >= cutoff]
             if fresh:
                 lines.append("scratch notes (analysis breadcrumb trail): "
@@ -438,7 +442,8 @@ def compact_breadcrumb(payload):
         except Exception:
             pass
         try:
-            queued = sorted(p.parent.name for p in omx.glob("runs/*/pending-launch.json"))
+            queued = sorted(p.parent.name
+                            for p in paths.runs_root().glob("*/pending-launch.json"))
             if queued:
                 lines.append("pending launches awaiting HUMAN approval: "
                              + ", ".join(queued))

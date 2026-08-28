@@ -78,13 +78,12 @@ def test_run_ledger_hit_via_real_writer(tmp_path, capsys):
     assert hit["event"] == decision["decision"]   # matches the real recorded decision
 
 
-# --- .hq/ cutover (team-lead Rule A): probe-novelty reads BOTH stores ------
+# --- .hq/ cutover (store-spec §7 stage 2): probe-novelty resolves ONE root -
 
 def test_run_ledger_hit_found_under_new_store_only(tmp_path, capsys):
-    """A run that lives ONLY under the new .hq/ tree (not yet migrated back
-    to legacy, or created fresh on an anchored project) must still surface a
-    ledger hit — the campaigns/runs scan in _cmd_probe_novelty must read
-    BOTH stores, not just .omx/."""
+    """A run that lives under the new .hq/ tree on an anchored project must
+    surface a ledger hit — the campaigns/runs scan in _cmd_probe_novelty
+    resolves to .hq/ only once anchored (store-spec §7 stage 2)."""
     fp = _proposal(tmp_path)
     anchor = tmp_path / ".hq" / ".anchor"
     anchor.parent.mkdir(parents=True, exist_ok=True)

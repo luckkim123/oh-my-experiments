@@ -66,12 +66,11 @@ def test_list_campaigns(tmp_path, capsys):
     assert [c["campaign_id"] for c in out["campaigns"]] == ["camp_a", "camp_b"]
 
 
-# --- .hq/ cutover (team-lead Rule A): list_campaigns() reads BOTH stores ----
+# --- .hq/ cutover (store-spec §7 stage 2): list_campaigns() resolves ONE root
 
-def test_list_campaigns_unions_legacy_and_new_new_wins_collision(tmp_path):
-    """A legacy-only campaign, a new-store-only campaign, and a campaign that
-    exists in both (content differs) — the union must show all three names,
-    and the colliding one must report the NEW store's content."""
+def test_list_campaigns_unanchored_sees_legacy_only(tmp_path):
+    """An unanchored project resolves campaigns_root() to .omx/ only — content
+    under .hq/ (however it got there) is invisible until the project anchors."""
     import json as _json
 
     from omx_core.omx_paths import OmxPaths
@@ -94,10 +93,36 @@ def test_list_campaigns_unions_legacy_and_new_new_wins_collision(tmp_path):
 
     from omx_core.campaign import list_campaigns
     out = {c["campaign_id"]: c for c in list_campaigns(paths)}
-    assert set(out) == {"legacy_only", "new_only", "both"}
+    assert set(out) == {"legacy_only", "both"}  # new_only invisible, unanchored
     assert out["legacy_only"]["created"] == "legacy-ts"
+    assert out["both"]["created"] == "legacy-content"  # unanchored -> legacy always
+
+
+def test_list_campaigns_anchored_never_sees_legacy_only(tmp_path):
+    """The flip side, anchored: campaigns_root() resolves to .hq/ only — a
+    campaign that exists solely under legacy .omx/ is invisible (store-spec
+    §6 GATE_LEGACY: 'reads will not find it'), while one migrated to .hq/
+    resolves normally."""
+    import json as _json
+
+    from omx_core.omx_paths import OmxPaths
+    anchor = tmp_path / ".hq" / ".anchor"
+    anchor.parent.mkdir(parents=True, exist_ok=True)
+    anchor.write_text("id: test-anchor\n", encoding="utf-8")
+    paths = OmxPaths(root=tmp_path)
+
+    legacy_only = tmp_path / ".omx" / "campaigns" / "legacy_only"
+    legacy_only.mkdir(parents=True)
+    (legacy_only / "plan.json").write_text(_json.dumps({"created": "legacy-ts"}))
+
+    new_only = tmp_path / ".hq" / "work" / "experiments" / "campaigns" / "new_only"
+    new_only.mkdir(parents=True)
+    (new_only / "plan.json").write_text(_json.dumps({"created": "new-ts"}))
+
+    from omx_core.campaign import list_campaigns
+    out = {c["campaign_id"]: c for c in list_campaigns(paths)}
+    assert set(out) == {"new_only"}
     assert out["new_only"]["created"] == "new-ts"
-    assert out["both"]["created"] == "new-content"  # new wins the collision
 
 
 def test_campaign_status_vanished_plan_loud_fails(tmp_path):

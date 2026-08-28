@@ -179,6 +179,31 @@ def test_breadcrumb_lists_recent_notes_and_pending_launch(tmp_path):
     assert "run1" in ctx
 
 
+def test_breadcrumb_lists_notes_and_pending_launch_when_anchored(tmp_path):
+    """store-spec §7 stage 2 regression: on an anchored project, the breadcrumb
+    must find content under .hq/ (runtime/experiments/scratch,
+    work/experiments/runs) — not just .omx/. This would return None before
+    the has_anchor()/runs_root() fix, since omx_dir is unconditionally legacy."""
+    mod = _load_handlers()
+    root = tmp_path
+    anchor = root / ".hq" / ".anchor"
+    anchor.parent.mkdir(parents=True)
+    anchor.write_text("id: test-anchor\n", encoding="utf-8")
+    notes = root / ".hq" / "runtime" / "experiments" / "scratch" / "s-20260707-abc" / "notes.md"
+    notes.parent.mkdir(parents=True)
+    notes.write_text("breadcrumb", encoding="utf-8")
+    pl = root / ".hq" / "work" / "experiments" / "runs" / "run1" / "pending-launch.json"
+    pl.parent.mkdir(parents=True)
+    pl.write_text("{}", encoding="utf-8")
+    out = mod.compact_breadcrumb({"cwd": str(root), "source": "compact"})
+    hso = out["hookSpecificOutput"]
+    assert hso["hookEventName"] == "SessionStart"
+    ctx = hso["additionalContext"]
+    assert "<omx-durable-state>" in ctx
+    assert str(notes) in ctx
+    assert "run1" in ctx
+
+
 def test_breadcrumb_stale_notes_excluded(tmp_path):
     import os
     import time

@@ -4,6 +4,138 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.14.0] - 2026-08-28 — fallback removed: the anchor decides, full stop
+
+Store-spec §7 stage 2. 0.13.0 shipped "write new, read both" — a read tried
+`.hq/` first and fell back to `.omx/` per file, and enumeration unioned both
+trees. That window is closed: a project's anchor now decides every read and
+write, in both directions, with no existence check and no fallback.
+
+### Changed
+- **`_read()`/`_write()` collapsed into one `_resolve(base, new, legacy)`** —
+  `new if has_anchor(base) else legacy`, unconditionally. Every entity getter
+  (profile/run/scratch/wiki/state/campaign/program/trash/…) now calls it.
+  The behavioral break: an anchored project whose entity exists ONLY at the
+  legacy path used to stay on legacy (stage 1's split-brain guard); it now
+  resolves to `.hq/` regardless of what's on disk.
+- **Enumeration stopped unioning two stores.** An anchored project has
+  exactly one enumeration root, so `campaigns_root()`/`programs_root()`/
+  `runs_root()` now return a single resolved `Path`, not a `(new, legacy)`
+  tuple, and `iter_store_entries(root)` is a plain directory scan instead of
+  a name-keyed union. `list_campaigns`, `list_programs`, `record_launched`,
+  probe-novelty's ledger scan, and `loop-status --all` all follow: a legacy
+  campaign/program/run that has not been migrated is now invisible on an
+  anchored project — exactly store-spec §6 GATE_LEGACY's "reads will not
+  find it", not a regression.
+- `gate_state()`'s `GATE_LEGACY` docstring updated to describe that
+  consequence; the gate's trigger condition (legacy store present, no
+  anchor) is unchanged, and `has_anchor()`/`parse_anchor_id()` are untouched.
+- `hooks/handlers.py`'s `_has_omx_marker()` dual probe (`.omx/` dir OR the
+  three `.hq/{config,work,runtime}/experiments/` subfolders) is unchanged —
+  an unmigrated project is still an omx project.
+- `clean.py`'s single-locus sweep (never the union, chosen by anchor state)
+  needed no logic change — it was already stage-2-shaped; only its docstring
+  no longer describes a fallback window still open.
+- `.gitignore`: this repo's own legacy-store line (`.omx/`) removed per
+  store-spec §9.4 (`policy-shift`) — the fallback-removal release for this
+  harness. `.omc/` (third-party) is untouched. No physical `.omx/`/`.hq/`
+  tree exists in this repo, so nothing newly became tracked.
+
+### Audited
+- Every `.omx/` literal in `hooks/` and `skills/*/SKILL.md` swept and
+  classified — injected-prompt text, docstrings/comments, or text
+  specifically about the unmigrated legacy store. **Zero edits needed**:
+  today's earlier 0.13.0 (P7) commit already leads every one of these with
+  the `.hq/` path and marks `.omx/` a parenthetical "(legacy …)" alternative
+  — the one exception the team flagged (`_ROUTE_CHECKPOINT`'s program-plan
+  line) was already part of that same commit. No injected string's char
+  count changed (nothing edited). `hooks/handlers.py`'s
+  `_has_omx_marker()` dual-probe literal (`(base / ".omx").is_dir()`) is
+  the intentional detection code, not prompt prose — left as-is per
+  instruction.
+- **Widened into a full `OmxPaths.omx_dir` audit** (the sweep's grep-for-
+  literal method cannot see an *attribute* that resolves to the legacy path
+  unconditionally — `compact_breadcrumb()`'s bug, below, is exactly that
+  shape). `omx_dir` is the only attribute on `OmxPaths` of this kind
+  (`self.root / LEGACY_ROOT`, set once in `__init__`, never anchor-gated by
+  itself). External call sites, all of them:
+  - `omx_paths.py`'s ~18 internal `_resolve(self.root, new, self.omx_dir / …)`
+    calls — legitimate by construction: `_resolve()` itself is what does the
+    anchor branching, and `omx_dir` is exactly the `legacy` argument it needs.
+  - `clean.py`'s `_clean_roots()` — legitimate: already inside the
+    `else` (not `has_anchor`) branch, so using the legacy dir there is
+    correct, not a guess.
+  - `hooks/handlers.py`'s `compact_breadcrumb()` — the bug (below).
+  After the fix, zero unconditional/buggy call sites remain. **Not
+  deletable**: the attribute is what every internal `_resolve()` call and
+  `clean.py`'s anchor-gated branch consume as the `legacy` argument: removing
+  it would mean re-deriving `Path(root) / LEGACY_ROOT` at ~19 call sites
+  across two files instead of one, which is the single-source-of-truth
+  violation this whole module exists to prevent — the opposite of
+  structurally safer.
+- **Third finding — flagged first, then fixed under Fixed below on explicit
+  instruction, since it outranked the round's other work:** `cli.py`'s
+  revert command's git-checkout protected-paths allowlist. See Fixed.
+
+### Fixed
+- Every test asserting stage 1's per-file fallback or two-store union
+  (`test_write_*`/`test_read_*`, `test_getter_prefers_existing_*`,
+  `test_iter_store_entries_unions_*`, `test_root_getters_return_new_then_
+  legacy_pair`, and the campaign/program/loop-status "reads BOTH stores"
+  suites) rewritten for stage 2's anchor-only resolution. Two new tests pin
+  the exact regression: an anchored project with only a legacy file resolves
+  to `.hq/`; an unanchored project with a legacy file stays on `.omx/`.
+- **`compact_breadcrumb()` (SessionStart/compact hook) missed `.hq/` content
+  entirely on an anchored project.** It globbed
+  `paths.omx_dir.glob("scratch/*/notes.md")` and
+  `.glob("runs/*/pending-launch.json")` — `omx_dir` is unconditionally
+  legacy, so a fresh scratch note or a queued launch actually under `.hq/`
+  never appeared in the post-compaction breadcrumb, silently. Now: the
+  scratch half is anchor-gated the same way `clean.py`'s `_clean_roots()`
+  already branches (`has_anchor()` → `runtime_dir(root) / "scratch"`, else
+  legacy — confirmed against `migrate-om-store.sh`'s omx mapping table,
+  `dir|scratch|runtime/experiments/scratch`); the runs half now goes
+  through `runs_root()` (the single resolved `Path` from this release's
+  enumeration collapse) instead of a second hand-rolled glob. New test
+  (`test_breadcrumb_lists_notes_and_pending_launch_when_anchored`) fails on
+  the pre-fix code (`None` returned, `TypeError` unpacking it — verified via
+  `git stash` on just `hooks/handlers.py`) and passes after.
+- **`omx revert-config`'s protected-paths allowlist could `git checkout` an
+  anchored project's tracked `.hq/community/`/`.hq/config/` content back to
+  an old commit — the highest-stakes finding this release.** Two distinct
+  bugs, both real, both latent since before this release (measured via
+  `git stash` on `cli.py`+`revert.py`, not introduced by stage 2):
+  1. `protected` only ever listed legacy `.omx/` — `.hq/` was never in it,
+     in ANY scenario, nested or not. A modified `.hq/community/` file
+     always reverted.
+  2. The list was built relative to `--cwd`, but `git diff --name-only`
+     always reports paths relative to the git TOP-LEVEL regardless of `-C`
+     (empirically verified — a subdirectory `-C` does not change the
+     output), so a `--cwd` that is not itself the repo root (store-spec's
+     normal case: a nested anchor, e.g. `<repo>/0_Project/.../<project>/.hq`)
+     silently broke the match for EITHER store, not just `.hq/`.
+  Fix: new `revert.py` `resolve_git_toplevel(cwd)`; `cli.py` now builds
+  `protected = [f"{HQ_ROOT}/", f"{LEGACY_ROOT}/"]` plus the anchor's path
+  relative to that top-level, unconditionally (an anchored project can
+  still carry an unpurged `.omx/`). Fixing this surfaced a THIRD, deeper
+  bug it had been masking: `apply_revert()`'s `git checkout <sha> -- <paths>`
+  resolves each pathspec relative to `-C` — the OPPOSITE convention from
+  `diff --name-only` — so top-level-relative paths from `plan_revert` failed
+  to resolve (`pathspec 'config.yaml' did not match`) the moment `--cwd`
+  wasn't the top-level; every existing test happened to run with `--cwd`
+  equal to the repo root, so this had never been exercised. `apply_revert`
+  now resolves and runs at the top-level too. Two new CLI-level tests
+  (`test_cli_protects_hq_community_not_just_omx`,
+  `test_cli_protects_nested_anchor_when_cwd_is_not_toplevel`) fail on the
+  pre-fix code and pass after (verified via `git stash`).
+
+### Verification
+`pytest omx-core/tests` — **1158 passed, 2 skipped, 5 failed**, exit 1. The
+five are the same pre-existing `route_emit` hook-runner failures as 0.13.0,
+reproduced identically against unmodified `HEAD` before this entry was
+written (`git stash` + targeted run). No new failures. `ruff check` clean.
+`scripts/tag_drift.py` clean against this entry.
+
 ## [0.13.0] - 2026-08-28 — the store moves, and the listing has to move with it
 
 omx is the last harness onto the unified `.hq/` store (om\* store unification,

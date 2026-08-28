@@ -116,12 +116,13 @@ def test_plan_add_label_roundtrip(paths):
     assert st2["plan"][1]["label"] == ""
 
 
-# --- .hq/ cutover (team-lead Rule A): record_launched() reads BOTH stores --
+# --- .hq/ cutover (store-spec §7 stage 2): record_launched() resolves ONE root
 
-def test_record_launched_finds_proposal_planned_in_legacy_only_campaign(paths, tmp_path):
-    """A campaign that lives ONLY in the legacy store (not yet migrated) must
-    still be found by record_launched()'s union scan on an anchored project,
-    and the event must land in the SAME (legacy) ledger — never split."""
+def test_record_launched_on_anchored_project_cannot_reach_legacy_only_campaign(paths, tmp_path):
+    """A campaign that lives ONLY in the legacy store (not yet migrated) is
+    UNREACHABLE by record_launched() once the project is anchored — stage 2
+    has no per-file fallback, exactly store-spec §6 GATE_LEGACY's 'reads will
+    not find it'. A campaign migrated to .hq/ still resolves normally."""
     import json as _json
     anchor = tmp_path / ".hq" / ".anchor"
     anchor.parent.mkdir(parents=True, exist_ok=True)
@@ -140,11 +141,8 @@ def test_record_launched_finds_proposal_planned_in_legacy_only_campaign(paths, t
     (new_camp / "ledger.jsonl").touch()
 
     res1 = record_launched(paths, "p1", "run1", now=NOW)
-    assert res1 == {"status": "logged", "campaign_id": "legacy_camp",
-                    "event": {"ts": NOW, "event": "launched", "run_id": "run1",
-                              "data": {"proposal_id": "p1", "source": "queue-launch"}}}
-    assert len((legacy_camp / "ledger.jsonl").read_text().splitlines()) == 1
-    assert (new_camp / "ledger.jsonl").read_text() == ""  # untouched
+    assert res1 == {"status": "unplanned", "campaign_id": None}
+    assert (legacy_camp / "ledger.jsonl").read_text() == ""  # never reached
 
     res2 = record_launched(paths, "p2", "run2", now=NOW)
     assert res2["campaign_id"] == "new_camp"
