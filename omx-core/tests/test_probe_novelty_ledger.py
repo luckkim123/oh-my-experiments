@@ -78,6 +78,32 @@ def test_run_ledger_hit_via_real_writer(tmp_path, capsys):
     assert hit["event"] == decision["decision"]   # matches the real recorded decision
 
 
+# --- .hq/ cutover (team-lead Rule A): probe-novelty reads BOTH stores ------
+
+def test_run_ledger_hit_found_under_new_store_only(tmp_path, capsys):
+    """A run that lives ONLY under the new .hq/ tree (not yet migrated back
+    to legacy, or created fresh on an anchored project) must still surface a
+    ledger hit — the campaigns/runs scan in _cmd_probe_novelty must read
+    BOTH stores, not just .omx/."""
+    fp = _proposal(tmp_path)
+    anchor = tmp_path / ".hq" / ".anchor"
+    anchor.parent.mkdir(parents=True, exist_ok=True)
+    anchor.write_text("id: test-anchor\n", encoding="utf-8")
+    run_dir = tmp_path / ".hq" / "work" / "experiments" / "runs" / "beta_t1_260604_120000"
+    run_dir.mkdir(parents=True)
+    (run_dir / "ledger.json").write_text(json.dumps({
+        "schema_version": 1, "entries": [
+            {"decision": "discard",
+             "description": ("entropy floor widen constraint margin schedule "
+                             "plateau attitude error metric probe")}]}))
+    capsys.readouterr()
+    rc = main(["probe-novelty", "--proposal", str(fp), "--root", str(tmp_path)])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    hit = next(h for h in out["ledger_hits"] if h["run_id"] == "beta_t1_260604_120000")
+    assert hit["event"] == "discard"
+
+
 def test_no_ledgers_is_quiet(tmp_path, capsys):
     fp = _proposal(tmp_path)
     rc = main(["probe-novelty", "--proposal", str(fp), "--root", str(tmp_path)])

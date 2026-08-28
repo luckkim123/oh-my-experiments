@@ -23,7 +23,7 @@ human reads and approves; exp-design's job ends at writing it.
 
 0. Step-0 preflight: `omx doctor --root <root>` — a stale/missing install fails
    actionably here instead of surfacing as a confusing error mid-design.
-1. A profile exists and is approved. Read `<root>/.omx/profile/metrics.yaml`. Missing
+1. A profile exists and is approved. Read `<root>/.hq/config/experiments/profile/metrics.yaml` (legacy `<root>/.omx/profile/metrics.yaml`). Missing
    → tell the user to run exp-init first; STOP. `pending_approval: true` still set
    → tell the user to approve it first; STOP. (Honors the exp-init hard gate.)
 2. An exp-analyze `report.md` exists. The user gives either a direct path to a
@@ -88,13 +88,13 @@ read time). Do NOT re-propose a probe family already marked `discarded` (it was
 tried and rejected) or still `planned` (it is queued) — feed this mechanical
 signal into the novelty judgment `probe-novelty` also informs.
 
-If the campaign belongs to a program (`.omx/programs/` exists), read the cross-group
+If the campaign belongs to a program (`.hq/community/programs/` exists — legacy `.omx/programs/`), read the cross-group
 view too: `omx program-status --root <root>` — a settled probe may live in a sibling
 campaign's ledger, not this group's.
 
 ### Recipes (promoted procedures)
 
-Also list `.omx/recipes/` — a recipe matching the regression's symptom
+Also list `.hq/community/recipes/` (legacy `.omx/recipes/`) — a recipe matching the regression's symptom
 prescribes the discriminating checks a past diagnosis validated. Follow it as
 a checklist before inventing a new probe; cite it in the proposal.
 
@@ -102,7 +102,7 @@ a checklist before inventing a new probe; cite it in the proposal.
 
 exp-analyze records ENGINE-GAP SPECS — code-change specifications for the analysis
 engine. The engine is ALL the ANALYSIS code this workspace owns (code that READS results
-without changing them): both the reference adapter the profile points at (`.omx/profile/`)
+without changing them): both the reference adapter the profile points at (`.hq/config/experiments/profile/` — legacy `.omx/profile/`)
 AND the workspace's own pure post-processing source (e.g. an `analysis/` package that reads
 saved `*.npz`/`summary.json`). They are the write half of "the engine specializes the more
 the workspace is used"; this is the read half. Before designing the probe, surface any open
@@ -119,7 +119,7 @@ makes the engine sharper for THIS workspace each cycle, exactly as intended.
 
 Boundaries (do not overreach) — the line is READS-results vs PRODUCES-results, not where the
 file lives:
-- IN scope: ANALYSIS code that reads results without changing them — the `.omx/profile/`
+- IN scope: ANALYSIS code that reads results without changing them — the `.hq/config/experiments/profile/` (legacy `.omx/profile/`)
   adapter AND the workspace's pure post-processing source (metrics, plots, comparison,
   heavy-tail/divergence stats). A spec may also create a NEW analysis module if `[WHERE]`
   says so.

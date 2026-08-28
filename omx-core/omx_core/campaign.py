@@ -9,7 +9,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from omx_core.omx_paths import OmxError, OmxPaths, atomic_path
+from omx_core.omx_paths import (
+    OmxError,
+    OmxPaths,
+    atomic_path,
+    config_dir,
+    iter_store_entries,
+)
 
 
 class CampaignError(OmxError):
@@ -149,11 +155,13 @@ def campaign_status(paths: OmxPaths, campaign_id) -> dict:
 
 
 def list_campaigns(paths: OmxPaths) -> list:
-    root = paths.omx_dir / "campaigns"
-    if not root.is_dir():
-        return []
+    """Reads BOTH stores (store-spec §7 stage 1) — a project mid-fallback can
+    have some campaigns already migrated to .hq/ and some still legacy-only,
+    so scanning one root alone would silently omit the other half."""
+    entries = iter_store_entries(*paths.campaigns_root())
     out = []
-    for d in sorted(root.iterdir()):
+    for name in sorted(entries):
+        d = entries[name]
         if not d.is_dir() or not (d / "plan.json").is_file():
             continue
         try:
@@ -162,7 +170,7 @@ def list_campaigns(paths: OmxPaths) -> list:
             plan = {}
         ledger = d / "ledger.jsonl"
         n = len(ledger.read_text().splitlines()) if ledger.is_file() else 0
-        entry = {"campaign_id": d.name, "created": plan.get("created"),
+        entry = {"campaign_id": name, "created": plan.get("created"),
                  "events": n}
         if plan.get("predecessor"):
             entry["predecessor"] = plan["predecessor"]
@@ -199,28 +207,28 @@ def record_launched(paths: OmxPaths, proposal_id, run_id, *, now) -> dict:
     Appends to the campaign whose plan.json planned this proposal_id — NOT the
     run's group — so the plan-to-outcome join survives a campaign that spans
     groups. Dedup by (proposal_id, run_id)."""
-    root = paths.omx_dir / "campaigns"
-    if root.is_dir():
-        for d in sorted(root.iterdir()):
-            plan_fp = d / "plan.json"
-            if not d.is_dir() or not plan_fp.is_file():
-                continue
-            try:
-                plan = json.loads(plan_fp.read_text())
-            except ValueError:
-                continue
-            if not any(e.get("proposal_id") == proposal_id
-                       for e in plan.get("planned", [])):
-                continue
-            for e in read_ledger(paths, d.name):
-                if (e.get("event") == "launched" and e.get("run_id") == run_id
-                        and (e.get("data") or {}).get("proposal_id") == proposal_id):
-                    return {"status": "duplicate", "campaign_id": d.name}
-            rec = append_event(paths, d.name, now=now, event="launched",
-                               run_id=run_id,
-                               data={"proposal_id": proposal_id,
-                                     "source": "queue-launch"})
-            return {"status": "logged", "campaign_id": d.name, "event": rec}
+    entries = iter_store_entries(*paths.campaigns_root())
+    for name in sorted(entries):
+        d = entries[name]
+        plan_fp = d / "plan.json"
+        if not d.is_dir() or not plan_fp.is_file():
+            continue
+        try:
+            plan = json.loads(plan_fp.read_text())
+        except ValueError:
+            continue
+        if not any(e.get("proposal_id") == proposal_id
+                   for e in plan.get("planned", [])):
+            continue
+        for e in read_ledger(paths, name):
+            if (e.get("event") == "launched" and e.get("run_id") == run_id
+                    and (e.get("data") or {}).get("proposal_id") == proposal_id):
+                return {"status": "duplicate", "campaign_id": name}
+        rec = append_event(paths, name, now=now, event="launched",
+                           run_id=run_id,
+                           data={"proposal_id": proposal_id,
+                                 "source": "queue-launch"})
+        return {"status": "logged", "campaign_id": name, "event": rec}
     return {"status": "unplanned", "campaign_id": None}
 
 
@@ -324,11 +332,19 @@ def init_program(paths: OmxPaths, program_id, campaigns, *, now) -> dict:
 
 
 def list_programs(paths: OmxPaths) -> list:
-    root = paths.omx_dir / "programs"
-    if not root.is_dir():
-        return []
-    return sorted(d.name for d in root.iterdir()
-                  if d.is_dir() and (d / "program.json").is_file())
+    """Reads BOTH stores, like list_campaigns(). programs_root() alone is
+    NOT sufficient: it enumerates the community/ (narrative) layer, but a
+    program whose only file is program.json under config/experiments/
+    programs/<id>/ has no matching community/ entry yet — so also scan the
+    config-layer programs root directly (legacy needs no separate pairing
+    there: it has no config/community split, and is already fully covered
+    by programs_root()'s legacy half) and settle every candidate id by
+    asking program_json() itself whether it actually exists."""
+    ids = set(iter_store_entries(*paths.programs_root()))
+    config_programs_root = config_dir(paths.root) / "programs"
+    if config_programs_root.is_dir():
+        ids.update(d.name for d in config_programs_root.iterdir() if d.is_dir())
+    return sorted(i for i in ids if paths.program_json(i).is_file())
 
 
 def program_status(paths: OmxPaths, program_id=None) -> dict:

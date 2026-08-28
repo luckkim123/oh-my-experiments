@@ -41,8 +41,8 @@ any other harness.
 |:--|:--|
 | **Evidence, not vibes** | Every finding in a report is tagged to code-exec stats or a vision-read plot. Proposals must carry discriminating predictions or the gate rejects them. |
 | **Never launches training** | The loop analyzes, designs, and evaluates; the next launch is always a pending-approval artifact (`omx queue-launch`). No hook and no loop can fire a real training run. |
-| **Self-contained** | A pure-Python core (`omx-core`) + a thin `omx` CLI + `.omx/` JSON state. No custom MCP server — the most version-resilient interface is Bash + file IO. Immune to other harnesses' version churn. |
-| **Discipline-first** | One path module is the only way to construct any path; the `.omx/` schema is fixed (never ad-hoc); cleanup is a review-gated ritual that moves to `.omx/.trash`, never `rm`. |
+| **Self-contained** | A pure-Python core (`omx-core`) + a thin `omx` CLI + `.hq/` JSON state (falls back to legacy `.omx/` for a project not yet anchored on the unified store). No custom MCP server — the most version-resilient interface is Bash + file IO. Immune to other harnesses' version churn. |
+| **Discipline-first** | One path module is the only way to construct any path; the on-disk schema (`.hq/` when anchored, else legacy `.omx/`) is fixed (never ad-hoc); cleanup is a review-gated ritual that moves to `.hq/runtime/experiments/trash/` (legacy `.omx/.trash`), never `rm`. |
 | **Every guarantee is CLI-enforced** | Hooks are a convenience layer. Each guarantee a hook provides is *also* carried by a loud-fail CLI verb, so a disabled hook degrades to "not yet caught," never "not enforced." |
 
 ## Quick start
@@ -87,7 +87,7 @@ exp-init  <one-line description of your research>
 ```
 
 `exp-init` runs a Socratic, ambiguity-gated interview and writes your profile to
-`.omx/profile/` — the optimization objective, eval method, metric vocabulary, and launch
+`.hq/config/experiments/profile/` (legacy `.omx/profile/`) — the optimization objective, eval method, metric vocabulary, and launch
 recipe. Then:
 
 ```
@@ -100,7 +100,7 @@ exp-loop     <run_id> [--max-runtime <s>]   # → the semi-autonomous cycle
 
 | Skill | Role | Writes |
 |:--|:--|:--|
-| **`exp-init`** | Bootstrap — the "research `/init`". An ambiguity-gated Socratic interview elicits objective, eval method, success criteria, metric vocabulary, and launch recipe. | `.omx/profile/{evaluator.sh, metrics.yaml, rules.md, launch.sh}` (pending approval) |
+| **`exp-init`** | Bootstrap — the "research `/init`". An ambiguity-gated Socratic interview elicits objective, eval method, success criteria, metric vocabulary, and launch recipe. | `.hq/config/experiments/profile/{evaluator.sh, metrics.yaml, rules.md, launch.sh}` (legacy `.omx/profile/...`), pending approval |
 | **`exp-analyze`** | Analyze N runs into an evidence-tagged report. A hybrid router decides *per question* between exact code-exec stats and a vision-read PNG curve. Never launches training/eval. | `report.md` + promoted plots (the permanent analysis tree) |
 | **`exp-design`** | Design the next experiment. A 3-lane differential diagnosis (code-path / config-DR-hyperparam / measurement-artifact) yields one discriminating probe = the next config. | `proposals/<id>.md` (pending approval) |
 | **`exp-loop`** | Semi-autonomous analyze → design → eval → keep/discard → log, until a deadline or stop condition. The "leaving-work" deadline governs only analyze/design/eval; the next launch is **queued, never fired**. | run ledger + `queue-launch` artifact |
@@ -109,7 +109,7 @@ exp-loop     <run_id> [--max-runtime <s>]   # → the semi-autonomous cycle
 
 ```
                  ┌───────────┐  profile (evaluator, metrics, launch recipe)
-   exp-init ────▶│   .omx/    │
+   exp-init ────▶│    .hq/    │
                  │  profile   │
                  └─────┬─────┘
                        │
@@ -121,7 +121,7 @@ exp-loop     <run_id> [--max-runtime <s>]   # → the semi-autonomous cycle
                         keep / discard / log · queue-launch (pending approval)
 ```
 
-Everything is persisted as JSON under `.omx/` and every mutation is auditable. The
+Everything is persisted as JSON under `.hq/` (legacy `.omx/` during the migration window) and every mutation is auditable. The
 report *is* the deliverable of analysis; the proposal *is* the deliverable of design —
 there is no separate hand-written summary step.
 
@@ -133,10 +133,10 @@ OMX reads a small set of environment variables. All are optional.
 |:--|:--|
 | `OMX_DISABLE=1` | Disables **all** omx hooks (every guarantee is still carried by a CLI verb). |
 | `OMX_SKIP_HOOKS=<name>,<name>` | Disables named hook handlers only. |
-| `OMX_STATE_DIR=<dir>` | Overrides the `.omx/` state root location. |
+| `OMX_STATE_DIR=<dir>` | Overrides the project root OMX state resolves under (`.hq/` when anchored, else legacy `.omx/`). |
 | `OMX_PROJECT_DIR=<dir>` | Overrides the project root used for path resolution. |
 | `OMX_SESSION_ID=<id>` | Overrides the session id (the run-lease ownership key). |
-| `OMX_NO_ROOT_LADDER=1` | Disables the parent-directory ascent when locating an `.omx/` root. |
+| `OMX_NO_ROOT_LADDER=1` | Disables the parent-directory ascent when locating the project's OMX root (`.hq/` if anchored, else legacy `.omx/`). |
 
 Some gates read optional override keys from `metrics.yaml` at the call boundary:
 
@@ -158,7 +158,7 @@ users only need the four skills above.
 | Verb | Role |
 |:--|:--|
 | `omx doctor` | Read-only environment preflight — install, deps, profile, hooks. |
-| `omx init` | Initialize the `.omx/` state root. |
+| `omx init` | Initialize the OMX state root (`.hq/` when anchored, else legacy `.omx/`). |
 | `omx ingest` | Ingest run outputs (CSV long-form, eval summaries, TensorBoard, W&B offline). |
 | `omx reduce {summarize,tb-final}` | Reduce ingested series into summaries / final-step tables. |
 | `omx eval --root <dir>` | Run the profile evaluator; runs the profile-seal preflight when `--root` is given (warns on a missing/drifted seal). |
@@ -178,7 +178,7 @@ users only need the four skills above.
 | `omx report-review --path <report.md>` | Deterministic critic checklist; records a `review.json`, never gates. |
 | `omx proposal-lint --path <proposals/id.md>` | Loud-fail gate — a proposal must carry discriminating predictions, evidence, and references. |
 | `omx probe-novelty --root <dir> --proposal <path>` | Warn-only: was this probe family already tried (wiki + past proposals)? |
-| `omx profile-seal --root <dir>` | Seal `.omx/profile/{evaluator.sh,launch.sh}` sha256 at approval time. |
+| `omx profile-seal --root <dir>` | Seal `.hq/config/experiments/profile/{evaluator.sh,launch.sh}` (legacy `.omx/profile/...`) sha256 at approval time. |
 
 </details>
 
@@ -203,12 +203,12 @@ users only need the four skills above.
 
 | Verb | Role |
 |:--|:--|
-| `omx campaign-init --id <id>` | Create `.omx/campaigns/<id>/` (plan.json + empty ledger). |
+| `omx campaign-init --id <id>` | Create `.hq/work/experiments/campaigns/<id>/` (legacy `.omx/campaigns/<id>/`) (plan.json + empty ledger). |
 | `omx campaign-log --id <id> --event <e>` | Append one event (launched/kept/discarded/eval/note) to the ledger. |
 | `omx campaign-status --id <id>` | Aggregate one campaign's ledger. |
 | `omx campaign-list` | List campaigns with event counts. |
 | `omx campaign-plan-add --id <id> --proposal-id <id>` | Record a planned proposal into `plan.json`; status derived at read time. |
-| `omx program-init --id <id> --campaigns a,b,c` | Create `.omx/programs/<id>/` (program.json header + PLAN.md/HANDOFF.md skeletons; an existing file is never overwritten, so the git-mv migration path still works). |
+| `omx program-init --id <id> --campaigns a,b,c` | Create `.hq/community/programs/<id>/` (PLAN.md/HANDOFF.md skeletons) + `.hq/config/experiments/programs/<id>/program.json` header (legacy: both under `.omx/programs/<id>/`); an existing file is never overwritten, so the git-mv migration path still works. |
 | `omx program-lint --path <programs/id/PLAN.md>` | Loud-fail gate — the requester's objective must be carried verbatim, and every `[DECISION-REQUIRED: <slug>]` must reach the user's decision list. |
 | `omx program-status [--id <id>]` | Aggregate member campaigns into one cross-group program view. `plan_md` reports that a plan EXISTS; whether it is adequate is `program-lint`'s question. |
 
@@ -218,7 +218,7 @@ users only need the four skills above.
 
 A program is the umbrella over several group-keyed campaigns (one campaign per run
 group stays the rule — a program never has its own ledger). Artifact:
-`.omx/programs/<program-id>/{PLAN.md, program.json}`. `PLAN.md` is the human/agent
+`.hq/community/programs/<program-id>/PLAN.md` + `.hq/config/experiments/programs/<program-id>/program.json` (legacy: both under `.omx/programs/<program-id>/`). `PLAN.md` is the human/agent
 narrative — omx never parses or merges it; `program.json` (member list, written once
 by `program-init`) is the membership SSOT.
 
@@ -226,7 +226,7 @@ Migrating an existing plan document into a program (documented procedure — the
 deliberately no verb that runs git):
 
     omx program-init --id <program-id> --campaigns a,b,c --root <r>
-    git mv <old-plan-path> .omx/programs/<program-id>/PLAN.md
+    git mv <old-plan-path> .hq/community/programs/<program-id>/PLAN.md   # or legacy .omx/programs/<program-id>/PLAN.md
     # leave a one-line redirect stub at the old path, then commit both
 
 `omx program-status` + PLAN.md together are the authoritative cross-group answer to
@@ -254,12 +254,12 @@ land 2% away from it. The lint reports four findings on that document.
 
 | Verb | Role |
 |:--|:--|
-| `omx tree-codify --root <dir>` | Infer `.omx/profile/tree.yaml` from an existing tree (census-based, pending approval). |
+| `omx tree-codify --root <dir>` | Infer `.hq/config/experiments/profile/tree.yaml` (legacy `.omx/profile/tree.yaml`) from an existing tree (census-based, pending approval). |
 | `omx tree-audit --root <dir> [--strict]` | Validate output trees against `tree.yaml` (report-only; `--strict` → rc 2). |
 | `omx tree-scaffold --root <dir> --under <path>` | Mint a run skeleton / eval leaf per `tree.yaml` (refuses existing leaves; never launches). |
 | `omx tree-alias --root <dir> --name <n> --run <spec>` | Create/re-point a declared alias symlink (atomic; refuses undeclared names). |
 | `omx tree-index --root <dir> [--check]` | Regenerate the generated `INDEX.md` (marker-guarded; `--check` reports staleness). |
-| `omx clean --root <dir> [--apply]` | Review-gated cleanup: classify → dry-run → `--apply` moves to `.omx/.trash` (never `rm`). |
+| `omx clean --root <dir> [--apply]` | Review-gated cleanup: classify → dry-run → `--apply` moves to `.hq/runtime/experiments/trash/` — legacy `.omx/.trash` — never `rm`. |
 
 </details>
 
@@ -272,7 +272,7 @@ land 2% away from it. The lint reports four findings on that document.
 | `omx wiki lint` | Lint wiki pages (quality floor via `wiki_quality_floor`). |
 | `omx wiki capture-session --from-report <report.md>` | Write every report `[FINDING]` as a low-confidence session-log stub. |
 | `omx wiki capture-flush` | Rescue any produced-but-uncaptured report (also the `SessionEnd` hook). |
-| `omx wiki sync-profile` | Regenerate the reserved `profile.md` projection from `.omx/profile/`. |
+| `omx wiki sync-profile` | Regenerate the reserved `profile.md` projection from `.hq/config/experiments/profile/` (legacy `.omx/profile/`). |
 | `omx wiki promote-recipe` | Promote a diagnosis procedure into a reusable recipe. |
 | `omx wiki gc` / `omx wiki gc-apply` | Diagnose and (after approval) apply wiki garbage collection. |
 | `omx card-check` | Cross-repo card-currency guard — FAILS against a stale omha routing card by design. |
@@ -283,7 +283,7 @@ land 2% away from it. The lint reports four findings on that document.
 
 - `runs/<run_id>/.loop-lock` — the session-keyed `O_EXCL` run lease (reaped on age alone).
 - `runs/<run_id>/loop-status.json` — the loop-completion marker, folded into `loop-status`'s `phase` field.
-- `.omx/state/.state-lock` — the fcntl mutex guarding every `state.json` load-mutate-save critical section.
+- `.hq/runtime/experiments/state/.state-lock` (legacy `.omx/state/.state-lock`) — the fcntl mutex guarding every `state.json` load-mutate-save critical section.
 
 ## Hooks & review agents
 

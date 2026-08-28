@@ -1,6 +1,6 @@
 ---
 name: exp-init
-description: Bootstrap the OMX experiment profile via an interactive ambiguity-gated Socratic interview. Use when setting up experiment-analysis infrastructure for a research project (the "research /init") — elicits the optimization objective, eval method, success criteria, metric vocabulary, and launch recipe, then writes .omx/profile/{evaluator.sh, metrics.yaml, rules.md, launch.sh} marked pending approval. Triggers on "set up experiment analysis", "exp-init", "실험 분석 셋업", "프로파일 만들어".
+description: Bootstrap the OMX experiment profile via an interactive ambiguity-gated Socratic interview. Use when setting up experiment-analysis infrastructure for a research project (the "research /init") — elicits the optimization objective, eval method, success criteria, metric vocabulary, and launch recipe, then writes .hq/config/experiments/profile/{evaluator.sh, metrics.yaml, rules.md, launch.sh} (legacy .omx/profile/...) marked pending approval. Triggers on "set up experiment analysis", "exp-init", "실험 분석 셋업", "프로파일 만들어".
 argument-hint: "[--profile-name <name>] [--root <dir>] <one-line research description>"
 ---
 
@@ -26,7 +26,7 @@ a stale/missing install fails actionably here instead of mid-interview.
 
 ## What it produces (via the `omx init` core verb — not direct file writes)
 
-`.omx/profile/` (anchored at the cwd or the chosen `--root`, resolved BEFORE output_root — design H4):
+`.hq/config/experiments/profile/` (legacy `.omx/profile/`) (anchored at the cwd or the chosen `--root`, resolved BEFORE output_root — design H4):
 - `metrics.yaml` — output_root + metric/view/agg/source vocabulary + keep_policy + score_formula slot
 - `evaluator.sh` — seeded from the committed reference (`reference/<profile-name>/evaluator.sh`); user edits the stub later
 - `rules.md` — the user's analysis discipline ("CV mandatory", etc.)
@@ -135,7 +135,7 @@ dict and shell the Claude-free core verb, which validates and atomic-writes it:
    otherwise (and you should re-ask rather than mangle the user's word).
 
 2. **Resolve the anchor root (H4).** Default to the cwd. If the user gave `--root`, use it.
-   `.omx/` lives at this anchor, independent of `output_root` (which is stored *inside*
+   The OMX store (`.hq/` when the project carries a parseable anchor, else legacy `.omx/`) lives at this anchor, independent of `output_root` (which is stored *inside*
    metrics.yaml and may point elsewhere).
 
 3. **Tree schema (R2).** `omx init` writes the generic default `tree.yaml` when
@@ -162,7 +162,7 @@ After a successful `omx init`, present the four files for review and STOP. Do no
 any analysis, design, eval, or training:
 
 ```
-Profile bootstrapped (pending approval) at <anchor>/.omx/profile/:
+Profile bootstrapped (pending approval) at <anchor>/.hq/config/experiments/profile/ (legacy <anchor>/.omx/profile/):
   - evaluator.sh   — seeded from the <profile-name> reference (edit the STUB block for your eval)
   - metrics.yaml   — <one-line summary: output_root, N metrics, keep_policy>
   - rules.md       — your analysis discipline (fill in Always/Never)
@@ -203,7 +203,7 @@ per-turn backlog hook ever read.
 
 Then project the profile into the wiki (repeatable, unlike the one-shot seed):
 `omx wiki sync-profile --root "<anchor>"` — regenerates the reserved `profile.md`
-page from `.omx/profile/*` so wiki readers always see the CURRENT profile.
+page from `.hq/config/experiments/profile/*` (legacy `.omx/profile/*`) so wiki readers always see the CURRENT profile.
 
 ## Re-running exp-init
 

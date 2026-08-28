@@ -162,6 +162,31 @@ def test_marker_probe_no_subprocess(monkeypatch, tmp_path):
     assert mod.is_exp_related("irrelevant prompt here", str(tmp_path)) is True
 
 
+def test_marker_probe_detects_hq_only_project_no_omx(monkeypatch, tmp_path):
+    """.hq/ cutover: a project anchored from scratch (or any project post
+    `--purge`) has .hq/ and NO .omx/ at all -- the marker probe must still
+    fire, not silently stop gating. No subprocess either (same requirement
+    as the .omx/ case)."""
+    (tmp_path / ".hq" / "config" / "experiments").mkdir(parents=True)
+    mod = _load_handlers()
+
+    def boom(*a, **k):
+        raise AssertionError("marker probe must not shell out")
+    monkeypatch.setattr(subprocess, "run", boom)
+    assert mod.is_exp_related("irrelevant prompt here", str(tmp_path)) is True
+
+
+def test_marker_probe_bare_hq_root_alone_is_not_a_marker(tmp_path):
+    """.hq/ is a shared root -- omp/oms/omd seed it too. A bare .hq/ with
+    none of the omx-specific experiments/ layer subfolders must NOT read as
+    an omx project (that would be one harness's install read as another
+    harness's consent -- the exact failure this campaign has been avoiding)."""
+    (tmp_path / ".hq").mkdir()
+    (tmp_path / ".hq" / "config" / "project").mkdir(parents=True)  # omp's, not omx's
+    mod = _load_handlers()
+    assert mod._has_omx_marker(str(tmp_path)) is False
+
+
 def test_gate_stdlib_only():
     """게이트 추가 후에도 stdlib only 유지 (회귀) -- handlers.py 는 subprocess 를
     이미 _fetch_open_backlog 에서 쓰지만(기존), 그 외 신규 코드는 stdlib 만."""

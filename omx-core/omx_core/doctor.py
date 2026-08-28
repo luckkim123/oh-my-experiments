@@ -31,6 +31,7 @@ def _python_floor_ok(requires_python: str | None) -> bool | None:
 
 
 def run_doctor(root=None, plugin_root=None) -> dict:
+    from omx_core.omx_paths import OmxPaths
     from omx_core.root import resolve_omx_root
     try:
         omx_version = importlib.metadata.version("omx-core")
@@ -49,8 +50,9 @@ def run_doctor(root=None, plugin_root=None) -> dict:
     else:
         python_check = "SKIP: requires-python floor unknown (package metadata unavailable)"
     resolved, stage = resolve_omx_root(explicit=root)
-    profile_present = (Path(resolved) / ".omx" / "profile" / "metrics.yaml").exists()
-    tree_yaml_present = (Path(resolved) / ".omx" / "profile" / "tree.yaml").exists()
+    paths = OmxPaths(root=resolved)
+    profile_present = paths.profile_file("metrics.yaml").exists()
+    tree_yaml_present = paths.tree_yaml().exists()
     hooks_installed = None
     if plugin_root is not None:
         hooks_installed = (Path(plugin_root) / "hooks" / "run_hook.py").exists()

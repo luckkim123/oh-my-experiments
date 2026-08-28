@@ -68,7 +68,8 @@ _ROUTE_CHECKPOINT = (
     "recipe(진단 절차 승격·소비).\n"
     "단일 단계면 그 스킬/verb 직접, 반복 사이클이면 exp-loop.\n"
     "⚠️ 실험 계획은 `.sp/plans/` 금지 — 단발 probe=exp-design proposal, 다단계 라인="
-    "`.omx/programs/<id>/PLAN.md`(`omx program-init`, 캠페인 없이 열림).\n"
+    "`.hq/community/programs/<id>/PLAN.md`(구 `.omx/programs/…`)"
+    "(`omx program-init`, 캠페인 없이 열림).\n"
     "⚠️ 훈련 launch는 절대 자동 실행 금지 — `omx queue-launch`로 큐만 (사람 승인 게이트).\n"
     "⚠️ report.md는 hand-parse 금지 — `omx report-parse` 경유.\n"
     "⚠️ 결과 SSOT는 experiments 트리 — 결과를 다른 곳에 쓰지 말 것.\n"
@@ -256,11 +257,39 @@ _ASCII_TOKENS_EXP = (
 _EXP_ASCII_RE = re.compile(r"\b(?:" + "|".join(re.escape(t) for t in _ASCII_TOKENS_EXP) + r")\b")
 
 
+#: The three omx-specific .hq/ layer subfolders (config/work/runtime each get
+#: an "experiments" harness subfolder; community/ does not -- its wiki/,
+#: programs/, recipes/ are shared names other harnesses could also seed, so
+#: they are NOT unambiguous omx markers). Checking these, not a bare .hq/,
+#: matters: .hq/ is a shared root omp/oms/omd seed too, so a bare .hq/ check
+#: would read every anchored project as an omx project regardless of which
+#: harness actually anchored it.
+_OMX_LAYER_DIRS = (("config", "experiments"), ("work", "experiments"),
+                   ("runtime", "experiments"))
+
+
 def _has_omx_marker(cwd) -> bool:
-    """Checkpoint-gate marker probe: cheap pathlib .omx/ check ONLY -- no
+    """Checkpoint-gate marker probe: cheap pathlib check ONLY -- no
     subprocess, unlike _fetch_open_backlog's resolve_omx_root ladder (which
-    shells out to git). Avoids paying that cost on every prompt."""
-    return isinstance(cwd, str) and bool(cwd) and (Path(cwd) / ".omx").is_dir()
+    shells out to git). Avoids paying that cost on every prompt.
+
+    Deliberately bare literals, not omx_paths.LEGACY_ROOT/HQ_ROOT: this probe
+    must stay zero-dependency (test_handlers_import_without_omx_core poisons
+    omx_core entirely and still requires this to work) and hot-path-cheap
+    (no import). Exempted by name in the re-entry lint (in test_omx_paths.py).
+
+    Checks BOTH stores: .hq/ alone (an anchored-from-scratch project, or any
+    project post `--purge`) has no .omx/ at all, and a marker that only ever
+    checked .omx/ would silently stop firing the checkpoint gate there —
+    a live hole, not a style question, caught after this file was first
+    excluded from the re-entry lint (the exclusion itself stands; it hid
+    this line from a human's eye, which is the thing worth noting)."""
+    if not (isinstance(cwd, str) and cwd):
+        return False
+    base = Path(cwd)
+    if (base / ".omx").is_dir():
+        return True
+    return any((base / ".hq" / a / b).is_dir() for a, b in _OMX_LAYER_DIRS)
 
 
 def is_exp_related(prompt, cwd) -> bool:
@@ -335,7 +364,8 @@ def route_emit(payload):
 
 # --- shared root resolution for omx_core-backed handlers ---------------------
 def _omx_root(payload) -> str:
-    """Resolve the .omx anchor from the hook payload's cwd via the #13 ladder.
+    """Resolve the omx project root (the directory holding either store,
+    `.omx/` or `.hq/`) from the hook payload's cwd via the #13 ladder.
     Raises ValueError ONLY when the payload cwd is missing/empty — resolve_omx_root
     itself never raises (root.py:36 always falls back at least to cwd), so an
     unanchored cwd (stage == "cwd") is NOT an error here; it is returned like any

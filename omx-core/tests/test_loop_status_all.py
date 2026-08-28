@@ -54,6 +54,23 @@ def test_all_corrupt_marker_degrades_to_unknown(tmp_path, capsys):
     assert "run1" in cap.err  # stderr warn names the run
 
 
+# --- .hq/ cutover (team-lead Rule A): loop-status --all reads BOTH stores --
+
+def test_all_unions_legacy_and_new_only_runs(tmp_path, capsys):
+    """A legacy-only run and a new-store-only run (anchored project, one
+    migrated, one not) must BOTH appear in --all — a single-root scan would
+    silently drop whichever half it didn't look at."""
+    from omx_core import cli
+    anchor = tmp_path / ".hq" / ".anchor"
+    anchor.parent.mkdir(parents=True, exist_ok=True)
+    anchor.write_text("id: test-anchor\n", encoding="utf-8")
+    (tmp_path / ".omx" / "runs" / "legacy_run").mkdir(parents=True)
+    (tmp_path / ".hq" / "work" / "experiments" / "runs" / "new_run").mkdir(parents=True)
+    cli.main(["loop-status", "--all", "--root", str(tmp_path)])
+    out = json.loads(capsys.readouterr().out)
+    assert {r["run_id"] for r in out["runs"]} == {"legacy_run", "new_run"}
+
+
 def test_all_mutually_exclusive_with_run_id(tmp_path, capsys):
     from omx_core import cli
     rc = cli.main(["loop-status", "--all", "--run-id", "run1", "--root", str(tmp_path)])

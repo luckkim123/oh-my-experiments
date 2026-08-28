@@ -28,7 +28,7 @@ by the user directly" with no override path.
 
 0. Step-0 preflight: `omx doctor --root <root>` — a stale/missing install fails
    actionably here instead of surfacing as a confusing error mid-loop.
-1. A profile exists at `.omx/profile/` (run `exp-init` first if not). You need
+1. A profile exists at `.hq/config/experiments/profile/` (legacy `.omx/profile/`; run `exp-init` first if not). You need
    `metrics.yaml` (for `output_root` + the metric vocabulary) and `evaluator.sh`
    (the eval command) — both written by exp-init.
 2. A `run_id` is given (the experiment to iterate on). If absent, ask for it and STOP.
@@ -98,9 +98,10 @@ current checkpoint, run it through the core (this is the single source of the
 pass/score verdict — never eyeball a metric):
 
 ```bash
-omx eval --root <root> --command 'bash .omx/profile/evaluator.sh' --cwd <project_dir> \
+omx eval --root <root> --command 'bash .hq/config/experiments/profile/evaluator.sh' --cwd <project_dir> \
     --keep-policy <pass_only|score_improvement> --last-kept-score <prev_or_omit>
 ```
+(legacy stores instead resolve `bash .omx/profile/evaluator.sh`.)
 
 `--root` enables the seal preflight (#0): a sealed evaluator that was modified mid-loop
 rc-2s instead of silently regrading; re-approve intentional changes with
@@ -141,8 +142,8 @@ revert — but keep it human-gated. Show the user the dry-run plan first:
 
     omx revert-config --cwd <project_dir> --run-id <run_id> --to baseline --root <root>
 
-This prints `would_revert` (the exact files a revert would touch; `.omx/` run
-artifacts are always protected). Only on the user's explicit approval, apply it:
+This prints `would_revert` (the exact files a revert would touch; OMX-owned run
+artifacts — under `.hq/`, or legacy `.omx/` — are always protected). Only on the user's explicit approval, apply it:
 
     omx revert-config --cwd <project_dir> --run-id <run_id> --to baseline \
         --i-approve-revert --root <root>
@@ -253,7 +254,7 @@ recorded in the completion marker and the campaign forensics.
   `omx queue-launch`. No `bash launch.sh`, no training subprocess, ever (D4/B8).
 - NEVER auto-run a `git revert`/`git reset`/`rm` on weights or config. Surface
   the exact command; the human runs it (minimum-change revert rule).
-- NEVER hand-write a `.omx/` path. Queue/status/eval all go through the `omx`
+- NEVER hand-write an OMX state path (`.hq/` or legacy `.omx/`). Queue/status/eval all go through the `omx`
   CLI verbs, which resolve paths via the core (path-SSOT).
 - NEVER invent a verdict. The pass/score decision comes ONLY from `omx eval`'s
   JSON (the evaluator contract), and the keep/discard from its `decision` block.

@@ -66,6 +66,40 @@ def test_list_campaigns(tmp_path, capsys):
     assert [c["campaign_id"] for c in out["campaigns"]] == ["camp_a", "camp_b"]
 
 
+# --- .hq/ cutover (team-lead Rule A): list_campaigns() reads BOTH stores ----
+
+def test_list_campaigns_unions_legacy_and_new_new_wins_collision(tmp_path):
+    """A legacy-only campaign, a new-store-only campaign, and a campaign that
+    exists in both (content differs) — the union must show all three names,
+    and the colliding one must report the NEW store's content."""
+    import json as _json
+
+    from omx_core.omx_paths import OmxPaths
+    paths = OmxPaths(root=tmp_path)
+
+    legacy_only = tmp_path / ".omx" / "campaigns" / "legacy_only"
+    legacy_only.mkdir(parents=True)
+    (legacy_only / "plan.json").write_text(_json.dumps({"created": "legacy-ts"}))
+
+    new_only = tmp_path / ".hq" / "work" / "experiments" / "campaigns" / "new_only"
+    new_only.mkdir(parents=True)
+    (new_only / "plan.json").write_text(_json.dumps({"created": "new-ts"}))
+
+    both_legacy = tmp_path / ".omx" / "campaigns" / "both"
+    both_legacy.mkdir(parents=True)
+    (both_legacy / "plan.json").write_text(_json.dumps({"created": "legacy-content"}))
+    both_new = tmp_path / ".hq" / "work" / "experiments" / "campaigns" / "both"
+    both_new.mkdir(parents=True)
+    (both_new / "plan.json").write_text(_json.dumps({"created": "new-content"}))
+
+    from omx_core.campaign import list_campaigns
+    out = {c["campaign_id"]: c for c in list_campaigns(paths)}
+    assert set(out) == {"legacy_only", "new_only", "both"}
+    assert out["legacy_only"]["created"] == "legacy-ts"
+    assert out["new_only"]["created"] == "new-ts"
+    assert out["both"]["created"] == "new-content"  # new wins the collision
+
+
 def test_campaign_status_vanished_plan_loud_fails(tmp_path):
     # T11 (R2 final-review triage): a vanished plan.json must be OmxError
     # (rc2 via the CLI), never a raw FileNotFoundError traceback.

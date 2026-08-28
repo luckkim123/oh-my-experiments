@@ -4,6 +4,78 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.13.0] - 2026-08-28 — the store moves, and the listing has to move with it
+
+omx is the last harness onto the unified `.hq/` store (om\* store unification,
+P7). Writes go to `.hq/` when the project carries a parseable `.hq/.anchor`;
+reads try `.hq/` first and fall back to `.omx/`. Both stay live until a separate
+fallback-removal release.
+
+The interesting half was not the getters. It was everything that never went
+through a getter.
+
+### Added
+- `omx_paths.py` — `HQ_ROOT`/`LEGACY_ROOT`, the four layer roots, `.hq/.anchor`
+  parsing (`parse_anchor_id`/`AnchorError`/`has_anchor`), the four-state
+  `gate_state()` (off · legacy · normal · corrupt), and the `_read`/`_write`
+  resolution pair. Structure mirrors `oh-my-project`'s `omp_paths.py`.
+- `iter_store_entries(new, legacy)` plus `campaigns_root()`/`programs_root()`/
+  `runs_root()`/`trash_root()` — the enumeration equivalent of the
+  single-entity getters.
+- A re-entry lint: no bare `.hq`/`.omx` literal outside `omx_paths.py`, with two
+  documented exemptions (`hooks/handlers.py`'s zero-dependency marker probe and
+  `omx_core/root.py`'s unrelated `.omx-workspace` marker).
+
+### Changed
+- Every artifact getter resolves through `_write()`, not `_read()`. OMX names
+  are almost all freshly-created entities (a new run_id, campaign_id, slug), and
+  the two agree in every case where the artifact already exists; they diverge
+  only on first creation, where `_read` would strand a new entity at the legacy
+  path forever.
+- **Listing reads both stores, unioned by name, new wins a collision.** Store-spec
+  §7 stage 1 is "write new, read both" — and `list_campaigns`, `list_programs`,
+  `record_launched`, probe-novelty's ledger scan and `loop-status --all` all
+  enumerated one directory. Shipping without this meant `omx campaign-list`
+  silently omitting anything created after the cutover.
+  `list_programs` needed one more step: a program whose only file is
+  `program.json` lives in the config layer with no community/ entry, so the
+  union is over both layers, settled by `program_json(id).is_file()`.
+- `clean.py` sweeps the **resolved** tree only, never the union. §7 freezes the
+  legacy store until `purge`, so a sweep that reached into it would break the
+  fallback contract.
+- `omx init` reports the directory files actually landed in, not the legacy
+  literal.
+
+### Fixed
+- **`hooks/handlers.py`'s checkpoint-gate marker probe only checked `.omx/`.**
+  A project anchored from scratch — or any project after `--purge` — has `.hq/`
+  and no `.omx/`, and the gate silently stopped firing there. It now checks the
+  omx-specific `experiments/` layer subfolders as well, deliberately **not** a
+  bare `.hq/`: that root is shared with omp, oms and omd, and reading it as an
+  omx marker would make one harness's install look like another's consent. Still
+  zero-dependency, still no subprocess. Worth recording how this was found — the
+  file had been excluded by name from the re-entry lint so the lint would pass,
+  and that exclusion is what kept a human's eye off the stale line.
+- **`omx doctor` reported `profile_present: false` on any migrated project.** Its
+  check was hardcoded to `.omx/profile/...`; it now routes through the getters.
+- **`clean.py`'s trash sat at `.omx/.trash` unconditionally.** Left there, the
+  first `omx clean` after a `--purge` recreates `.omx/` and undoes the purge.
+  Now `trash_root()`, `runtime/experiments/trash/` when anchored.
+- **`classify()` excluded trash from its orphaned-`.tmp*` sweep by matching the
+  string `".trash"` in the path parts.** The new directory has no leading dot,
+  so that check would have stopped matching and re-swept trash's own contents
+  every run. Now a path containment test, which is layout-independent.
+
+### Verification
+`pytest omx-core/tests` — **1156 passed, 2 skipped, 5 failed**, exit 1. The five
+are pre-existing `route_emit` hook-runner failures, reproduced identically
+against unmodified `HEAD` in a separate worktree before this entry was written.
+Untouched and not weakened.
+
+Four-state gate exercised live (off · legacy · normal · corrupt, 4/4). On the
+first migrated anchor, every getter resolves to exactly the destination the
+migration tool's independent mapping table wrote the files to.
+
 ## [0.12.0] - 2026-08-24 — a render sized for one reader cannot serve the other
 
 `omx plot` had exactly one audience and never said so out loud. `reduce/plot.py`

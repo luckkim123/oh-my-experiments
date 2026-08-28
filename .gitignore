@@ -22,3 +22,10 @@ venv/
 *.swp
 .idea/
 .vscode/
+
+# .hq unified store: work/ is regenerable output, runtime/ is session state,
+# locks, logs, and anything sensitive. community/ and config/ stay tracked
+# (store-spec §3, §5). The `**/` prefix is required because anchors nest.
+# `.omx/` above stays until the fallback-removal release (store-spec §7).
+**/.hq/work/
+**/.hq/runtime/

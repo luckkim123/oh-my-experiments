@@ -29,7 +29,7 @@ answer is yes and this skill is how — verify by reading this file, not by scan
 
 0. Step-0 preflight: `omx doctor --root <root>` — a stale/missing install fails
    actionably here instead of surfacing as a confusing error mid-analysis.
-1. A profile exists and is approved. Read `<root>/.omx/profile/metrics.yaml`. If it
+1. A profile exists and is approved. Read `<root>/.hq/config/experiments/profile/metrics.yaml` (legacy `<root>/.omx/profile/metrics.yaml`). If it
    is missing → tell the user to run exp-init first; STOP. If `pending_approval: true`
    is still set → tell the user to approve it first; STOP. (Honors the exp-init hard gate.)
 2. The runs to analyze exist on disk. The user names run ids or result paths
@@ -38,15 +38,15 @@ answer is yes and this skill is how — verify by reading this file, not by scan
 
 ## Run the profile's diagnostic engine — MUST, not MAY (the engine-skip anti-pattern)
 
-If the profile points at a training-log diagnostic engine — a `.omx/profile/*.py`
-script recorded as a reference adapter (find it: `ls .omx/profile/*.py` and the wiki
+If the profile points at a training-log diagnostic engine — a `.hq/config/experiments/profile/*.py`
+script (legacy `.omx/profile/*.py`) recorded as a reference adapter (find it: `ls .hq/config/experiments/profile/*.py .omx/profile/*.py 2>/dev/null` and the wiki
 page tagged `engine`/`adapter`, e.g. `training_log_analysis_engine_reference_adapter`)
 — you **MUST run it on each training run** and ground the report in its output
 (its `[DIAGNOSIS]` / `[TREND]` / changepoint / plateau / regime lines), not just in
 final scalars you read off the curve. Run it, e.g.:
 
-`<project-env-vars> python3 .omx/profile/analyze_training.py <run-path> --tier 3 --deep`
-(the exact env vars are project-specific; they are documented in that project's `.omx/profile/`)
+`<project-env-vars> python3 .hq/config/experiments/profile/analyze_training.py <run-path> --tier 3 --deep` (legacy path: `.omx/profile/analyze_training.py`)
+(the exact env vars are project-specific; they are documented in that project's `.hq/config/experiments/profile/`, or legacy `.omx/profile/`)
 
 Hand-extracting FINAL SCALARS from raw TB/wandb **instead of** running the engine is
 the exact anti-pattern this skill forbids (it is what produced a count-looks-fine but
@@ -128,7 +128,7 @@ result is normal for a fresh workspace.
 
 ### Recipes (promoted procedures) — check before diagnosing
 
-List `.omx/recipes/` (plain `ls`; no verb needed). If a recipe's symptom
+List `.hq/community/recipes/` (legacy `.omx/recipes/`) (plain `ls`; no verb needed). If a recipe's symptom
 matches the anomaly under analysis, follow it as a CHECKLIST — run its checks
 in order and cite the recipe in the report. Recipes exist because a past
 session paid for this diagnosis already; skipping a matching recipe re-buys it.
@@ -200,7 +200,7 @@ exactly this — treat it as the report's required table of contents.
 
 Before drafting `report.md`:
 
-1. **Load the profile's `groups`** (`<root>/.omx/profile/metrics.yaml`, the `groups:`
+1. **Load the profile's `groups`** (`<root>/.hq/config/experiments/profile/metrics.yaml` — legacy `<root>/.omx/profile/metrics.yaml` — the `groups:`
    mapping — e.g. tracking / reward_decomp / trpo / critic / encoder / constraint /
    doraemon). These ARE the diagnostic families the report must cover.
 2. **Create one TodoWrite item PER GROUP** before writing prose. Each becomes a
@@ -409,9 +409,9 @@ but it BINDS hardest on re-analysis, where a prior report exists to measure agai
 ## Hard constraints (never violate)
 
 - NEVER launch training or eval (no `launch.sh`, no live eval_dr). Analysis reads existing results only.
-- NEVER write a path by hand; every `.omx/`/output path comes from an `omx` verb or `omx_paths` getter, and every permanent-tree write goes through `atomic_path`/`atomic_dir`.
+- NEVER write a path by hand; every OMX-state or output path (`.hq/`/`.omx/`) comes from an `omx` verb or `omx_paths` getter, and every permanent-tree write goes through `atomic_path`/`atomic_dir`.
 - NEVER claim a number you did not get from code-exec. PNG vision is for SHAPE, not digits.
-- Candidate plots that the report doesn't reference are LEFT in scratch — do not delete them yourself. `omx clean --scope session` (dry-run) lists them; `--apply` moves them to `.omx/.trash/` only after the user approves.
+- Candidate plots that the report doesn't reference are LEFT in scratch — do not delete them yourself. `omx clean --scope session` (dry-run) lists them; `--apply` moves them to `.hq/runtime/experiments/trash/` (legacy `.omx/.trash/`) only after the user approves.
 - Respond to the user in the user's language (the machine's locale language); keep report.md/code/markdown in English.
 - **D2 — report.md contains ONLY this run's analysis results.** Harness/engine-gap
   metadata, CLI-misuse notes, and metrics.yaml coverage checks do NOT belong in
@@ -535,7 +535,7 @@ deliverable.
 The wiki captures more than findings ABOUT runs; it also captures how this workspace's
 analysis ENGINE should grow. The "engine" is ALL the ANALYSIS code this workspace owns —
 code that READS results without changing them. Two homes:
-- the reference adapter the profile points at (`.omx/profile/` — e.g. a TB/wandb diagnostic
+- the reference adapter the profile points at (`.hq/config/experiments/profile/` — legacy `.omx/profile/` — e.g. a TB/wandb diagnostic
   script), and
 - the workspace's own pure post-processing source (e.g. a `analysis/` package that reads
   saved `*.npz`/`summary.json` and computes heavy-tail / divergence / comparison stats).
@@ -554,7 +554,7 @@ so the next session can act on it instead of re-discovering the same gap.
 An engine-gap spec is a CODE-CHANGE specification, not a finding. Write it concretely:
 - `[ENGINE-GAP]` what the engine cannot currently do (one line).
 - `[WHERE]` the analysis file + section to change — either the profile adapter (e.g.
-  `.omx/profile/analyze_training.py` DIAGNOSIS block) or the workspace's own post-processing
+  `.hq/config/experiments/profile/analyze_training.py` (legacy `.omx/profile/analyze_training.py`) DIAGNOSIS block) or the workspace's own post-processing
   source (e.g. `analysis/<module>.py` <function>), and which of the two it is — as best you
   can point. If the capability is genuinely new (no file does it yet), say "new module" and
   name where it should live.

@@ -9,6 +9,37 @@ Two-tier validation (design doc B1):
   - vocabulary tier: optional Profile injected per-getter (Task 3+); when
     present, metric/view/agg/source must be in the profile vocab and run_id
     must match the profile regex (if set).
+
+--- .hq/ cutover (om* store unification P6) --------------------------------
+This module also resolves the unified `.hq` store alongside the legacy
+`.omx` one, mirroring oh-my-project's hooks/omp_paths.py (reference:
+~/oh-my-orchestrator/skills/harness/references/store-spec.md §3 the four
+layers, §6 the four-state gate, §7 fallback). Two rules, not interchangeable:
+
+**1. The anchor is the switch, not the release.** A write goes to `.hq/`
+when — and only when — the project root carries a parseable `.hq/.anchor`.
+Without one it goes to `.omx/`, exactly where it went before.
+
+**2. Every OMX artifact getter here resolves via `_write()`, never `_read()`
+alone.** Unlike omp (mostly static per-project config, read far more than
+written), almost everything OMX names is a freshly-created entity — a new
+run_id, campaign_id, program_id, scratch session_id, wiki slug — and `_write`
+degrades to exactly `_read`'s answer whenever the artifact already exists
+under either store (its branches 2/3 are pure existence checks, same as
+`_read`). The two diverge only when NEITHER path holds the artifact yet —
+i.e. the entity is being created for the first time — where `_write`
+correctly lands a fresh, anchored write at the new location and `_read`
+would incorrectly strand it at legacy forever. `_read` is still implemented
+below (the reference structure calls for the pair), but no current OMX
+getter calls it.
+
+Two lock files (`.wiki-lock`, `.state-lock`) are recreated on demand, so
+there's no migration concern for either — each is still resolved via its own
+`_write()` call rather than derived from a sibling getter, because the
+legacy/new relationship between a lock and its logical directory is not
+consistent: `.wiki-lock` sits BESIDE `registry/findings/` in the legacy
+layout but INSIDE `community/wiki/` in the new one, so deriving it from
+wiki_dir() would silently change the legacy path too.
 """
 from __future__ import annotations
 
@@ -18,6 +49,167 @@ from pathlib import Path
 from typing import Optional
 
 from omx_core.atomic import atomic_dir, atomic_path  # noqa: F401 — re-export, back-compat
+
+HQ_ROOT = ".hq"
+LEGACY_ROOT = ".omx"
+
+# --- layer roots (store-spec section 3); "experiments" is OMX's harness
+# subfolder under config/runtime/work — community/ carries no such subfolder
+# per the mapping table (community/wiki, community/recipes, community/programs). ---
+
+ANCHOR_REL = f"{HQ_ROOT}/.anchor"
+_CONFIG_REL = f"{HQ_ROOT}/config/experiments"
+_COMMUNITY_REL = f"{HQ_ROOT}/community"
+_RUNTIME_REL = f"{HQ_ROOT}/runtime/experiments"
+_WORK_REL = f"{HQ_ROOT}/work/experiments"
+
+_ANCHOR_ID_RE = re.compile(r"^id:\s*(\S.*)$")
+
+
+def legacy_root(base) -> Path:
+    """The legacy store directory itself, given the project root `base`."""
+    return Path(base) / LEGACY_ROOT
+
+
+def anchor_file(base) -> Path:
+    return Path(base) / ANCHOR_REL
+
+
+def config_dir(base) -> Path:
+    return Path(base) / _CONFIG_REL
+
+
+def community_dir(base) -> Path:
+    return Path(base) / _COMMUNITY_REL
+
+
+def runtime_dir(base) -> Path:
+    return Path(base) / _RUNTIME_REL
+
+
+def work_dir(base) -> Path:
+    return Path(base) / _WORK_REL
+
+
+# --- anchor parse and the four-state gate (store-spec sections 2 and 6) -----
+
+class AnchorError(Exception):
+    """The anchor file exists but does not parse — a corrupt store, never an
+    absent one."""
+
+
+def parse_anchor_id(path) -> str:
+    """Exactly one non-empty line `id: <value>` after stripping one trailing
+    newline. Anything else raises. A 10-line reimplementation of omo's
+    `hq.anchor.parse_anchor` rather than a cross-plugin import, mirroring
+    omp_paths.py's own choice: omx cannot assume oh-my-orchestrator is
+    installed."""
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+    except OSError as e:
+        raise AnchorError(f"{path}: cannot read anchor file: {e}") from e
+    text = raw[:-1] if raw.endswith("\n") else raw
+    non_empty = [ln for ln in text.split("\n") if ln.strip() != ""]
+    if len(non_empty) != 1:
+        raise AnchorError(
+            f"{path}: expected exactly one non-empty line, found {len(non_empty)}")
+    m = _ANCHOR_ID_RE.match(non_empty[0])
+    if not m:
+        raise AnchorError(
+            f"{path}: line does not match 'id: <value>': {non_empty[0]!r}")
+    value = m.group(1).strip()
+    if not value:
+        raise AnchorError(f"{path}: empty id value")
+    return value
+
+
+def has_anchor(base) -> bool:
+    """True when `base` carries a *parseable* anchor. An unparseable one is
+    False here and `corrupt` in `gate_state` — the write switch must not flip
+    on a broken file."""
+    f = anchor_file(base)
+    if not f.is_file():
+        return False
+    try:
+        parse_anchor_id(f)
+        return True
+    except AnchorError:
+        return False
+
+
+def has_legacy_store(base) -> bool:
+    return legacy_root(base).is_dir()
+
+
+def has_store(base) -> bool:
+    """True when `base` is an omx project under either store."""
+    return anchor_file(base).is_file() or has_legacy_store(base)
+
+
+GATE_OFF = "off"
+GATE_LEGACY = "legacy"
+GATE_NORMAL = "normal"
+GATE_CORRUPT = "corrupt"
+
+
+def gate_state(base) -> str:
+    """store-spec section 6, the pair (legacy store, anchor) — never a single
+    marker.
+
+    off      no legacy store, no anchor   — not an omx project; hooks exit 0
+    legacy   legacy store, no anchor      — warn, read via fallback
+    normal   anchor present and parseable
+    corrupt  anchor present, unparseable  — loud, never silent
+    """
+    f = anchor_file(base)
+    if f.is_file():
+        try:
+            parse_anchor_id(f)
+            return GATE_NORMAL
+        except AnchorError:
+            return GATE_CORRUPT
+    return GATE_LEGACY if has_legacy_store(base) else GATE_OFF
+
+
+# --- resolution: read new-then-legacy, write anchor-gated -------------------
+
+def _read(new: Path, legacy: Path) -> Path:
+    """Existence of the specific new path is the whole test."""
+    return new if new.exists() else legacy
+
+
+def _write(base, new: Path, legacy: Path) -> Path:
+    """The anchor, not the release, decides — and an anchored root whose
+    files have not been copied yet keeps writing where the content still is.
+
+    Only when NEITHER path holds this artifact — an anchored root creating a
+    brand new entity — does the new path win by default."""
+    if not has_anchor(base):
+        return legacy
+    if new.exists():
+        return new
+    return legacy if legacy.exists() else new
+
+
+def iter_store_entries(new: Path, legacy: Path) -> dict:
+    """Enumerate immediate children of BOTH `new` and `legacy`, unioned by
+    entry name — store-spec §7 stage 1 ('write new, read both'). Listing is a
+    read, and unlike a single-entity getter's `_write()` there is no single
+    correct path to test: a project mid-fallback can have some entities
+    already migrated (new) and some not yet (legacy), so enumeration must
+    look at both roots or it silently omits whichever half it skipped.
+
+    The new entry wins a name collision — same precedence as `_write`'s
+    branch 2 (an existing new-store entry is authoritative). Neither root
+    need exist; a missing one just contributes nothing (not an error)."""
+    out = {}
+    if legacy.is_dir():
+        for child in legacy.iterdir():
+            out[child.name] = child
+    if new.is_dir():
+        for child in new.iterdir():
+            out[child.name] = child  # overwrites legacy on a name collision
+    return out
 
 
 class OmxError(Exception):
@@ -170,13 +362,14 @@ class OmxPaths:
         if root is None or str(root) == "":
             raise OmxPathError("OmxPaths root is required (the .omx anchor)")
         self.root = Path(root)
-        self.omx_dir = self.root / ".omx"
+        self.omx_dir = self.root / LEGACY_ROOT
         self.profile = profile
 
     # --- profile/ (permanent user tuning) ---
     @property
     def profile_dir(self) -> Path:
-        return self.omx_dir / "profile"
+        return _write(self.root, config_dir(self.root) / "profile",
+                      self.omx_dir / "profile")
 
     def profile_file(self, name: str) -> Path:
         if name not in _PROFILE_FILES:
@@ -197,7 +390,9 @@ class OmxPaths:
 
     # --- runs/<run_id>/ (run-bound) ---
     def run_dir(self, run_id) -> Path:
-        return self.omx_dir / "runs" / self._check_run_id(run_id)
+        rid = self._check_run_id(run_id)
+        return _write(self.root, work_dir(self.root) / "runs" / rid,
+                      self.omx_dir / "runs" / rid)
 
     def results_tsv(self, run_id) -> Path:
         return self.run_dir(run_id) / "results.tsv"
@@ -215,7 +410,9 @@ class OmxPaths:
 
     # --- scratch/<session_id>/ (session-bound; session_id MANDATORY, B2) ---
     def scratch_dir(self, *, session_id) -> Path:
-        return self.omx_dir / "scratch" / validate_session_id(session_id)
+        sid = validate_session_id(session_id)
+        return _write(self.root, runtime_dir(self.root) / "scratch" / sid,
+                      self.omx_dir / "scratch" / sid)
 
     def scratch_plots(self, *, session_id) -> Path:
         return self.scratch_dir(session_id=session_id) / "plots"
@@ -228,42 +425,62 @@ class OmxPaths:
 
     # --- registry/ wiki (permanent, keyword-indexed knowledge layer; build #8) ---
     def wiki_dir(self) -> Path:
-        """registry/findings/ — the dir holding all wiki page .md files."""
-        return self.omx_dir / "registry" / "findings"
+        """registry/findings/ (legacy) -> community/wiki/ (new) — the dir
+        holding all wiki page .md files."""
+        return _write(self.root, community_dir(self.root) / "wiki",
+                      self.omx_dir / "registry" / "findings")
 
     def wiki_page(self, slug) -> Path:
-        """registry/findings/<slug>.md — one wiki page. slug is a single token
+        """<wiki_dir>/<slug>.md — one wiki page. slug is a single token
         (validate_token blocks '..'/separators), so traversal is impossible."""
         return self.wiki_dir() / f"{self._check_token(slug, 'slug')}.md"
 
     def wiki_index(self) -> Path:
-        """registry/index.md — auto-regenerated catalog (one line per page)."""
-        return self.omx_dir / "registry" / "index.md"
+        """registry/index.md (legacy) -> community/wiki/index.md (new) —
+        auto-regenerated catalog (one line per page)."""
+        return _write(self.root, community_dir(self.root) / "wiki" / "index.md",
+                      self.omx_dir / "registry" / "index.md")
 
     def wiki_log(self) -> Path:
-        """registry/log.md — append-only chronicle of wiki operations."""
-        return self.omx_dir / "registry" / "log.md"
+        """registry/log.md (legacy) -> runtime/experiments/registry/log.md
+        (new) — append-only chronicle of wiki operations."""
+        return _write(self.root, runtime_dir(self.root) / "registry" / "log.md",
+                      self.omx_dir / "registry" / "log.md")
 
     def wiki_lock(self) -> Path:
-        """registry/.wiki-lock — file mutex for all wiki writes (fcntl)."""
-        return self.omx_dir / "registry" / ".wiki-lock"
+        """registry/.wiki-lock (legacy, a SIBLING of registry/findings/, not
+        nested inside it) -> community/wiki/.wiki-lock (new, nested inside
+        wiki_dir()'s new resolution). The legacy/new relationship to wiki_dir()
+        differs, so this is resolved independently rather than derived from
+        wiki_dir() — deriving it would nest it under legacy findings/, which
+        it never was. File mutex for all wiki writes (fcntl)."""
+        return _write(self.root, community_dir(self.root) / "wiki" / ".wiki-lock",
+                      self.omx_dir / "registry" / ".wiki-lock")
 
     def recipes_dir(self) -> Path:
-        """Promoted diagnostic recipes (#15) — structured symptom->checks
-        checklists exp-analyze/exp-design read before diagnosis. NOT a gated
-        deliverable (report_guard does not cover it); the promoting session may
-        restructure a recipe after the verb creates it."""
-        return self.omx_dir / "recipes"
+        """recipes/ (legacy) -> community/recipes/ (new). Promoted diagnostic
+        recipes (#15) — structured symptom->checks checklists exp-analyze/
+        exp-design read before diagnosis. NOT a gated deliverable (report_guard
+        does not cover it); the promoting session may restructure a recipe
+        after the verb creates it."""
+        return _write(self.root, community_dir(self.root) / "recipes",
+                      self.omx_dir / "recipes")
 
     # --- state.json (single global file) ---
     def state_json(self) -> Path:
-        return self.omx_dir / "state.json"
+        """state.json (legacy) -> runtime/experiments/state.json (new)."""
+        return _write(self.root, runtime_dir(self.root) / "state.json",
+                      self.omx_dir / "state.json")
 
     def produced_reports_ledger(self) -> Path:
-        """Root-level append-only ledger of gate-stamped reports awaiting
-        session-end wiki capture (spec 2.2). NOT under scratch/ — the stamp
-        write-site (report-coverage) has no session id (D-R3-5)."""
-        return self.omx_dir / "state" / "produced-reports.jsonl"
+        """state/produced-reports.jsonl (legacy) ->
+        config/experiments/produced-reports.jsonl (new, no `state/` subfolder
+        — the store-spec layer rules put this in config/, loss is not
+        harmless). Root-level append-only ledger of gate-stamped reports
+        awaiting session-end wiki capture (spec 2.2). NOT under scratch/ — the
+        stamp write-site (report-coverage) has no session id (D-R3-5)."""
+        return _write(self.root, config_dir(self.root) / "produced-reports.jsonl",
+                      self.omx_dir / "state" / "produced-reports.jsonl")
 
     # --- packaged reference profiles (committed; outside .omx, ships with pkg) ---
     @property
@@ -304,11 +521,28 @@ class OmxPaths:
         NO atomic_path .tmp dance (a lease must not be rename-replaceable)."""
         return self.run_dir(run_id) / ".loop-lock"
 
+    def trash_root(self) -> Path:
+        """.trash/ (legacy) -> runtime/experiments/trash/ (new — no leading
+        dot; the whole runtime/ layer is already .gitignore'd, so a child
+        does not need its own dot-hiding). clean.py's own cleanup staging
+        area (#22); no row in the artifact mapping table since it is not a
+        migrated artifact. Resolved via _write() like every other getter, so
+        an anchored project's `clean --apply`/`purge-trash` never touches
+        .omx/ — critically, that means a purge followed by a clean sweep
+        cannot recreate .omx/.trash and silently undo the purge."""
+        return _write(self.root, runtime_dir(self.root) / "trash",
+                      self.omx_dir / ".trash")
+
     def state_lock(self) -> Path:
-        """.omx/state/.state-lock — the fcntl mutex file guarding every
-        state.json load-mutate-save critical section (R4 #1). Under state/ (not
-        beside state.json) so the lock file is never mistaken for state."""
-        return self.omx_dir / "state" / ".state-lock"
+        """state/.state-lock (legacy) -> runtime/experiments/state/.state-lock
+        (new, KEEPS the `state/` subfolder unlike state.json itself) — the
+        fcntl mutex file guarding every state.json load-mutate-save critical
+        section (R4 #1). Under state/ (not beside state.json) so the lock file
+        is never mistaken for state. Recreated on demand -> no migration
+        concern; resolved directly (not derived from state_json(), whose new
+        location diverges — no `state/` subfolder)."""
+        return _write(self.root, runtime_dir(self.root) / "state" / ".state-lock",
+                      self.omx_dir / "state" / ".state-lock")
 
     def loop_marker_json(self, run_id) -> Path:
         """runs/<run_id>/loop-status.json — the loop-completion marker (R4 #7,
@@ -318,10 +552,14 @@ class OmxPaths:
 
     # --- campaigns/<campaign_id>/ (cross-run ledger, R2 #28) ---
     def campaign_dir(self, campaign_id) -> Path:
-        """campaigns/<campaign_id>/ — campaign_id shares the run_id CHARSET
-        (single segment; it IS the tree's group segment, D-R2-5) but not the
-        profile run_id regex (a campaign is a group name, not a run)."""
-        return self.omx_dir / "campaigns" / validate_run_id(campaign_id)
+        """campaigns/<campaign_id>/ (legacy) ->
+        work/experiments/campaigns/<campaign_id>/ (new). campaign_id shares
+        the run_id CHARSET (single segment; it IS the tree's group segment,
+        D-R2-5) but not the profile run_id regex (a campaign is a group name,
+        not a run)."""
+        cid = validate_run_id(campaign_id)
+        return _write(self.root, work_dir(self.root) / "campaigns" / cid,
+                      self.omx_dir / "campaigns" / cid)
 
     def campaign_plan(self, campaign_id) -> Path:
         return self.campaign_dir(campaign_id) / "plan.json"
@@ -329,18 +567,54 @@ class OmxPaths:
     def campaign_ledger(self, campaign_id) -> Path:
         return self.campaign_dir(campaign_id) / "ledger.jsonl"
 
+    def campaigns_root(self) -> tuple:
+        """(new, legacy) campaigns root DIRECTORIES — for enumeration
+        (iter_store_entries), not a single entity. campaign_dir(id) resolves
+        ONE campaign via _write(); listing every campaign needs both trees
+        (store-spec §7 stage 1: 'write new, read both'), since a project
+        mid-fallback can have some campaigns already migrated and some not."""
+        return (work_dir(self.root) / "campaigns", self.omx_dir / "campaigns")
+
     # --- programs/<program-id>/ (cross-campaign program layer, v0.9.0) ---
     def program_dir(self, program_id) -> Path:
-        """programs/<program-id>/ — cross-campaign program artifact
-        (PLAN.md narrative + program.json header). program_id shares the
-        campaign/run_id charset."""
-        return self.omx_dir / "programs" / validate_run_id(program_id)
+        """programs/<program-id>/ (legacy) -> community/programs/<program-id>/
+        (new) — cross-campaign program artifact's narrative half (PLAN.md,
+        HANDOFF.md, and anything else a caller writes alongside them).
+        program_json() below resolves the config-layer program.json header
+        SEPARATELY (its new location diverges from this one). program_id
+        shares the campaign/run_id charset."""
+        pid = validate_run_id(program_id)
+        return _write(self.root, community_dir(self.root) / "programs" / pid,
+                      self.omx_dir / "programs" / pid)
 
     def program_json(self, program_id) -> Path:
-        return self.program_dir(program_id) / "program.json"
+        """programs/<program-id>/program.json (legacy) ->
+        config/experiments/programs/<program-id>/program.json (new) — the
+        machine-parsed header, split from program_dir()'s community/ narrative
+        half per the mapping table."""
+        pid = validate_run_id(program_id)
+        return _write(self.root,
+                      config_dir(self.root) / "programs" / pid / "program.json",
+                      self.omx_dir / "programs" / pid / "program.json")
 
     def program_plan_md(self, program_id) -> Path:
         return self.program_dir(program_id) / "PLAN.md"
+
+    def programs_root(self) -> tuple:
+        """(new, legacy) programs root DIRECTORIES — for enumeration, over
+        the community/ (narrative) layer program_dir() itself resolves to.
+        NOT sufficient alone for list_programs(): a program whose only file
+        is program.json under config/experiments/programs/<id>/ has no
+        matching community/ entry yet, so list_programs() also scans
+        config_dir(root) / "programs" directly (no legacy pairing needed
+        there — legacy has no config/community split, and is already fully
+        covered by this getter's legacy half)."""
+        return (community_dir(self.root) / "programs", self.omx_dir / "programs")
+
+    def runs_root(self) -> tuple:
+        """(new, legacy) runs root DIRECTORIES — for enumeration, mirroring
+        campaigns_root()."""
+        return (work_dir(self.root) / "runs", self.omx_dir / "runs")
 
     # --- permanent output tree (output_root passed per-getter; design 10.1) ---
     # These live OUTSIDE .omx/. output_root originates from metrics.yaml and is

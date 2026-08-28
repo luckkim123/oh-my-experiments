@@ -78,3 +78,67 @@ def test_purge_requires_double_flag(tmp_path, capsys):
     assert "--i-understand-permanent" in capsys.readouterr().err
     assert main(["clean", "--root", str(tmp_path), "--purge-trash",
                  "--i-understand-permanent"]) == 0
+
+
+# --- .hq/ cutover (Rule B): clean.py NEVER reaches into legacy once anchored --
+
+def test_anchored_project_never_sweeps_legacy(tmp_path, capsys):
+    """store-spec §7: the legacy store is not touched by anything but a
+    separate purge during the fallback window. An anchored clean --apply must
+    operate on the (empty) new .hq/ tree only, leaving every legacy-only
+    scratch/run/tmp entry untouched — the opposite of list_campaigns()/
+    list_programs(), which DO union both stores (Rule A)."""
+    omx = _build_omx(tmp_path)
+    anchor = tmp_path / ".hq" / ".anchor"
+    anchor.parent.mkdir(parents=True, exist_ok=True)
+    anchor.write_text("id: test-anchor\n", encoding="utf-8")
+    assert main(["clean", "--root", str(tmp_path), "--scope", "all", "--apply"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["moved"] == []  # nothing under the (empty) new .hq/ tree to sweep
+    assert (omx / "scratch" / "sess1" / "plots" / "p.png").exists()
+    assert (omx / "scratch" / "sess2").exists()
+    assert (omx / "runs" / "r1" / "cache").exists()
+    assert not (omx / ".trash").exists()  # trash landed under .hq/, not .omx/
+
+
+def test_anchored_project_sweeps_new_store_content(tmp_path, capsys):
+    """The flip side: content that DOES live under the new .hq/ tree is still
+    swept normally once anchored — Rule B is about never touching legacy, not
+    about clean going inert."""
+    anchor = tmp_path / ".hq" / ".anchor"
+    anchor.parent.mkdir(parents=True, exist_ok=True)
+    anchor.write_text("id: test-anchor\n", encoding="utf-8")
+    scratch = tmp_path / ".hq" / "runtime" / "experiments" / "scratch" / "sess1"
+    scratch.mkdir(parents=True)
+    assert main(["clean", "--root", str(tmp_path), "--scope", "session", "--apply"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert not scratch.exists()
+    # no leading dot on the new trash_root() -- runtime/ is already
+    # .gitignore'd wholesale (team-lead trash-locus decision)
+    trash = tmp_path / ".hq" / "runtime" / "experiments" / "trash"
+    assert list(trash.rglob("sess1"))
+    assert out["moved"]
+
+
+def test_trash_locus_follows_the_resolved_store(tmp_path, capsys):
+    """team-lead directive: a swept file lands under
+    .hq/runtime/experiments/trash/ on an anchored project, and NOT under
+    .omx/.trash — the exact failure a trash_root() that stayed pinned to
+    .omx/ unconditionally would produce (a clean after --purge silently
+    recreating .omx/.trash and undoing the purge). On an un-anchored project
+    it still lands at .omx/.trash exactly as before this port."""
+    anchor = tmp_path / ".hq" / ".anchor"
+    anchor.parent.mkdir(parents=True, exist_ok=True)
+    anchor.write_text("id: test-anchor\n", encoding="utf-8")
+    scratch = tmp_path / ".hq" / "runtime" / "experiments" / "scratch" / "sess1"
+    scratch.mkdir(parents=True)
+    assert main(["clean", "--root", str(tmp_path), "--scope", "session", "--apply"]) == 0
+    assert list((tmp_path / ".hq" / "runtime" / "experiments" / "trash").rglob("sess1"))
+    assert not (tmp_path / ".omx").exists()  # never touched, let alone recreated
+
+
+def test_trash_locus_unanchored_matches_pre_port_behavior(tmp_path, capsys):
+    omx = _build_omx(tmp_path)
+    assert main(["clean", "--root", str(tmp_path), "--scope", "session", "--apply"]) == 0
+    assert list((omx / ".trash").rglob("p.png"))
+    assert not (tmp_path / ".hq").exists()

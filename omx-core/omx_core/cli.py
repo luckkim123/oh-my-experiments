@@ -24,9 +24,11 @@ from omx_core.decision import decide_outcome, parse_keep_policy, seed_stats
 from omx_core.evaluator import run_evaluator
 from omx_core.loop import compute_deadline, deadline_passed, queue_pending_launch, read_pending_launch
 from omx_core.omx_paths import (
+    LEGACY_ROOT,
     OmxError,
     OmxPaths,
     atomic_path,
+    iter_store_entries,
     resolve_session_id,
     validate_ext,
     validate_token,
@@ -493,7 +495,7 @@ def _cmd_init(args) -> int:
         raise SystemExit(str(e))
     print(json.dumps({
         "profile_name": args.profile_name,
-        "root": str(paths.omx_dir),
+        "root": str(paths.profile_dir),  # the resolved dir `written` actually landed in
         "written": [p.name for p in written],
         "pending_approval": True,
     }))
@@ -909,40 +911,44 @@ def _cmd_probe_novelty(args) -> int:
                 similar.append({"path": fp, "jaccard": round(j, 3)})
     ledger_hits = []
     lp = OmxPaths(root=_resolved_root(args))
-    camp_root = lp.omx_dir / "campaigns"
-    if camp_root.is_dir():
-        for led in sorted(camp_root.glob("*/ledger.jsonl")):
-            for line in led.read_text(encoding="utf-8").splitlines():
-                try:
-                    ev = json.loads(line)
-                except ValueError:
-                    continue
-                # launched is in-flight and eval is non-terminal; only
-                # outcome-bearing events feed novelty warnings.
-                if ev.get("event") not in ("kept", "discarded", "note"):
-                    continue
-                text = " ".join([str(ev.get("run_id") or ""),
-                                 json.dumps(ev.get("data") or {})])
-                j = jaccard(toks, probe_tokens(text))
-                if j >= 0.3:
-                    ledger_hits.append({"source": str(led),
-                                        "event": ev.get("event"),
-                                        "run_id": ev.get("run_id"),
-                                        "jaccard": round(j, 3)})
-    runs_root = lp.omx_dir / "runs"
-    if runs_root.is_dir():
-        for lj in sorted(runs_root.glob("*/ledger.json")):
+    # Reads BOTH stores (store-spec §7 stage 1): a project mid-fallback can
+    # have some campaigns/runs already migrated and some not.
+    for name, d in sorted(iter_store_entries(*lp.campaigns_root()).items()):
+        led = d / "ledger.jsonl"
+        if not led.is_file():
+            continue
+        for line in led.read_text(encoding="utf-8").splitlines():
             try:
-                led = json.loads(lj.read_text())
+                ev = json.loads(line)
             except ValueError:
                 continue
-            for e in led.get("entries", []):
-                j = jaccard(toks, probe_tokens(str(e.get("description") or "")))
-                if j >= 0.3:
-                    ledger_hits.append({"source": str(lj),
-                                        "event": e.get("decision"),
-                                        "run_id": lj.parent.name,
-                                        "jaccard": round(j, 3)})
+            # launched is in-flight and eval is non-terminal; only
+            # outcome-bearing events feed novelty warnings.
+            if ev.get("event") not in ("kept", "discarded", "note"):
+                continue
+            text = " ".join([str(ev.get("run_id") or ""),
+                             json.dumps(ev.get("data") or {})])
+            j = jaccard(toks, probe_tokens(text))
+            if j >= 0.3:
+                ledger_hits.append({"source": str(led),
+                                    "event": ev.get("event"),
+                                    "run_id": ev.get("run_id"),
+                                    "jaccard": round(j, 3)})
+    for name, d in sorted(iter_store_entries(*lp.runs_root()).items()):
+        lj = d / "ledger.json"
+        if not lj.is_file():
+            continue
+        try:
+            led = json.loads(lj.read_text())
+        except ValueError:
+            continue
+        for e in led.get("entries", []):
+            j = jaccard(toks, probe_tokens(str(e.get("description") or "")))
+            if j >= 0.3:
+                ledger_hits.append({"source": str(lj),
+                                    "event": e.get("decision"),
+                                    "run_id": name,
+                                    "jaccard": round(j, 3)})
     out = {"wiki_hits": hits.get("matches", []), "similar_proposals": similar, "ledger_hits": ledger_hits}
     print(json.dumps(out))
     if similar:
@@ -1109,9 +1115,10 @@ def _cmd_loop_status(args) -> int:
         raise SystemExit(f"state.json is corrupt: {e}")
 
     if args.all:
-        runs_root = paths.omx_dir / "runs"
+        # Reads BOTH stores (store-spec §7 stage 1) — see the campaigns/runs
+        # scan above for why a single-root scan would silently miss entries.
         rows = []
-        run_ids = sorted(d.name for d in runs_root.iterdir()) if runs_root.is_dir() else []
+        run_ids = sorted(iter_store_entries(*paths.runs_root()))
         for rid in run_ids:
             try:
                 phase, lease, marker = _run_phase(paths, rid, armed=armed, now=now)
@@ -1468,13 +1475,13 @@ def _cmd_revert_config(args) -> int:
             "(the ledger has no matching commit)")
     # path-scoped allowlist: .omx relative to cwd, plus the resolved root tree
     # when it lies inside cwd.
-    protected = [".omx/"]
+    protected = [f"{LEGACY_ROOT}/"]
     cwd_res = _Path(args.cwd).resolve()
     root_res = _Path(_resolved_root(args)).resolve()
     try:
         rel = root_res.relative_to(cwd_res)
-        if rel != _Path("."):  # root == cwd -> str(rel/".omx") is just ".omx/" (already in protected)
-            protected.append(str(rel / ".omx") + "/")
+        if rel != _Path("."):  # root == cwd -> str(rel/LEGACY_ROOT) is just ".omx/" (already in protected)
+            protected.append(str(rel / LEGACY_ROOT) + "/")
     except ValueError:
         pass  # root is not inside cwd -> the ".omx/" prefix already covers cwd's tree
     try:

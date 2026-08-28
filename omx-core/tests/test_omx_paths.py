@@ -2,6 +2,7 @@
 
 Claude-free, Isaac-free, profile-free. Pure stdlib + pytest.
 """
+import ast as _ast
 from pathlib import Path
 
 import pytest
@@ -599,13 +600,17 @@ def test_every_public_path_getter_is_exercised(tmp_path):
         "pending_launch_json": lambda: p.pending_launch_json(rid),
         "loop_lock": lambda: p.loop_lock(rid),
         "state_lock": lambda: p.state_lock(),
+        "trash_root": lambda: p.trash_root(),
         "loop_marker_json": lambda: p.loop_marker_json(rid),
         "campaign_dir": lambda: p.campaign_dir("camp_a"),
         "campaign_plan": lambda: p.campaign_plan("camp_a"),
         "campaign_ledger": lambda: p.campaign_ledger("camp_a"),
+        "campaigns_root": lambda: p.campaigns_root(),
         "program_dir": lambda: p.program_dir("prog_a"),
         "program_json": lambda: p.program_json("prog_a"),
         "program_plan_md": lambda: p.program_plan_md("prog_a"),
+        "programs_root": lambda: p.programs_root(),
+        "runs_root": lambda: p.runs_root(),
         "analysis_dir": lambda: p.analysis_dir(out, rid, aid),
         "report_md": lambda: p.report_md(out, rid, aid),
         "report_ko_md": lambda: p.report_ko_md(out, rid, aid),
@@ -614,9 +619,17 @@ def test_every_public_path_getter_is_exercised(tmp_path):
         "analysis_table": lambda: p.analysis_table(out, rid, aid, metric="m", agg="a"),
         "proposal_md": lambda: p.proposal_md(out, rid, pid),
     }
+    # Enumeration-root getters (Rule A) return (new, legacy) TUPLES of Paths,
+    # not a single Path — every other getter still must.
+    _TUPLE_GETTERS = {"campaigns_root", "programs_root", "runs_root"}
     for name, fn in calls.items():
         result = fn()
-        assert isinstance(result, Path), f"{name} did not return a Path"
+        if name in _TUPLE_GETTERS:
+            assert (isinstance(result, tuple) and len(result) == 2
+                    and all(isinstance(x, Path) for x in result)), (
+                f"{name} did not return a (new, legacy) Path pair")
+        else:
+            assert isinstance(result, Path), f"{name} did not return a Path"
 
     # Discover public callables on the instance; every path getter must be in `calls`.
     # Excludes: properties handled separately (profile_dir), non-path attrs (root,
@@ -713,3 +726,476 @@ def test_checkpoint_pointer_json_under_run(tmp_path):
     p = OmxPaths(tmp_path)
     cp = p.checkpoint_pointer_json("run01")
     assert cp == p.run_dir("run01") / "checkpoint-pointer.json"
+
+
+# =============================================================================
+# .hq/ cutover (om* store unification P6) — new-vs-legacy resolution
+# =============================================================================
+
+def _anchor(root, anchor_id="test-anchor"):
+    """Write a parseable .hq/.anchor under `root` (store-spec §2 shape)."""
+    from omx_core.omx_paths import anchor_file
+    f = anchor_file(root)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(f"id: {anchor_id}\n", encoding="utf-8")
+    return f
+
+
+# --- gate_state(): the four states -------------------------------------------
+
+def test_gate_state_off_no_legacy_no_anchor(tmp_path):
+    from omx_core.omx_paths import GATE_OFF, gate_state
+    assert gate_state(tmp_path) == GATE_OFF
+
+
+def test_gate_state_legacy_store_present_no_anchor(tmp_path):
+    from omx_core.omx_paths import GATE_LEGACY, gate_state
+    (tmp_path / ".omx").mkdir()
+    assert gate_state(tmp_path) == GATE_LEGACY
+
+
+def test_gate_state_normal_anchor_present_and_parseable(tmp_path):
+    from omx_core.omx_paths import GATE_NORMAL, gate_state
+    _anchor(tmp_path)
+    assert gate_state(tmp_path) == GATE_NORMAL
+
+
+@pytest.mark.parametrize("bad_content", [
+    "id: a\nid: b\n",   # two non-empty lines (spec: duplicate id shape)
+    "not-an-id-line\n",  # missing 'id:' prefix
+    "id: \n",            # empty value
+    "",                  # empty file entirely
+])
+def test_gate_state_corrupt_anchor(tmp_path, bad_content):
+    from omx_core.omx_paths import GATE_CORRUPT, anchor_file, gate_state
+    f = anchor_file(tmp_path)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(bad_content, encoding="utf-8")
+    assert gate_state(tmp_path) == GATE_CORRUPT
+
+
+def test_has_anchor_false_on_corrupt(tmp_path):
+    from omx_core.omx_paths import anchor_file, has_anchor
+    f = anchor_file(tmp_path)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("garbage\n", encoding="utf-8")
+    assert has_anchor(tmp_path) is False
+
+
+def test_parse_anchor_id_returns_value(tmp_path):
+    from omx_core.omx_paths import parse_anchor_id
+    f = _anchor(tmp_path, anchor_id="my-anchor-id")
+    assert parse_anchor_id(f) == "my-anchor-id"
+
+
+def test_parse_anchor_id_raises_anchor_error_on_bad_shape(tmp_path):
+    from omx_core.omx_paths import AnchorError, anchor_file, parse_anchor_id
+    f = anchor_file(tmp_path)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("no id prefix here\n", encoding="utf-8")
+    with pytest.raises(AnchorError):
+        parse_anchor_id(f)
+
+
+# --- _write(): all four branches ---------------------------------------------
+
+def test_write_no_anchor_returns_legacy(tmp_path):
+    from omx_core.omx_paths import _write
+    new = tmp_path / "new-path"
+    legacy = tmp_path / "legacy-path"
+    assert _write(tmp_path, new, legacy) == legacy
+
+
+def test_write_anchor_and_new_exists_returns_new(tmp_path):
+    from omx_core.omx_paths import _write
+    _anchor(tmp_path)
+    new = tmp_path / "new-path"
+    new.mkdir()
+    legacy = tmp_path / "legacy-path"
+    legacy.mkdir()
+    assert _write(tmp_path, new, legacy) == new
+
+
+def test_write_anchor_and_only_legacy_exists_returns_legacy(tmp_path):
+    from omx_core.omx_paths import _write
+    _anchor(tmp_path)
+    new = tmp_path / "new-path"
+    legacy = tmp_path / "legacy-path"
+    legacy.mkdir()
+    assert _write(tmp_path, new, legacy) == legacy
+
+
+def test_write_anchor_and_neither_exists_returns_new(tmp_path):
+    from omx_core.omx_paths import _write
+    _anchor(tmp_path)
+    new = tmp_path / "new-path"
+    legacy = tmp_path / "legacy-path"
+    assert _write(tmp_path, new, legacy) == new
+
+
+# --- _read(): new-then-legacy -------------------------------------------------
+
+def test_read_prefers_new_when_it_exists(tmp_path):
+    from omx_core.omx_paths import _read
+    new = tmp_path / "new-path"
+    new.mkdir()
+    legacy = tmp_path / "legacy-path"
+    legacy.mkdir()
+    assert _read(new, legacy) == new
+
+
+def test_read_falls_back_to_legacy_when_new_absent(tmp_path):
+    from omx_core.omx_paths import _read
+    new = tmp_path / "new-path"
+    legacy = tmp_path / "legacy-path"
+    legacy.mkdir()
+    assert _read(new, legacy) == legacy
+
+
+# --- getter resolution: legacy fallback (no anchor) vs new (anchor + fresh) --
+# Every base-directory getter must (a) resolve to the SAME .omx/ path as
+# before when no anchor exists (regression guard — covered implicitly by every
+# existing assertion above, since none of those tests write an anchor), and
+# (b) resolve under .hq/ for a brand-new entity once anchored.
+
+@pytest.mark.parametrize("getter_name,call,new_suffix", [
+    ("profile_dir", lambda p: p.profile_dir, ("config", "experiments", "profile")),
+    ("run_dir", lambda p: p.run_dir("r1"), ("work", "experiments", "runs", "r1")),
+    ("scratch_dir", lambda p: p.scratch_dir(session_id="s1"),
+     ("runtime", "experiments", "scratch", "s1")),
+    ("wiki_dir", lambda p: p.wiki_dir(), ("community", "wiki")),
+    ("wiki_index", lambda p: p.wiki_index(), ("community", "wiki", "index.md")),
+    ("wiki_log", lambda p: p.wiki_log(),
+     ("runtime", "experiments", "registry", "log.md")),
+    ("wiki_lock", lambda p: p.wiki_lock(), ("community", "wiki", ".wiki-lock")),
+    ("recipes_dir", lambda p: p.recipes_dir(), ("community", "recipes")),
+    ("state_json", lambda p: p.state_json(), ("runtime", "experiments", "state.json")),
+    ("produced_reports_ledger", lambda p: p.produced_reports_ledger(),
+     ("config", "experiments", "produced-reports.jsonl")),
+    ("state_lock", lambda p: p.state_lock(),
+     ("runtime", "experiments", "state", ".state-lock")),
+    ("campaign_dir", lambda p: p.campaign_dir("camp1"),
+     ("work", "experiments", "campaigns", "camp1")),
+    ("program_dir", lambda p: p.program_dir("prog1"),
+     ("community", "programs", "prog1")),
+    ("program_json", lambda p: p.program_json("prog1"),
+     ("config", "experiments", "programs", "prog1", "program.json")),
+])
+def test_getter_resolves_new_on_fresh_anchored_entity(tmp_path, getter_name, call, new_suffix):
+    from omx_core.omx_paths import HQ_ROOT
+    p = _paths(tmp_path)
+    _anchor(tmp_path)
+    result = call(p)
+    assert result == Path(tmp_path, HQ_ROOT, *new_suffix), (
+        f"{getter_name}: expected .hq/ resolution for a brand-new anchored "
+        f"entity, got {result}")
+
+
+@pytest.mark.parametrize("getter_name,call,legacy_suffix", [
+    ("profile_dir", lambda p: p.profile_dir, ("profile",)),
+    ("run_dir", lambda p: p.run_dir("r1"), ("runs", "r1")),
+    ("scratch_dir", lambda p: p.scratch_dir(session_id="s1"), ("scratch", "s1")),
+    ("wiki_dir", lambda p: p.wiki_dir(), ("registry", "findings")),
+    ("wiki_index", lambda p: p.wiki_index(), ("registry", "index.md")),
+    ("wiki_log", lambda p: p.wiki_log(), ("registry", "log.md")),
+    ("wiki_lock", lambda p: p.wiki_lock(), ("registry", ".wiki-lock")),
+    ("recipes_dir", lambda p: p.recipes_dir(), ("recipes",)),
+    ("state_json", lambda p: p.state_json(), ("state.json",)),
+    ("produced_reports_ledger", lambda p: p.produced_reports_ledger(),
+     ("state", "produced-reports.jsonl")),
+    ("state_lock", lambda p: p.state_lock(), ("state", ".state-lock")),
+    ("campaign_dir", lambda p: p.campaign_dir("camp1"), ("campaigns", "camp1")),
+    ("program_dir", lambda p: p.program_dir("prog1"), ("programs", "prog1")),
+    ("program_json", lambda p: p.program_json("prog1"),
+     ("programs", "prog1", "program.json")),
+])
+def test_getter_falls_back_to_legacy_when_no_anchor(tmp_path, getter_name, call, legacy_suffix):
+    p = _paths(tmp_path)
+    result = call(p)
+    assert result == Path(tmp_path, ".omx", *legacy_suffix), (
+        f"{getter_name}: expected .omx/ fallback with no anchor, got {result}")
+
+
+def test_getter_prefers_existing_legacy_content_even_when_anchored(tmp_path):
+    """Branch 3 of _write: anchor present but only the legacy path holds this
+    specific entity (not yet migrated) -> stays on legacy, avoiding split-brain."""
+    p = _paths(tmp_path)
+    (tmp_path / ".omx" / "campaigns" / "camp1").mkdir(parents=True)
+    _anchor(tmp_path)
+    assert p.campaign_dir("camp1") == tmp_path / ".omx" / "campaigns" / "camp1"
+
+
+def test_getter_prefers_existing_new_content_when_anchored(tmp_path):
+    """Branch 2 of _write: the new path already holds this entity (e.g.
+    migrated) -> resolves there even if legacy also still exists."""
+    from omx_core.omx_paths import HQ_ROOT
+    p = _paths(tmp_path)
+    (tmp_path / ".omx" / "campaigns" / "camp1").mkdir(parents=True)
+    (Path(tmp_path, HQ_ROOT, "work", "experiments", "campaigns", "camp1")
+     .mkdir(parents=True))
+    _anchor(tmp_path)
+    assert p.campaign_dir("camp1") == Path(
+        tmp_path, HQ_ROOT, "work", "experiments", "campaigns", "camp1")
+
+
+def test_wiki_lock_not_split_from_wiki_dir_new(tmp_path):
+    """wiki_lock() must land inside wiki_dir()'s OWN resolved directory once
+    anchored (both resolve under community/wiki/ in the new layout)."""
+    p = _paths(tmp_path)
+    _anchor(tmp_path)
+    assert p.wiki_lock().parent == p.wiki_dir()
+
+
+def test_program_dir_and_program_json_split_across_layers(tmp_path):
+    """program_dir() (community/ narrative) and program_json() (config/
+    header) must resolve to DIFFERENT directories once anchored, per the
+    mapping table split."""
+    p = _paths(tmp_path)
+    _anchor(tmp_path)
+    d = p.program_dir("prog1")
+    pj = p.program_json("prog1")
+    assert d != pj.parent
+    assert "community" in d.parts
+    assert "config" in pj.parts
+    assert p.program_plan_md("prog1") == d / "PLAN.md"
+
+
+def test_reference_dir_unaffected_by_anchor(tmp_path):
+    """reference_dir is anchored to the installed package, never to root —
+    an anchor at root must not perturb it."""
+    p = _paths(tmp_path)
+    before = p.reference_dir
+    _anchor(tmp_path)
+    assert p.reference_dir == before
+
+
+# --- iter_store_entries() and the *_root() enumeration getters --------------
+# (team-lead Rule A follow-up: list_campaigns/list_programs/loop-status --all
+# must READ BOTH stores, not resolve to one via _write()/_read().)
+
+def test_iter_store_entries_unions_both_missing_neither_errors(tmp_path):
+    from omx_core.omx_paths import iter_store_entries
+    new = tmp_path / "new"
+    legacy = tmp_path / "legacy"
+    assert iter_store_entries(new, legacy) == {}
+
+
+def test_iter_store_entries_unions_disjoint_names(tmp_path):
+    from omx_core.omx_paths import iter_store_entries
+    new = tmp_path / "new"
+    legacy = tmp_path / "legacy"
+    (new / "b").mkdir(parents=True)
+    (legacy / "a").mkdir(parents=True)
+    entries = iter_store_entries(new, legacy)
+    assert set(entries) == {"a", "b"}
+    assert entries["a"] == legacy / "a"
+    assert entries["b"] == new / "b"
+
+
+def test_iter_store_entries_new_wins_name_collision(tmp_path):
+    from omx_core.omx_paths import iter_store_entries
+    new = tmp_path / "new"
+    legacy = tmp_path / "legacy"
+    (new / "camp1").mkdir(parents=True)
+    (legacy / "camp1").mkdir(parents=True)
+    entries = iter_store_entries(new, legacy)
+    assert entries["camp1"] == new / "camp1"
+
+
+@pytest.mark.parametrize("getter,new_suffix,legacy_suffix", [
+    ("campaigns_root", ("work", "experiments", "campaigns"), ("campaigns",)),
+    ("programs_root", ("community", "programs"), ("programs",)),
+    ("runs_root", ("work", "experiments", "runs"), ("runs",)),
+])
+def test_root_getters_return_new_then_legacy_pair(tmp_path, getter, new_suffix, legacy_suffix):
+    from omx_core.omx_paths import HQ_ROOT
+    p = _paths(tmp_path)
+    new, legacy = getattr(p, getter)()
+    assert new == Path(tmp_path, HQ_ROOT, *new_suffix)
+    assert legacy == Path(tmp_path, ".omx", *legacy_suffix)
+
+
+def test_trash_root_no_leading_dot_on_new_no_anchor_stays_legacy(tmp_path):
+    """runtime/ is already .gitignore'd wholesale, so the new-layout trash
+    child drops the leading dot (unlike the .omx/.trash legacy name).
+    _write()-resolved like every other getter: no anchor -> legacy dotted
+    name unchanged."""
+    p = _paths(tmp_path)
+    assert p.trash_root() == tmp_path / ".omx" / ".trash"
+
+
+def test_trash_root_resolves_new_when_anchored_and_fresh(tmp_path):
+    from omx_core.omx_paths import HQ_ROOT
+    p = _paths(tmp_path)
+    _anchor(tmp_path)
+    assert p.trash_root() == Path(tmp_path, HQ_ROOT, "runtime", "experiments", "trash")
+
+
+def test_getters_still_validate_before_resolving_when_anchored(tmp_path):
+    """Validation (loud-fail on bad ids) must fire before any new/legacy
+    resolution happens, anchored or not."""
+    p = _paths(tmp_path)
+    _anchor(tmp_path)
+    with pytest.raises(OmxPathError):
+        p.run_dir("../escape")
+    with pytest.raises(OmxPathError):
+        p.campaign_dir("has/slash")
+    with pytest.raises(OmxPathError):
+        p.program_dir("..")
+    with pytest.raises(OmxPathError):
+        p.scratch_dir(session_id="")
+
+
+def test_has_store_and_has_legacy_store(tmp_path):
+    from omx_core.omx_paths import has_legacy_store, has_store
+    assert has_store(tmp_path) is False
+    assert has_legacy_store(tmp_path) is False
+    (tmp_path / ".omx").mkdir()
+    assert has_legacy_store(tmp_path) is True
+    assert has_store(tmp_path) is True
+
+
+def test_has_store_true_on_anchor_alone(tmp_path):
+    from omx_core.omx_paths import has_legacy_store, has_store
+    _anchor(tmp_path)
+    assert has_legacy_store(tmp_path) is False
+    assert has_store(tmp_path) is True
+
+
+# --- re-entry lint: no stray .hq/.omx literal outside omx_paths.py ----------
+# Mirrors oh-my-project/tests/test_omp_paths_lint.py (the reference this repo
+# was told to copy). AST-based, not regex-on-text: a str Constant (f-string
+# pieces included, via ast.walk descending into JoinedStr) counts as a
+# violation iff it CONTAINS the root literal AND has no whitespace anywhere —
+# paths never have spaces, prose always does. Module/function/class docstrings
+# (the first statement) are exempt.
+
+def _lint_roots():
+    from omx_core.omx_paths import HQ_ROOT, LEGACY_ROOT
+    return (LEGACY_ROOT, HQ_ROOT)
+
+
+def _lint_repo_root() -> Path:
+    # this file: omx-core/tests/test_omx_paths.py -> repo root is 2 parents up
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def _lint_paths_module() -> Path:
+    return _lint_repo_root() / "omx-core" / "omx_core" / "omx_paths.py"
+
+
+# Files/dirs exempt beyond the paths module itself, each with a stated reason:
+#   - any path component "tests" or "fixtures": fixtures legitimately build
+#     .omx/... paths on disk (mirrors omp's tests/ exclusion; omx nests its
+#     tests one level deeper at omx-core/tests/, not at the repo root).
+#   - "reference" under omx_core: the shipped reference/ package copied into
+#     a user's .omx/profile/ by exp-init — same class as omp's references/
+#     exclusion (content, not a resolution site).
+#   - hooks/handlers.py: a single, documented exception — _has_omx_marker
+#     must stay import-free (test_handlers_import_without_omx_core poisons
+#     omx_core entirely and still requires this probe to work) and hot-path
+#     cheap, so it keeps its own literal rather than importing LEGACY_ROOT.
+#   - omx_core/root.py: MARKER = ".omx-workspace" is a DIFFERENT concept — a
+#     multi-repo workspace-root marker climbed by the #13 resolution ladder,
+#     unrelated to the .hq/.omx STORE this module resolves. It only trips the
+#     lint because ".omx-workspace" contains the substring ".omx" (the lint's
+#     own rule is substring-based, matching omp's). Renaming it or routing it
+#     through omx_paths.py is out of scope for this port — it is not one of
+#     the mapped artifacts.
+_LINT_EXCLUDED_DIR_PARTS = {"tests", "fixtures", "reference", "__pycache__",
+                           ".git", ".pytest_cache", "egg-info"}
+_LINT_EXCLUDED_FILES = {("hooks", "handlers.py"), ("omx-core", "omx_core", "root.py")}
+
+
+def _lint_is_violation(value: str) -> bool:
+    return any(r in value for r in _lint_roots()) and not any(ch.isspace() for ch in value)
+
+
+def _lint_docstring_constant_ids(tree: _ast.AST) -> set:
+    ids = set()
+    for node in _ast.walk(tree):
+        if isinstance(node, (_ast.Module, _ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
+            body = node.body
+            if (body and isinstance(body[0], _ast.Expr)
+                    and isinstance(body[0].value, _ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                ids.add(id(body[0].value))
+    return ids
+
+
+def _lint_violations_in_source(source: str, filename: str = "<string>") -> list:
+    tree = _ast.parse(source, filename=filename)
+    skip = _lint_docstring_constant_ids(tree)
+    out = []
+    for node in _ast.walk(tree):
+        if (isinstance(node, _ast.Constant) and isinstance(node.value, str)
+                and id(node) not in skip and _lint_is_violation(node.value)):
+            out.append((node.lineno, node.value))
+    return out
+
+
+def _lint_scanned_files():
+    repo_root = _lint_repo_root()
+    paths_module = _lint_paths_module()
+    for path in sorted(repo_root.rglob("*.py")):
+        rel = path.relative_to(repo_root)
+        if any(part in _LINT_EXCLUDED_DIR_PARTS for part in rel.parts[:-1]):
+            continue
+        if tuple(rel.parts) in _LINT_EXCLUDED_FILES:
+            continue
+        if path == paths_module:
+            continue
+        yield path
+
+
+def test_lint_scan_targets_exist():
+    assert list(_lint_scanned_files()), "no .py files found to scan — lint scope is broken"
+
+
+def test_no_root_literal_reentry():
+    offenders = []
+    repo_root = _lint_repo_root()
+    for path in _lint_scanned_files():
+        rel = path.relative_to(repo_root)
+        for lineno, value in _lint_violations_in_source(path.read_text(encoding="utf-8"), str(rel)):
+            offenders.append(f"{rel}:{lineno}: {value!r}")
+    assert not offenders, (
+        "new " + " or ".join(repr(r) for r in _lint_roots())
+        + " literal(s) outside omx-core/omx_core/omx_paths.py — "
+        "add a named helper there instead:\n" + "\n".join(offenders)
+    )
+
+
+def test_lint_meta_bare_literal_bites():
+    v = _lint_violations_in_source('X = ".omx"\n')
+    assert v == [(1, ".omx")]
+
+
+def test_lint_meta_path_literal_bites():
+    v = _lint_violations_in_source('X = ".omx/state.json"\n')
+    assert len(v) == 1 and v[0][1] == ".omx/state.json"
+
+
+def test_lint_meta_fstring_piece_bites():
+    v = _lint_violations_in_source('name = "x"\nX = f".omx/{name}.md"\n')
+    assert any(".omx/" in val for _, val in v)
+
+
+def test_lint_meta_prose_with_whitespace_is_not_a_violation():
+    v = _lint_violations_in_source('X = ".omx/state.json 갱신은 이 작업의 일부"\n')
+    assert v == []
+
+
+def test_lint_meta_module_docstring_is_exempt():
+    v = _lint_violations_in_source('""".omx/state.json is the SSOT."""\nX = 1\n')
+    assert v == []
+
+
+def test_lint_meta_function_docstring_is_exempt():
+    v = _lint_violations_in_source('def f():\n    """.omx/wiki holds notes."""\n    return 1\n')
+    assert v == []
+
+
+def test_lint_meta_hq_literal_bites():
+    v = _lint_violations_in_source('X = ".hq/config/experiments/state.json"\n')
+    assert len(v) == 1 and v[0][1] == ".hq/config/experiments/state.json"
