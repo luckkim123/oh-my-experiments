@@ -118,18 +118,22 @@ def _stamped_report_root(tmp_path):
     return tmp_path
 
 
-def test_capture_flush_flushes_ledger(tmp_path, capsys):
+def test_capture_flush_writes_nothing_and_stays_silent(tmp_path, capsys):
+    """SessionEnd auto-capture is off (r6 D2), and the hook must not notice.
+
+    It used to capture every stamped report into a wiki stub and truncate the
+    ledger; that write now lands in the SHARED post store, so it was turned off
+    rather than repointed. The hook contract is unchanged -- returns None, never
+    raises -- and the ledger is deliberately left intact."""
     root = _stamped_report_root(tmp_path)
     capsys.readouterr()
     mod = _load_handlers()
     out = mod.capture_flush({"cwd": str(root), "session_id": "whatever"})
     assert out is None  # SessionEnd output is ignored by the platform
     from omx_core.omx_paths import OmxPaths
-    from omx_core.wiki.storage import list_pages, read_page
     paths = OmxPaths(root=str(root))
-    assert paths.produced_reports_ledger().read_text() == ""
-    pages = [read_page(paths, slug) for slug in list_pages(paths)]
-    assert any(p.category == "session-log" for p in pages)
+    assert paths.produced_reports_ledger().read_text().strip()   # NOT truncated
+    assert not (Path(root) / ".hq" / "community" / "posts").exists()
 
 
 def test_capture_flush_empty_root_is_silent_none(tmp_path):

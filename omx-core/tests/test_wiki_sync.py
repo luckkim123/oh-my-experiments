@@ -1,7 +1,20 @@
+"""sync-profile after B4 moved the projection out of the page store.
+
+`profile.md` is regenerated from `.omx/profile/*`, which store-spec section 3
+rule (4) -- "can a verb regenerate it from other files?" -- puts in the `work/`
+layer, not in `community/` where posts live. So it is a plain markdown file at
+`OmxPaths.profile_projection()` now, and two tests went with the store it used
+to live in: `test_reserved_page_hidden_from_list_but_readable` (there is no
+reserved-page concept in a post store, and `wiki read` reads posts) and
+`test_hand_write_of_profile_page_blocked` (no `storage.write_page` to refuse).
+The mtime contract, which is what actually kept the projection honest, is
+unchanged and still checked here.
+"""
 import json
 import os
 
 from omx_core.cli import main
+from omx_core.omx_paths import OmxPaths
 
 
 def _mk_profile(tmp_path):
@@ -13,25 +26,31 @@ def _mk_profile(tmp_path):
     return prof
 
 
-def test_sync_creates_reserved_page(tmp_path, capsys):
+def _projection(tmp_path):
+    return OmxPaths(root=tmp_path).profile_projection()
+
+
+def test_sync_writes_the_work_layer_projection(tmp_path, capsys):
     _mk_profile(tmp_path)
     rc = main(["wiki", "sync-profile", "--root", str(tmp_path)])
     assert rc == 0
-    assert json.loads(capsys.readouterr().out)["action"] == "synced"
-    page = tmp_path / ".omx" / "registry" / "findings" / "profile.md"
-    body = page.read_text()
-    assert "output_root: experiments" in body and "category: environment" in body
+    out = json.loads(capsys.readouterr().out)
+    assert out["action"] == "synced"
+    page = _projection(tmp_path)
+    assert out["path"] == str(page)
+    assert "output_root: experiments" in page.read_text()
 
 
-def test_reserved_page_hidden_from_list_but_readable(tmp_path, capsys):
+def test_the_projection_is_not_a_post(tmp_path, capsys):
+    """A regenerable projection in the shared post store would be a machine
+    artifact in a layer meant for records humans wrote (store-spec section 3,
+    (4) beats (2)). It must land under work/, and never mint a post."""
     _mk_profile(tmp_path)
     main(["wiki", "sync-profile", "--root", str(tmp_path)])
     capsys.readouterr()
-    main(["wiki", "list", "--root", str(tmp_path)])
-    listed = json.loads(capsys.readouterr().out)
-    assert all(p["slug"] != "profile.md" for p in listed["pages"])
-    rc = main(["wiki", "read", "--root", str(tmp_path), "--slug", "profile"])
-    assert rc == 0 and "output_root" in capsys.readouterr().out
+    page = _projection(tmp_path)
+    assert ".hq/work/" in str(page) and "/posts/" not in str(page)
+    assert not (tmp_path / ".hq" / "community" / "posts").exists()
 
 
 def test_sync_skips_when_page_newer(tmp_path, capsys):
@@ -54,7 +73,7 @@ def test_same_second_profile_edit_still_syncs(tmp_path, capsys):
     prof = _mk_profile(tmp_path)
     main(["wiki", "sync-profile", "--root", str(tmp_path)])
     capsys.readouterr()
-    page = tmp_path / ".omx" / "registry" / "findings" / "profile.md"
+    page = _projection(tmp_path)
     m = prof / "metrics.yaml"
     m.write_text(m.read_text() + "# same-second edit\n")
     tie = page.stat().st_mtime
@@ -65,8 +84,7 @@ def test_same_second_profile_edit_still_syncs(tmp_path, capsys):
 
 def test_sync_after_seal_resyncs(tmp_path, capsys):
     # I-1: sealing after a sync (no projected-file changes) must not leave
-    # profile.md stuck asserting the pre-seal status forever.
-    from omx_core.omx_paths import OmxPaths
+    # the projection stuck asserting the pre-seal status forever.
     from omx_core.seal import write_seal
     _mk_profile(tmp_path)
     main(["wiki", "sync-profile", "--root", str(tmp_path)])
@@ -80,8 +98,7 @@ def test_sync_after_seal_resyncs(tmp_path, capsys):
     rc = main(["wiki", "sync-profile", "--root", str(tmp_path)])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out["action"] == "synced"
-    page = tmp_path / ".omx" / "registry" / "findings" / "profile.md"
-    assert "status: ok" in page.read_text()
+    assert "status: ok" in _projection(tmp_path).read_text()
 
 
 def test_sync_loud_fails_without_profile(tmp_path, capsys):
@@ -92,7 +109,7 @@ def test_sync_loud_fails_without_profile(tmp_path, capsys):
 def test_sync_loud_fails_cleanly_when_metrics_yaml_missing(tmp_path, capsys):
     # Only evaluator.sh present (no metrics.yaml, no rules.md): the initial
     # presence check (ANY of _PROJECTED) passes, but composing the page needs
-    # metrics.yaml specifically. Must exit rc 2 via a clean WikiError/SystemExit,
+    # metrics.yaml specifically. Must exit rc 2 via a clean OmxError/SystemExit,
     # never an unhandled FileNotFoundError.
     prof = tmp_path / ".omx" / "profile"
     prof.mkdir(parents=True)
@@ -101,14 +118,3 @@ def test_sync_loud_fails_cleanly_when_metrics_yaml_missing(tmp_path, capsys):
     assert rc == 2
     err = capsys.readouterr().err
     assert "metrics.yaml" in err
-
-
-def test_hand_write_of_profile_page_blocked(tmp_path):
-    import pytest
-    from omx_core.omx_paths import OmxPaths
-    from omx_core.wiki import storage
-    from omx_core.wiki.types import WikiError, WikiPage
-    _mk_profile(tmp_path)
-    with pytest.raises(WikiError, match="reserved"):
-        storage.write_page(OmxPaths(root=tmp_path),
-                           WikiPage(slug="profile.md", title="x"), now="t")

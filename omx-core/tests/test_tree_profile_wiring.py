@@ -35,7 +35,7 @@ def test_sync_profile_projects_tree_summary(tmp_path, capsys):
     assert main(["init", "--root", str(tmp_path)]) == 0
     capsys.readouterr()
     assert main(["wiki", "sync-profile", "--root", str(tmp_path)]) == 0
-    page = (tmp_path / ".omx" / "registry" / "findings" / "profile.md").read_text()
+    page = OmxPaths(root=tmp_path).profile_projection().read_text()
     assert "## tree schema" in page
     assert "index: experiments" in page
 

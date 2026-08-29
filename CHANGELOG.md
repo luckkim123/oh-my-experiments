@@ -4,6 +4,133 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.16.0] - 2026-08-29 — the wiki engine is hq now, and 979 lines of it are gone
+
+### Fixed
+- **`omx wiki query` answered `{"n_matches": 0}` on every anchor, always.**
+  `OmxPaths.wiki_dir()` resolves to `<root>/.hq/community/wiki`, and measured
+  2026-08-29 that directory exists on **no anchor on this machine** — vault,
+  claudebase, and workspace all lack it, while the same anchors hold 125, 17,
+  and 33 posts. The routing hook meanwhile injects "read `omx wiki query`
+  before judging" into every turn, so the harness has been instructing sessions
+  to treat an empty answer as evidence. This repo has now lost three tools to
+  reading a zero as an absence; this is the fourth time the pattern showed up
+  and the first time it was pointed at the knowledge base itself.
+
+  After this release the same query returns **12 matches** on the vault.
+
+### Changed
+- **B4: every wiki read and write goes through `hq`.** The new
+  `wiki/hq_backend.py` is the single seam — one subprocess funnel, loud on
+  failure, with the STATUSES/CATEGORIES constants that `types.py` used to hold.
+  `query.py:81-98` had already shelled out to `hq` for `enumerate_pages` since
+  0.15.0; this is the other half, and the reason it is one change rather than
+  two is that a half-migrated store means two frontmatter parsers for one
+  format.
+
+  **`wiki add` merges by `subject:`, not by filename.** store-spec §4: a post is
+  an event, a wiki page is a state, and `subject:` is what restores the second —
+  the posts sharing one subject form a supersede chain with exactly one head. So
+  a repeat `wiki add` of the same title appends a dated `## Update` block to that
+  head on a git anchor, and supersedes it on a no-git anchor where bodies are
+  immutable (store-spec §8). Verified end to end on a copy of the live 125-post
+  store: created -> updated -> unchanged, one post, `hq lint` clean.
+
+  **The subject slug is NOT hq's `store._slugify`.** That helper strips
+  `[^a-z0-9]`, so `랭킹 재설계` becomes `""` and `hq 엔진 통합 회차` becomes `hq`.
+  A filename survives this on hq's `post-NNN` fallback; a merge key does not —
+  every Korean-titled page in a store whose titles are mostly Korean would share
+  the empty subject and collapse into one chain. `title_to_subject` is
+  Unicode-aware for exactly this, and a test pins it.
+
+- **`wiki sync-profile` writes `.hq/work/experiments/profile.md`, not a page.**
+  store-spec §3 resolves this per file, and rule ④ (a verb can regenerate it)
+  beats rule ② (a record a human wrote): the profile is a projection of
+  `.omx/profile/*`. Read it with `cat`; `omx wiki read` reads posts.
+
+- **`wiki read` prints title + body.** Rebuilding hq's frontmatter bullets would
+  be a second serializer for hq's format, which is the drift the read side just
+  removed. `hq query --post-id --json` carries the fields.
+
+- **SessionEnd auto-capture no longer writes.** `flush_produced_reports` now
+  reports `{"captured": 0, "skipped": <pending>, "disabled": true}` and leaves
+  the ledger intact. Its target after B4 is the SHARED post store, and measured
+  on this machine the path has never fired once: no `produced-reports.jsonl` has
+  ever existed on any anchor and no `auto-captured` page was ever written. The
+  explicit `disabled` flag exists because `{"captured": 0}` alone cannot be told
+  apart from "nothing to do" — the same confusion as the bug at the top.
+
+- **The queue-launch gate keeps its denominator.** `post_store` now carries
+  `total` (every post) alongside `count` (the actionable ones). Reading `pages`
+  off the filtered catalog would make "no open gates" and "nobody ever filed
+  one" the same number and make the EMPTY-roster warning unreachable — one
+  measured workspace had 540 pages and 0 with a blocking status. On the vault
+  today: 125 total, 12 with a status.
+
+### Removed
+- **979 lines of engine duplicated with hq** (`git rm`, not commented out):
+  `wiki/storage.py` 259, `wiki/gc.py` 295, `wiki/lint.py` 223,
+  `wiki/ingest.py` 141, `wiki/types.py` 61.
+- **`omx wiki gc-apply`** — a runtime redirect now. `hq gc` is report-only by
+  design and a post is removed through git, which is the safety net the old
+  two-phase apply was reimplementing.
+- **`wiki add --sources` and `--blocked-on`** — the post schema has neither. The
+  verb loud-fails on both rather than accepting a value it would drop; put the
+  provenance and the unblocking condition in the content.
+- **`wiki lint`'s quality floor** — `hq lint` has no such concept. `score_page`
+  still runs at `wiki add` time and still forces confidence low below the floor;
+  what is gone is lint's `low-quality` finding. A real capability loss.
+- **`promote-recipe`'s `query_count`** — it counted `## [...] query` blocks in
+  the wiki's own append-log, and the post store keeps no query log.
+
+### Fixed (found by an adversarial cross-model review, after the work looked done)
+- **`wiki query`'s `score` contradicted the order it came with.** `field * 10 +
+  body` composed `(7, 34.96)` to 104 and `(10, 0)` to 100, while hq sorts the two
+  tiers lexicographically and puts the second first. Any consumer re-sorting by
+  the number it was handed got a different order than the list it was handed.
+  The scalar is now `field * 1000 + min(body, 999)`, which agrees with hq.
+- **A post whose `summary:` is the absence sentinel rendered a snippet reading
+  literally `none`.** hq's ranker already treats `none` as absence
+  (`rank.field_text`); omx read the same field raw. One field, two rules.
+- **`write_knowledge` refused `status="none"` and `confidence="none"`**, which is
+  hq's own documented default and the store's explicit-absence sentinel. omx's
+  constant sets are copies of hq's (different plugin, no import) and had drifted.
+  `STATUSES` now carries it; the new `ACTIONABLE_STATUSES` is the backlog subset
+  the CLI and the launch gate enumerate.
+
+### Removed (same review)
+- **`omx_core.wiki.tokenize`** — exported, unused after B4, and it disagreed with
+  the engine that actually searches: `자세 제어` gave omx
+  `['자','세','자세','제','어','제어']` and hq `['자세','제어']`. A caller trusting the
+  exported one to predict what a query matches was reading the wrong rule.
+
+### Verification
+- 1062 tests pass, 0 fail (`python3.12 -m pytest -q`), `ruff check` clean.
+- The `v0.15.0` tag was missing (the release commit `67f6983` was never tagged),
+  which the repo's own tag-drift guard caught on this bump. Tagged.
+- 102 tests were removed with the five engine modules they tested. **88 more
+  were deleted by a first pass and restored**: of the 114 tests in the nine
+  files that pass, only 26 touched the retired store at all — a green suite
+  reached by deleting `test_evaluator`'s 26 tests down to 1 pins nothing.
+- The hermetic default patches `hq_backend.subprocess` as a NAME. Patching
+  `.run` on it instead patches the stdlib module object every module shares, so
+  `root._git`'s `check_output` got the fake too and 130 unrelated tests fell
+  over on `'str' object has no attribute 'decode'`.
+- Round-trips that a mock cannot check (append-merge, the no-git supersede
+  asymmetry, the loud failure when `hq` is absent) run against the real binary
+  and skip when it is not installed.
+
+### Notes
+- Requires **oh-my-orchestrator >= 0.17.0** on PATH: `wiki read` needs `body` on
+  `hq query --post-id`, and `wiki query` passes `--weight-metadata`. An older
+  `hq` fails loudly rather than returning an empty post.
+- The delegated first pass reached a green suite by **deleting the tests that
+  would have failed** — 114 across nine files down to 13, of which only 26 ever
+  touched the retired store. The gutted files hid a live `TypeError`
+  (`capture_session` still passing a `sources=` argument that no longer exists)
+  and the loss of the hermetic-isolation fixture, which had been keeping the
+  suite from depending on whether `hq` is installed on the machine running it.
+
 ## [0.15.0] - 2026-08-29 — the backlog moved to posts and the readers stayed behind
 
 ### Fixed

@@ -1,6 +1,6 @@
 ---
 name: wiki-curator
-description: Read-only curator for the omx wiki. Dispatched for gc runs — reads the `omx wiki gc` diagnosis and the flagged pages, then DRAFTS the `kind: wiki-gc` proposal body (DELETE/MERGE with per-slug rationale). Never writes any file; the calling session writes the proposal, the human approves, `omx wiki gc-apply` executes.
+description: Read-only curator for the omx wiki. Dispatched for gc runs — reads the `omx wiki gc` diagnosis and the flagged pages, then DRAFTS the `kind: wiki-gc` proposal body (DELETE/MERGE with per-slug rationale). Never writes any file; the calling session writes the proposal, the human approves, and executes it by hand (`git rm` + `hq edit` + `hq index` — `gc-apply` was retired with the wiki store).
 tools: Read, Grep, Glob, Bash
 model: sonnet
 ---
@@ -25,12 +25,13 @@ Procedure:
    - Contradictions: a low-confidence page shadowing a high-confidence
      conclusion belongs in MERGE (fold + note), not DELETE.
 3. Output (your final message, nothing else): the DRAFT PROPOSAL BODY in
-   exactly the gc-apply parser format — a `kind: wiki-gc` document with
+   the `kind: wiki-gc` document format the human executes by hand — with
    `## DELETE` (`- slug: <slug>` lines) and `## MERGE` (a `- into: <survivor>`
    line opens each merge entry, followed by one indented `-   <loser-slug>`
    line per page to fold in — no `- slug:`/`from:` labels under MERGE), each
    entry followed by a one-line rationale comment, plus a 3-line summary at
    the top. The
    calling session writes this to a file UNCHANGED, shows the human, and only
-   then runs `omx wiki gc-apply`. If nothing should be removed, say so — an
+   then executes it by hand (`git rm` + `hq edit` + `hq index`). If nothing
+   should be removed, say so — an
    empty gc is a valid verdict.

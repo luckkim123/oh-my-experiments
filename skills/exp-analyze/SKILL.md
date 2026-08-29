@@ -437,12 +437,15 @@ This prints `{"candidates": [...]}` and writes NOTHING. Choose the durable, reus
 ones (not run-specific noise), then write each chosen page (you decide
 title/category/tags - the core does not):
 
-`omx wiki add --root <root> --title "<short reusable title>" --category <pattern|debugging|decision|reference> --confidence <high|medium|low> --tags "<axis>,<symptom>" --sources "<analysis_id>" --content "<the finding, with its evidence>"`
+`omx wiki add --root <root> --title "<short reusable title>" --category <pattern|debugging|decision|reference> --confidence <high|medium|low> --tags "<axis>,<symptom>" --content "<the finding, with its evidence>"`
+
+`--sources` is gone: the post schema has no provenance list, and the verb loud-fails on
+the flag rather than dropping the value silently. Put the analysis id in the content.
 
 Auto-capture discipline (append-only, non-destructive, frictionless):
 - **Automatic, not gated.** Append at analysis end without asking; `omx wiki add`
-  merges (append-only, never overwrites — same slug unions tags/sources, keeps the
-  higher confidence). Honor `--no-wiki` to skip entirely.
+  merges (append-only, never overwrites — the same TITLE becomes one `subject:` chain and
+  a re-add appends a dated `## Update` block to the head post). Honor `--no-wiki` to skip.
 - **Dedupe before writing.** If the same finding already lives in a page, the merge
   appends a dated update rather than a duplicate — that is fine; do not hand-create a
   second page for the same topic.
@@ -452,8 +455,8 @@ Auto-capture discipline (append-only, non-destructive, frictionless):
 
 ### Decide `--status` on every page you write — this field is the launch gate's only input
 
-`omx wiki add` takes `--status` and `--blocked-on`, and **four mechanisms read that
-field while nothing else writes it**: `queue-launch` REFUSES on an open
+`omx wiki add` takes `--status`, and **four mechanisms read that field while nothing
+else writes it**: `queue-launch` REFUSES on an open
 `needs-apply-before-retrain`, the per-turn route hook injects the open roster into
 context, and exp-design / exp-loop enumerate it before choosing the next probe. A page
 written without a status is invisible to all four. Analysis is where findings are made,
@@ -471,7 +474,7 @@ So make the status an explicit call per page. The *decision* is required; a stat
 |:--|:--|
 | knowledge with nothing pending — a pattern, a threshold, a cause now settled | omit `--status` (the honest default, and most pages) |
 | an open lead — something worth testing that nobody has tested | `--status needs-experiment` |
-| a correction NOT yet in the code, which makes any dependent run's numbers wrong until it is applied | `--status needs-apply-before-retrain --blocked-on "<what unblocks it>"` |
+| a correction NOT yet in the code, which makes any dependent run's numbers wrong until it is applied | `--status needs-apply-before-retrain` (say what unblocks it in the content — `--blocked-on` is gone, the post schema has no such field) |
 
 **Reserve the blocking value narrowly.** It refuses every future launch until resolved
 or `--ack-gate`d, so it is for facts that INVALIDATE dependent runs (a wrong TAM row, a
@@ -525,10 +528,11 @@ When THIS analysis re-used a debugging-category wiki page as a step-by-step
 procedure (not merely as context), consider promotion. Gate on OMC's three
 questions — not Googleable / workspace-specific / took real effort — and ASK
 THE USER before promoting. On approval:
-`omx wiki promote-recipe --slug <debugging-page> --root <root>` (the JSON
-reports `query_count` — cite it when asking). The recipe file may then be
-restructured (symptom -> checks -> plots -> decision) — it is not a gated
-deliverable.
+`omx wiki promote-recipe --slug <debugging-post-id> --root <root>`. `--slug` is a post
+id (`finding/007`) now, and the JSON no longer reports `query_count`: it counted hits in
+the wiki's own query log and the post store keeps no such log, so the usage signal is
+gone — make the case from the analysis itself. The recipe file may then be restructured
+(symptom -> checks -> plots -> decision) — it is not a gated deliverable.
 
 ## Record engine-gap specs — the analysis ENGINE specializes too (not just knowledge)
 
@@ -591,20 +595,22 @@ the core never decides *what* to remove; you do, and a human approves.
    carries a one-line reason.
 4. STOP. The user reviews the proposal and deletes any line they disagree with —
    editing the file IS the approval. Never apply without this human gate.
-5. `omx wiki gc-apply --proposal <file> --root <r>` — two-phase: validates the whole
-   proposal (slugs exist, git-tracked, no self-merge) then executes under the wiki lock.
-   It REFUSES to touch any page git does not track (so `git restore` always recovers).
-   The core executes but does not commit — commit the result yourself after review.
+5. **Execute it by hand — `omx wiki gc-apply` is gone.** `hq gc` is report-only by
+   design, and a post is removed through git, which is the safety net the old two-phase
+   apply was reimplementing: `git rm <post file>` per approved DELETE, fold the MERGE
+   losers into the survivor's body with `hq edit --reason`, then `hq index`. Commit the
+   result yourself after review.
 
-Never hand-delete or hand-merge wiki pages with Edit/Write/rm: that bypasses the lock,
-the index regeneration, the append-log, and the git-recovery guard.
+Never rewrite a post with Edit/Write: that bypasses `hq`'s store lock, the INDEX
+regeneration, and the schema `hq lint` enforces. `git rm` is the one exception, and only
+for a delete the human approved above.
 
 For non-trivial gc runs, dispatch the `wiki-curator` agent (read-only) instead
 of drafting the proposal in this session: it runs the gc/lint diagnosis, reads
 every flagged page, and returns the `kind: wiki-gc` proposal BODY. Write its
 output to the proposal file UNCHANGED (author != applier), get the human
-approval, then `omx wiki gc-apply` as usual. The two-phase gc path itself is
-unchanged — the curator replaces only the hand-drafting step.
+approval, then execute by hand as in step 5. The curator replaces only the
+hand-drafting step.
 
 ## Completeness gate — the backstop (GAP 4); the PRE-WRITE checklist is the real fix
 

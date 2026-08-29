@@ -63,7 +63,19 @@ def test_unstamped_run_appends_nothing(tmp_path, capsys):
     assert not OmxPaths(root=str(tmp_path)).produced_reports_ledger().exists()
 
 
-# --- T4: flush_produced_reports (spec 2.2) ---
+# --- T4: flush_produced_reports, now DISABLED (r6 D2) ---
+#
+# The rescue path used to capture every stamped report into a session-log stub
+# and truncate the ledger. That write now lands in the SHARED hq post store, so
+# it was turned off deliberately rather than pointed at the new target: measured
+# on this machine, no `produced-reports.jsonl` has ever existed and no
+# auto-captured page was ever written, so the capability has never fired once --
+# and building a flood guard, or a staging layer, for a code path with zero
+# observed invocations is speculative work.
+#
+# The integrity/dedupe/torn-line tests went with the loop they were testing.
+# What replaces them is the contract of the disabled path: it writes nothing,
+# it truncates nothing, and it says so.
 
 def _stamped_report_with_ledger(tmp_path) -> Path:
     """Build a stamped analysis report AND its ledger entry via the real verbs."""
@@ -74,69 +86,40 @@ def _stamped_report_with_ledger(tmp_path) -> Path:
     return report
 
 
-def test_flush_captures_and_truncates(tmp_path, capsys):
+def test_flush_writes_nothing_and_keeps_the_ledger(tmp_path, capsys):
     from omx_core.wiki.capture import flush_produced_reports
     _stamped_report_with_ledger(tmp_path)
     capsys.readouterr()
     paths = OmxPaths(root=str(tmp_path))
+    before = paths.produced_reports_ledger().read_text()
     res = flush_produced_reports(paths, now="2026-07-07T12:00:00")
-    assert res == {"captured": 1, "skipped": 0}
-    # idempotent bookkeeping: ledger truncated after processing
-    assert paths.produced_reports_ledger().read_text() == ""
-    # a session-log stub page exists
-    from omx_core.wiki.storage import list_pages, read_page
-    pages = [read_page(paths, slug) for slug in list_pages(paths)]
-    assert any(p.category == "session-log" for p in pages)
+    assert res == {"captured": 0, "skipped": 1, "disabled": True}
+    # Not truncated: the disabled path must stay reversible without having
+    # thrown away the record of what it would have captured.
+    assert paths.produced_reports_ledger().read_text() == before
+    assert not (tmp_path / ".hq" / "community" / "posts").exists()
 
 
-def test_flush_missing_report_skipped_not_fatal(tmp_path, capsys):
+def test_flush_says_disabled_rather_than_reporting_a_quiet_zero(tmp_path):
+    """`{"captured": 0}` alone is indistinguishable from "nothing to do", and
+    this repo has lost three tools to reading a zero as an absence. The flag is
+    the difference between "off" and "empty"."""
     from omx_core.wiki.capture import flush_produced_reports
-    report = _stamped_report_with_ledger(tmp_path)
-    capsys.readouterr()
-    report.unlink()
     res = flush_produced_reports(OmxPaths(root=str(tmp_path)), now="2026-07-07T12:00:00")
-    assert res == {"captured": 0, "skipped": 1}
+    assert res == {"captured": 0, "skipped": 0, "disabled": True}
 
 
-def test_flush_dedupes_reports_across_lines(tmp_path, capsys):
-    from omx_core import cli
+def test_flush_counts_what_it_did_not_capture(tmp_path, capsys):
+    """The pending count is the whole reason to keep reading the ledger: it is
+    how anyone finds out the disabled path has a backlog."""
     from omx_core.wiki.capture import flush_produced_reports
     report = _stamped_report_with_ledger(tmp_path)
-    cli.main(["report-coverage", "--path", str(report), "--root", str(tmp_path)])  # 2nd stamp
+    from omx_core import cli
+    cli.main(["report-coverage", "--path", str(report), "--root", str(tmp_path)])
     capsys.readouterr()
     paths = OmxPaths(root=str(tmp_path))
     assert len(paths.produced_reports_ledger().read_text().splitlines()) == 2
-    res = flush_produced_reports(paths, now="2026-07-07T12:00:00")
-    assert res == {"captured": 1, "skipped": 0}
-
-
-def test_flush_torn_line_warns_and_continues(tmp_path, capsys):
-    from omx_core.wiki.capture import flush_produced_reports
-    _stamped_report_with_ledger(tmp_path)
-    capsys.readouterr()
-    paths = OmxPaths(root=str(tmp_path))
-    with open(paths.produced_reports_ledger(), "a", encoding="utf-8") as fh:
-        fh.write('{"report": "/torn')  # torn last line
-    res = flush_produced_reports(paths, now="2026-07-07T12:00:00")
-    assert res["captured"] == 1
-    assert "unparseable" in capsys.readouterr().err
-
-
-def test_flush_no_ledger_is_zero(tmp_path):
-    from omx_core.wiki.capture import flush_produced_reports
-    res = flush_produced_reports(OmxPaths(root=str(tmp_path)), now="2026-07-07T12:00:00")
-    assert res == {"captured": 0, "skipped": 0}
-
-
-def test_flush_tampered_report_skipped(tmp_path, capsys):
-    # Post-stamp tamper -> integrity mismatch -> skip, never loud-fail (rescue path).
-    from omx_core.wiki.capture import flush_produced_reports
-    report = _stamped_report_with_ledger(tmp_path)
-    capsys.readouterr()
-    report.write_text(report.read_text() + "\ntampered\n", encoding="utf-8")
-    res = flush_produced_reports(OmxPaths(root=str(tmp_path)), now="2026-07-07T12:00:00")
-    assert res == {"captured": 0, "skipped": 1}
-    assert "integrity" in capsys.readouterr().err
+    assert flush_produced_reports(paths, now="2026-07-07T12:00:00")["skipped"] == 2
 
 
 def test_cli_capture_flush_verb(tmp_path, capsys):
@@ -146,4 +129,4 @@ def test_cli_capture_flush_verb(tmp_path, capsys):
     rc = cli.main(["wiki", "capture-flush", "--root", str(tmp_path)])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0
-    assert out == {"captured": 1, "skipped": 0}
+    assert out == {"captured": 0, "skipped": 1, "disabled": True}

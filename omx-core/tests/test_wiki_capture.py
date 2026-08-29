@@ -1,6 +1,5 @@
 """Tests for `omx wiki capture-session` (#11, spec 3.7)."""
 import json
-import os
 
 from omx_core.cli import main
 
@@ -21,29 +20,40 @@ def _write_report(tmp_path):
     return rp
 
 
-def test_capture_writes_stub_pages(tmp_path, capsys):
+def _anchor(root):
+    (root / ".hq").mkdir(exist_ok=True)
+    (root / ".hq" / ".anchor").write_text("id: test-anchor\n")
+    (root / ".git").mkdir(exist_ok=True)     # git anchor -> edit, not supersede
+
+
+def test_capture_writes_stub_posts(tmp_path, capsys, live_hq):
     rp = _write_report(tmp_path)
+    _anchor(tmp_path)
     rc = main(["wiki", "capture-session", "--root", str(tmp_path),
                "--from-report", str(rp), "--run-id", "run_a"])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out["captured"] == 2 and len(out["slugs"]) == 2
-    from omx_core.omx_paths import OmxPaths
-    from omx_core.wiki import storage
-    page = storage.read_page(OmxPaths(root=tmp_path), out["slugs"][0])
-    assert page.category == "session-log" and page.confidence == "low"
-    assert "auto-captured" in page.tags and "run_a" in page.tags
-    assert "[EVIDENCE:" in page.content and "source report:" in page.content
+    from omx_core.wiki.hq_backend import read_post
+    post = read_post(tmp_path, out["slugs"][0])
+    fields = post["fields"]
+    assert fields["topic"] == "session-log" and fields["confidence"] == "low"
+    assert "auto-captured" in fields["keywords"] and "run_a" in fields["keywords"]
+    assert "[EVIDENCE:" in post["body"] and "source report:" in post["body"]
 
 
-def test_capture_is_rerun_safe(tmp_path, capsys):
+def test_capture_is_rerun_safe(tmp_path, capsys, live_hq):
+    """INV-2 append-merge survives the move: the second run must merge into the
+    same subject chain, not fork a second post per finding."""
     rp = _write_report(tmp_path)
+    _anchor(tmp_path)
     main(["wiki", "capture-session", "--root", str(tmp_path), "--from-report", str(rp)])
-    capsys.readouterr()
+    first = json.loads(capsys.readouterr().out)["slugs"]
     rc = main(["wiki", "capture-session", "--root", str(tmp_path), "--from-report", str(rp)])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["captured"] == 2  # merged, not forked (INV-2 append-merge)
+    assert out["captured"] == 2
+    assert out["slugs"] == first          # merged, not forked
 
 
 def test_capture_loud_fails_on_malformed(tmp_path, capsys):
@@ -65,31 +75,25 @@ def test_capture_loud_fails_on_tampered_report(tmp_path, capsys):
     assert rc == 2
 
 
-def test_flush_dedupes_two_spellings_of_one_report_path(tmp_path, capsys):
-    """One report reachable by two path spellings must be captured once.
+def test_flush_no_longer_captures_and_keeps_the_ledger(tmp_path, capsys):
+    """SessionEnd auto-capture is off (r6 D2): it never fired on this machine --
+    no `produced-reports.jsonl` has ever existed here and no auto-captured page
+    was ever written -- and after B4 its target is the SHARED post store, so
+    turning it on for the first time by accident is not a thing to do quietly.
 
-    flush keyed dedupe on the raw ledger string, so a relative and an absolute
-    spelling of the same file were two keys. The content embeds `source report:
-    <ref>`, so the second capture is NOT byte-identical and slips past append
-    dedupe -- the page ends up with a duplicated block differing only in that
-    line. Measured on one workspace: 141 of 550 pages.
+    The ledger is deliberately NOT truncated: the disabled path has to be
+    reversible without having discarded the evidence of what it would have done.
     """
     from omx_core.omx_paths import OmxPaths
-    from omx_core.wiki import capture, storage
+    from omx_core.wiki import capture
 
     rp = _write_report(tmp_path)
     paths = OmxPaths(root=tmp_path)
     ledger = paths.produced_reports_ledger()
     ledger.parent.mkdir(parents=True, exist_ok=True)
-    rel = os.path.relpath(rp, os.getcwd())
-    ledger.write_text(
-        json.dumps({"report": str(rp)}) + "\n" +          # absolute
-        json.dumps({"report": rel}) + "\n"                # same file, relative
-    )
+    ledger.write_text(json.dumps({"report": str(rp)}) + "\n")
 
     res = capture.flush_produced_reports(paths, now="2026-05-31T10:00:00")
-    assert res["captured"] == 1, "the same file under two spellings is one report"
-
-    slug = storage.list_pages(paths)[0]
-    page = storage.read_page(paths, slug)
-    assert page.content.count("source report:") == 1
+    assert res == {"captured": 0, "skipped": 1, "disabled": True}
+    assert ledger.read_text().strip(), "the ledger must survive the disabled flush"
+    assert not (tmp_path / ".hq" / "community" / "posts").exists()

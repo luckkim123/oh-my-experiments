@@ -1,122 +1,104 @@
 """T12: promote-recipe (#15, spec 2.6) — mechanical promotion of a debugging
-wiki page into a diagnostic recipe, with the query-log usage signal. The OMC
-3-question gate is prompt-side; the verb is a reversible file creation."""
+post into a diagnostic recipe. The OMC 3-question gate is prompt-side; the verb
+is a reversible file creation.
+
+The three `count_query_hits` tests that used to live here are gone with the
+function. It counted `## [...] query` blocks in the wiki's own query log, and
+hq keeps no query log — so the usage signal is a real capability loss (recorded
+in the CHANGELOG), not a test to rewrite. `query_count` left the recipe
+frontmatter with it.
+"""
 import json
 from pathlib import Path
 
 import pytest
+from conftest import hq_stub
 from omx_core.omx_paths import OmxError, OmxPaths
-from omx_core.wiki.ingest import ingest_knowledge
-from omx_core.wiki.recipe import count_query_hits, promote_recipe
+from omx_core.wiki import hq_backend
+from omx_core.wiki.recipe import promote_recipe
 
 NOW = "2026-07-07T12:00:00"
+SLUG = "finding/007"
+BODY = "Symptom: z_std collapses.\n\nCheck: run z_sweep per dim."
 
 
 def _paths(tmp_path):
     return OmxPaths(root=str(tmp_path))
 
 
-def _add_debug_page(paths, title="Encoder z-collapse diagnosis"):
-    res = ingest_knowledge(
-        paths, now=NOW, title=title,
-        content="Symptom: z_std collapses.\n\nCheck: run z_sweep per dim.",
-        tags=["encoder"], category="debugging", confidence="high",
-        sources=["report:x"], quality_score=80, quality_reasons=[])
-    return res["slug"]
+@pytest.fixture
+def hq_post(monkeypatch):
+    """Serve one post through the hq seam; `topic` is what promote-recipe gates on."""
+    import subprocess as _sp
+
+    state = {"topic": "debugging", "present": True}
+    monkeypatch.undo()
+
+    def _run(cmd, **kw):
+        if not state["present"]:
+            payload = {"post": None}
+        else:
+            payload = {"post": {"id": SLUG, "title": "Encoder z-collapse diagnosis",
+                                "fields": {"topic": state["topic"]}, "body": BODY}}
+        return _sp.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(hq_backend, "subprocess", hq_stub(_run))
+    return state
 
 
 def test_recipes_dir_path(tmp_path):
     assert _paths(tmp_path).recipes_dir() == tmp_path / ".omx" / "recipes"
 
 
-def test_count_query_hits_counts_pages_membership(tmp_path):
+def test_promote_writes_recipe_with_frontmatter(tmp_path, hq_post):
     paths = _paths(tmp_path)
-    slug = _add_debug_page(paths)
-    log = paths.wiki_log()
-    log.parent.mkdir(parents=True, exist_ok=True)
-    log.write_text(
-        "# Wiki Log\n\n"
-        f"## [{NOW}] query\n- **Pages:** {slug}, other-page\n- **Summary:** q1\n\n"
-        f"## [{NOW}] query\n- **Pages:** other-page\n- **Summary:** q2\n\n"
-        f"## [{NOW}] add\n- **Pages:** {slug}\n- **Summary:** not a query\n\n"
-        f"## [{NOW}] query\n- **Pages:** {slug}\n- **Summary:** q3\n\n",
-        encoding="utf-8")
-    assert count_query_hits(paths, slug) == 2
-
-
-def test_count_query_hits_no_log_is_zero(tmp_path):
-    paths = _paths(tmp_path)
-    assert count_query_hits(paths, "whatever") == 0
-
-
-def test_count_query_hits_via_real_append_log(tmp_path):
-    """Round-trip check: exercise the REAL storage.append_log writer (the
-    actual query-log write path) rather than a hand-typed fixture string, so
-    the parser is checked against the real format, not the brief's paraphrase."""
-    from omx_core.wiki import storage
-
-    paths = _paths(tmp_path)
-    slug = _add_debug_page(paths)
-    paths.wiki_log().parent.mkdir(parents=True, exist_ok=True)
-    storage.append_log(paths, now=NOW, operation="query", pages=[slug, "other-page"],
-                       summary="q1")
-    storage.append_log(paths, now=NOW, operation="query", pages=["other-page"],
-                       summary="q2")
-    storage.append_log(paths, now=NOW, operation="add", pages=[slug],
-                       summary="not a query")
-    storage.append_log(paths, now=NOW, operation="query", pages=[slug],
-                       summary="q3")
-    assert count_query_hits(paths, slug) == 2
-
-
-def test_promote_writes_recipe_with_frontmatter(tmp_path):
-    paths = _paths(tmp_path)
-    slug = _add_debug_page(paths)
-    res = promote_recipe(paths, slug=slug, now=NOW)
-    expected = paths.recipes_dir() / (slug.removesuffix(".md") + ".md")
-    assert res["recipe"] == str(expected) and res["query_count"] == 0
-    assert not res["recipe"].endswith(".md.md")
+    res = promote_recipe(paths, slug=SLUG, now=NOW)
+    expected = paths.recipes_dir() / "finding-007.md"
+    assert res["recipe"] == str(expected)
     assert Path(res["recipe"]).name.count(".md") == 1
-    recipe = expected
-    text = recipe.read_text(encoding="utf-8")
+    text = expected.read_text(encoding="utf-8")
     assert text.startswith("---")
-    assert f"source_slug: {slug}" in text
+    assert f"source_slug: {SLUG}" in text
     assert f"promoted_at: {NOW}" in text
     assert "Symptom: z_std collapses." in text
 
 
-def test_promote_custom_name_and_force(tmp_path):
+def test_a_post_id_never_becomes_a_path_separator(tmp_path, hq_post):
+    """`finding/007` as a filename would nest the recipe under a per-category
+    directory, and a `/` inside a filename component is a traversal seam."""
+    res = promote_recipe(_paths(tmp_path), slug=SLUG, now=NOW)
+    assert "/finding/" not in res["recipe"]
+    assert Path(res["recipe"]).parent == _paths(tmp_path).recipes_dir()
+
+
+def test_promote_custom_name_and_force(tmp_path, hq_post):
     paths = _paths(tmp_path)
-    slug = _add_debug_page(paths)
-    res = promote_recipe(paths, slug=slug, now=NOW, name="z-collapse")
+    res = promote_recipe(paths, slug=SLUG, now=NOW, name="z-collapse")
     assert res["recipe"].endswith("z-collapse.md")
     with pytest.raises(OmxError):
-        promote_recipe(paths, slug=slug, now=NOW, name="z-collapse")
-    promote_recipe(paths, slug=slug, now=NOW, name="z-collapse", force=True)
+        promote_recipe(paths, slug=SLUG, now=NOW, name="z-collapse")
+    promote_recipe(paths, slug=SLUG, now=NOW, name="z-collapse", force=True)
 
 
-def test_promote_rejects_missing_page(tmp_path):
+def test_promote_rejects_missing_page(tmp_path, hq_post):
+    hq_post["present"] = False
     with pytest.raises(OmxError):
         promote_recipe(_paths(tmp_path), slug="nope", now=NOW)
 
 
-def test_promote_rejects_non_debugging_category(tmp_path):
-    paths = _paths(tmp_path)
-    res = ingest_knowledge(
-        paths, now=NOW, title="A convention", content="x", tags=[],
-        category="convention", confidence="high", sources=[],
-        quality_score=80, quality_reasons=[])
-    with pytest.raises(OmxError):
-        promote_recipe(paths, slug=res["slug"], now=NOW)
+def test_promote_rejects_a_non_debugging_topic(tmp_path, hq_post):
+    hq_post["topic"] = "convention"
+    with pytest.raises(OmxError) as exc:
+        promote_recipe(_paths(tmp_path), slug=SLUG, now=NOW)
+    # The message, not just the type: the gate and "post not found" both raise
+    # OmxError, and a type-only assertion passes when the wrong one fires.
+    assert "debugging" in str(exc.value)
 
 
-def test_cli_promote_recipe(tmp_path, capsys):
+def test_cli_promote_recipe(tmp_path, capsys, hq_post):
     from omx_core import cli
-    paths = _paths(tmp_path)
-    slug = _add_debug_page(paths)
     capsys.readouterr()
-    rc = cli.main(["wiki", "promote-recipe", "--slug", slug, "--root", str(tmp_path)])
+    rc = cli.main(["wiki", "promote-recipe", "--slug", SLUG, "--root", str(tmp_path)])
     out = json.loads(capsys.readouterr().out)
-    assert rc == 0 and out["query_count"] == 0
-    assert out["recipe"].endswith(slug.removesuffix(".md") + ".md")
-    assert not out["recipe"].endswith(".md.md")
+    assert rc == 0
+    assert out["recipe"].endswith("finding-007.md")

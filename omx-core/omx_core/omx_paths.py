@@ -461,6 +461,10 @@ class OmxPaths:
         return _resolve(self.root, config_dir(self.root) / "produced-reports.jsonl",
                       self.omx_dir / "state" / "produced-reports.jsonl")
 
+    def profile_projection(self) -> Path:
+        """Regenerable workspace profile: always hq's work-layer projection."""
+        return Path(self.root) / _WORK_REL / "profile.md"
+
     # --- packaged reference profiles (committed; outside .omx, ships with pkg) ---
     @property
     def reference_dir(self) -> Path:

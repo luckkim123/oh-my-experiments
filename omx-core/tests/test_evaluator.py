@@ -144,10 +144,9 @@ def test_success_record_has_no_fault_class(tmp_path):
 
 # --- R4 T9: omx eval error auto-appends a debugging wiki stub (#27) ---
 
-def test_eval_error_appends_wiki_stub(tmp_path, capsys):
+def test_eval_error_appends_wiki_stub(tmp_path, capsys, live_hq):
     from omx_core import cli
-    from omx_core.omx_paths import OmxPaths
-    from omx_core.wiki.storage import list_pages
+    from omx_core.wiki.hq_backend import hq_json
     # a sealed profile is needed so --root doesn't rc-2 on the seal preflight;
     # build the minimal profile + seal the way the seal tests do, OR pass a root
     # with a profile whose seal is ABSENT (eval warns but proceeds). Absent-seal
@@ -155,36 +154,39 @@ def test_eval_error_appends_wiki_stub(tmp_path, capsys):
     prof = tmp_path / ".omx" / "profile"
     prof.mkdir(parents=True)
     (prof / "evaluator.sh").write_text("#!/bin/sh\nexit 3\n")
+    (tmp_path / ".hq").mkdir()
+    (tmp_path / ".hq" / ".anchor").write_text("id: t\n")
+    (tmp_path / ".git").mkdir()
     capsys.readouterr()
     rc = cli.main(["eval", "--command", "exit 3", "--cwd", str(tmp_path),
                    "--root", str(tmp_path)])
     assert rc == 1  # evaluator-broke rc is unchanged
-    paths = OmxPaths(root=str(tmp_path))
-    pages = list_pages(paths)
-    assert any("evaluator_fault_nonzero_exit" in s or "evaluator-fault-nonzero_exit" in s
-               for s in pages), pages
+    posts = hq_json(tmp_path, "query")["posts"]
+    assert any("evaluator fault" in p["title"] for p in posts), posts
 
 
-def test_eval_error_stub_capture_is_idempotent(tmp_path, capsys):
+def test_eval_error_stub_capture_is_idempotent(tmp_path, capsys, live_hq):
     from omx_core import cli
-    from omx_core.omx_paths import OmxPaths
-    from omx_core.wiki.storage import list_pages
+    from omx_core.wiki.hq_backend import hq_json
     prof = tmp_path / ".omx" / "profile"
     prof.mkdir(parents=True)
     (prof / "evaluator.sh").write_text("#!/bin/sh\nexit 3\n")
+    (tmp_path / ".hq").mkdir()
+    (tmp_path / ".hq" / ".anchor").write_text("id: t\n")
+    (tmp_path / ".git").mkdir()
     for _ in range(2):
         cli.main(["eval", "--command", "exit 3", "--cwd", str(tmp_path),
                   "--root", str(tmp_path)])
     capsys.readouterr()
-    paths = OmxPaths(root=str(tmp_path))
-    fault_pages = [s for s in list_pages(paths) if "nonzero_exit" in s]
-    assert len(fault_pages) == 1  # append-merge: recurrence strengthens ONE page
+    faults = [p for p in hq_json(tmp_path, "query")["posts"]
+              if "evaluator fault" in p["title"]]
+    assert len(faults) == 1  # append-merge: recurrence strengthens ONE post
 
 
 def test_eval_error_capture_failure_is_nonfatal(tmp_path, capsys, monkeypatch):
     # a capture exception must NOT change the eval rc (grading never breaks on
-    # knowledge plumbing). Poison ingest_knowledge to raise.
-    import omx_core.wiki.ingest as ingest_mod
+    # knowledge plumbing). Poison the write path to raise.
+    import omx_core.wiki.hq_backend as hq_mod
     from omx_core import cli
     prof = tmp_path / ".omx" / "profile"
     prof.mkdir(parents=True)
@@ -193,7 +195,7 @@ def test_eval_error_capture_failure_is_nonfatal(tmp_path, capsys, monkeypatch):
     def _boom(*a, **k):
         raise RuntimeError("wiki down")
 
-    monkeypatch.setattr(ingest_mod, "ingest_knowledge", _boom)
+    monkeypatch.setattr(hq_mod, "write_knowledge", _boom)
     capsys.readouterr()
     rc = cli.main(["eval", "--command", "exit 3", "--cwd", str(tmp_path),
                    "--root", str(tmp_path)])

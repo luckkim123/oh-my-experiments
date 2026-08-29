@@ -40,5 +40,5 @@ def test_loop_symbols_exported():
 
 def test_wiki_public_surface_exported():
     import omx_core
-    for name in ("WikiPage", "WikiError", "ingest_knowledge", "query_wiki", "lint_wiki"):
+    for name in ("query_wiki",):
         assert hasattr(omx_core, name), f"omx_core.{name} missing"

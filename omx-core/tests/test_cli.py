@@ -471,8 +471,12 @@ def test_loop_status_rejects_bad_max_runtime(tmp_path, capsys):
 # wiki verbs
 # ---------------------------------------------------------------------------
 
-def test_wiki_add_write_mode_creates_page(tmp_path, capsys):
+def test_wiki_add_write_mode_creates_page(tmp_path, capsys, monkeypatch):
+    import omx_core.cli as cli
     from omx_core.cli import build_parser
+    monkeypatch.setattr(cli._wiki_hq, "write_knowledge", lambda *a, **kw: {
+        "action": "created", "slug": "finding/001", "quality_score": 40,
+        "quality_reasons": []})
     args = build_parser().parse_args(
         ["wiki", "add", "--root", str(tmp_path), "--title", "Roll heavy-tail",
          "--category", "pattern", "--tags", "roll,heavy-tail",
@@ -481,7 +485,7 @@ def test_wiki_add_write_mode_creates_page(tmp_path, capsys):
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out["action"] == "created"
-    assert out["slug"] == "roll_heavy_tail.md"
+    assert out["slug"] == "finding/001"
 
 
 def test_wiki_add_from_report_extract_only(tmp_path, capsys):
@@ -502,14 +506,11 @@ def test_wiki_add_from_report_extract_only(tmp_path, capsys):
     assert OmxPaths(root=tmp_path).wiki_dir().exists() is False
 
 
-def test_wiki_query_returns_json(tmp_path, capsys):
+def test_wiki_query_returns_json(tmp_path, capsys, monkeypatch):
+    import omx_core.cli as cli
     from omx_core.cli import build_parser
-    from omx_core.omx_paths import OmxPaths
-    from omx_core.wiki import ingest
-    p = OmxPaths(root=tmp_path)
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Heavy tail",
-                            content="body", tags=[], category="pattern",
-                            confidence="high", sources=[])
+    monkeypatch.setattr(cli._wiki_query, "query_wiki", lambda *a, **kw: {
+        "n_matches": 1, "n_returned": 1, "matches": [], "corrupt_pages": []})
     args = build_parser().parse_args(["wiki", "query", "--root", str(tmp_path), "heavy tail"])
     rc = args.func(args)
     assert rc == 0
@@ -517,120 +518,106 @@ def test_wiki_query_returns_json(tmp_path, capsys):
     assert out["n_matches"] == 1
 
 
-def test_wiki_lint_returns_json(tmp_path, capsys):
+def test_wiki_lint_returns_json(tmp_path, capsys, monkeypatch):
+    import omx_core.cli as cli
     from omx_core.cli import build_parser
-    from omx_core.omx_paths import OmxPaths
-    from omx_core.wiki import ingest
-    p = OmxPaths(root=tmp_path)
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="A",
-                            content="body", tags=["roll"], category="pattern",
-                            confidence="high", sources=[])
+    monkeypatch.setattr(cli._wiki_hq, "hq_json", lambda *a: {"errors": [], "warnings": []})
     args = build_parser().parse_args(["wiki", "lint", "--root", str(tmp_path)])
     rc = args.func(args)
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
-    assert "issues" in out and "stats" in out
+    assert "errors" in out and "warnings" in out
 
 
-def test_wiki_list_returns_json(tmp_path, capsys):
+def test_wiki_list_returns_json(tmp_path, capsys, monkeypatch):
+    import omx_core.cli as cli
     from omx_core.cli import build_parser
-    from omx_core.omx_paths import OmxPaths
-    from omx_core.wiki import ingest
-    p = OmxPaths(root=tmp_path)
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="A",
-                            content="body", tags=[], category="pattern",
-                            confidence="high", sources=[])
+    monkeypatch.setattr(cli._wiki_query, "enumerate_pages", lambda *a, **kw: {
+        "pages": [{"slug": "finding/001"}], "corrupt_pages": [], "post_store": {"ok": True}})
     args = build_parser().parse_args(["wiki", "list", "--root", str(tmp_path)])
     rc = args.func(args)
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["pages"][0]["slug"] == "a.md"
+    assert out["pages"][0]["slug"] == "finding/001"
 
 
 def test_wiki_add_with_status_and_blocked_on(tmp_path, capsys):
     from omx_core.cli import build_parser
-    from omx_core.omx_paths import OmxPaths
-    from omx_core.wiki import storage
     args = build_parser().parse_args(
         ["wiki", "add", "--root", str(tmp_path), "--title", "TAM row rewrite",
          "--category", "decision", "--confidence", "high",
          "--content", "reorder ESC channels", "--status", "needs-apply-before-retrain",
          "--blocked-on", "bench-measure T200 curve"])
-    rc = args.func(args)
-    assert rc == 0
-    page = storage.read_page(OmxPaths(root=tmp_path), "tam_row_rewrite.md")
-    assert page.status == "needs-apply-before-retrain"
-    assert page.blocked_on == "bench-measure T200 curve"
+    import pytest
+    with pytest.raises(SystemExit, match="blocked-on"):
+        args.func(args)
 
 
-def test_wiki_list_status_filter_and_output_fields(tmp_path, capsys):
+def test_wiki_list_status_filter_and_output_fields(tmp_path, capsys, monkeypatch):
+    import omx_core.cli as cli
     from omx_core.cli import build_parser
-    from omx_core.omx_paths import OmxPaths
-    from omx_core.wiki import ingest
-    p = OmxPaths(root=tmp_path)
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Lead", content="b",
-                            tags=[], category="reference", confidence="high", sources=[],
-                            status="needs-experiment")
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Plain", content="b",
-                            tags=[], category="reference", confidence="high", sources=[])
+    monkeypatch.setattr(cli._wiki_query, "enumerate_pages", lambda *a, **kw: {
+        "pages": [{"slug": "finding/001", "status": "needs-experiment", "blocked_on": None}],
+        "corrupt_pages": [], "post_store": {"ok": True}})
     args = build_parser().parse_args(["wiki", "list", "--root", str(tmp_path)])
     args.func(args)
     out = json.loads(capsys.readouterr().out)
     by_slug = {pg["slug"]: pg for pg in out["pages"]}
-    assert len(by_slug) == 2
-    assert by_slug["plain.md"]["status"] is None
-    assert "blocked_on" in by_slug["lead.md"]
+    assert list(by_slug) == ["finding/001"]
+    assert by_slug["finding/001"]["status"] == "needs-experiment"
     args2 = build_parser().parse_args(
         ["wiki", "list", "--root", str(tmp_path), "--status", "needs-experiment"])
     args2.func(args2)
     out2 = json.loads(capsys.readouterr().out)
-    assert [pg["slug"] for pg in out2["pages"]] == ["lead.md"]
+    assert [pg["slug"] for pg in out2["pages"]] == ["finding/001"]
 
 
-def _seed_wiki_page(tmp_path):
-    from omx_core.omx_paths import OmxPaths
-    from omx_core.wiki import ingest
-    p = OmxPaths(root=tmp_path)
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Roll heavy-tail",
-                            content="roll axis shows a heavy-tailed error spread",
-                            tags=["roll"], category="pattern",
-                            confidence="high", sources=[])
-    return "roll_heavy_tail.md"
+def test_wiki_read_emits_title_and_body(tmp_path, capsys, monkeypatch):
+    """`omx wiki read --slug` prints title + body.
 
-
-def test_wiki_read_emits_full_page_with_frontmatter(tmp_path, capsys):
-    """`omx wiki read --slug` prints the WHOLE page (frontmatter + body) by
-    default, so a caller that found a slug via query can pull the full text
-    through a first-class verb instead of hand-reading the findings/ path."""
+    It deliberately does NOT rebuild hq's frontmatter bullets: that would be a
+    second serializer for hq's format, which is the drift B4 removed on the
+    reading side. A caller that needs the fields asks hq (`query --post-id`)."""
+    import omx_core.cli as cli
     from omx_core.cli import build_parser
-    slug = _seed_wiki_page(tmp_path)
+    monkeypatch.setattr(cli._wiki_hq, "read_post", lambda *a: {
+        "id": "finding/001", "title": "Roll axis spread",
+        "fields": {"topic": "pattern"},
+        "body": "roll axis shows a heavy-tailed error spread"})
+    slug = "finding/001"
     args = build_parser().parse_args(["wiki", "read", "--root", str(tmp_path), "--slug", slug])
     rc = args.func(args)
     assert rc == 0
     out = capsys.readouterr().out
-    assert out.startswith("---\n")                      # frontmatter block present
-    assert "category: pattern" in out                   # a frontmatter field
-    assert "roll axis shows a heavy-tailed error spread" in out  # body present
+    assert out.startswith("# Roll axis spread")
+    assert "roll axis shows a heavy-tailed error spread" in out
+    assert "- id:" not in out and "topic: pattern" not in out   # no rebuilt bullets
 
 
-def test_wiki_read_no_frontmatter_emits_body_only(tmp_path, capsys):
+def test_wiki_read_no_frontmatter_emits_body_only(tmp_path, capsys, monkeypatch):
+    import omx_core.cli as cli
     from omx_core.cli import build_parser
-    slug = _seed_wiki_page(tmp_path)
+    monkeypatch.setattr(cli._wiki_hq, "read_post", lambda *a: {
+        "id": "finding/001", "title": "t", "fields": {},
+        "body": "roll axis shows a heavy-tailed error spread"})
+    slug = "finding/001"
     args = build_parser().parse_args(
         ["wiki", "read", "--root", str(tmp_path), "--slug", slug, "--no-frontmatter"])
     rc = args.func(args)
     assert rc == 0
     out = capsys.readouterr().out
     assert "---" not in out                              # no frontmatter block
-    assert "category:" not in out                        # no frontmatter field
+    assert "topic:" not in out                           # no frontmatter field
     assert "roll axis shows a heavy-tailed error spread" in out  # body present
 
 
-def test_wiki_read_missing_slug_loud_fails(tmp_path, capsys):
+def test_wiki_read_missing_slug_loud_fails(tmp_path, capsys, monkeypatch):
     """Unknown slug must loud-fail (non-zero), NOT print empty output — else a
     caller can't tell 'page absent' from 'page empty'."""
+    import omx_core.cli as cli
     import pytest
     from omx_core.cli import build_parser
+    monkeypatch.setattr(cli._wiki_hq, "read_post", lambda *a: None)
     args = build_parser().parse_args(
         ["wiki", "read", "--root", str(tmp_path), "--slug", "does_not_exist.md"])
     with pytest.raises(SystemExit):
@@ -720,65 +707,30 @@ def test_report_coverage_cli_strict_flag_fails_shallow(tmp_path, capsys):
     assert "report coverage FAILED" in captured.err
 
 
-def test_wiki_gc_readonly_emits_lint_and_pages(tmp_path, capsys):
+def test_wiki_gc_readonly_emits_lint_and_pages(tmp_path, capsys, monkeypatch):
+    import omx_core.cli as cli
     from omx_core.cli import main
-    from omx_core.omx_paths import OmxPaths
-    from omx_core.wiki import ingest
-    ingest.ingest_knowledge(OmxPaths(root=tmp_path), now="2026-06-06T00:00:00",
-                            title="Page A", content="aaa", tags=["t"],
-                            category="reference", confidence="medium", sources=[])
+    monkeypatch.setattr(cli._wiki_hq, "hq_json", lambda *a: {"candidates": []})
     rc = main(["wiki", "gc", "--root", str(tmp_path)])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
-    assert "lint" in out and "pages" in out
-    assert out["pages"][0]["slug"] == "page_a.md"
-    assert "bytes" in out["pages"][0]
+    assert out == {"candidates": []}
 
 
 def test_wiki_gc_apply_deletes_via_proposal(tmp_path, capsys):
-    import subprocess
-
     from omx_core.cli import main
-    from omx_core.omx_paths import OmxPaths
-    from omx_core.wiki import ingest
-    paths = OmxPaths(root=tmp_path)
-    ingest.ingest_knowledge(paths, now="2026-06-06T00:00:00", title="Trash Me",
-                            content="junk", tags=["t"], category="reference",
-                            confidence="medium", sources=[])
-    # make it git-tracked so the recovery guard passes
-    for args in (["init"], ["config", "user.email", "t@t"], ["config", "user.name", "t"],
-                 ["add", "-A"], ["commit", "-m", "seed"]):
-        subprocess.run(["git", *args], cwd=str(tmp_path), check=True, capture_output=True, text=True)
-    proposal = tmp_path / "p.md"
-    proposal.write_text(
-        "---\nkind: wiki-gc\n---\n\n## DELETE\n\n- slug: trash_me.md\n  reason: junk\n\n## MERGE\n",
-        encoding="utf-8")
-    rc = main(["wiki", "gc-apply", "--proposal", str(proposal), "--root", str(tmp_path)])
-    assert rc == 0
-    out = json.loads(capsys.readouterr().out)
-    assert out["deleted"] == ["trash_me.md"]
-    assert not paths.wiki_page("trash_me").exists()
+    rc = main(["wiki", "gc-apply", "--proposal", "ignored", "--root", str(tmp_path)])
+    assert rc == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "deprecated"
 
 
 def test_wiki_gc_apply_untracked_loud_fails(tmp_path, capsys):
     import pytest
     from omx_core.cli import build_parser
-    from omx_core.omx_paths import OmxPaths
-    from omx_core.wiki import ingest
-    paths = OmxPaths(root=tmp_path)
-    ingest.ingest_knowledge(paths, now="2026-06-06T00:00:00", title="Untracked",
-                            content="x", tags=["t"], category="reference",
-                            confidence="medium", sources=[])
-    proposal = tmp_path / "p.md"
-    proposal.write_text("---\nkind: wiki-gc\n---\n## DELETE\n- slug: untracked.md\n", encoding="utf-8")
-    # no git init -> untracked -> the handler must loud-fail (SystemExit) and NOT delete.
-    # Call the handler directly: main() intercepts SystemExit (maps to rc 2), so the
-    # established loud-fail test pattern in this file invokes args.func(args), not main().
     args = build_parser().parse_args(
-        ["wiki", "gc-apply", "--proposal", str(proposal), "--root", str(tmp_path)])
+        ["wiki", "gc-apply", "--proposal", "ignored", "--root", str(tmp_path)])
     with pytest.raises(SystemExit):
         args.func(args)
-    assert paths.wiki_page("untracked").exists()
 
 
 # --- report-coverage CLI: --cross-run-refs gate (E4 stale-column incident) ---

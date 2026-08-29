@@ -36,13 +36,10 @@ from omx_core.omx_paths import (
 )
 from omx_core.profile import bootstrap_profile, default_metrics, load_profile_metrics
 from omx_core.report import parse_findings
-from omx_core.wiki import gc as _wiki_gc
-from omx_core.wiki import ingest as _wiki_ingest
-from omx_core.wiki import lint as _wiki_lint
+from omx_core.wiki import hq_backend as _wiki_hq
 from omx_core.wiki import query as _wiki_query
-from omx_core.wiki import storage as _wiki_storage
-from omx_core.wiki.types import BLOCKING_STATUSES as _WIKI_BLOCKING_STATUSES
-from omx_core.wiki.types import STATUSES as _WIKI_STATUSES
+from omx_core.wiki.hq_backend import ACTIONABLE_STATUSES as _WIKI_STATUSES
+from omx_core.wiki.hq_backend import BLOCKING_STATUSES as _WIKI_BLOCKING_STATUSES
 
 
 def _finite_or_none(x):
@@ -329,7 +326,7 @@ def _cmd_eval(args) -> int:
     # must not break on knowledge plumbing.
     if rec.get("status") == "error" and args.root:
         try:
-            from omx_core.wiki.ingest import ingest_knowledge
+            from omx_core.wiki.hq_backend import write_knowledge
             fault = rec.get("fault_class") or "unknown"
             body = (
                 f"Command: {rec.get('command')}\n"
@@ -337,11 +334,11 @@ def _cmd_eval(args) -> int:
                 f"Parse error: {rec.get('parse_error')}\n"
                 f"Ran at: {rec.get('ran_at')}\n"
                 f"Cwd: {args.cwd or os.getcwd()}\n")
-            ingest_knowledge(
-                OmxPaths(root=_resolved_root(args)), now=clock.now_iso_naive(),
+            write_knowledge(
+                _resolved_root(args), now=clock.now_iso_naive(),
                 title=f"evaluator fault {fault}", content=body,
                 tags=["auto-captured", "evaluator-fault", fault],
-                category="debugging", confidence="low", sources=[])
+                category="debugging", confidence="low")
         except Exception as e:  # never fatal (D-R4-5)
             print(f"WARNING: evaluator-fault wiki capture failed: {e}", file=sys.stderr)
     return 0 if rec["status"] in ("pass", "fail") else 1
@@ -977,7 +974,7 @@ def _cmd_queue_launch(args) -> int:
     # WARN on soft leads. Read-only; same enumerate_pages helper as `wiki list`, so
     # the gate can never drift from what the human sees. Empty/absent wiki -> passes;
     # a corrupt page is surfaced by lint, never blocks; an unknown status never blocks.
-    acked = {_wiki_gc._norm_slug(s) for s in (args.ack_gate or [])}
+    acked = {_wiki_hq._norm_slug(s) for s in (args.ack_gate or [])}
     catalog = _wiki_query.enumerate_pages(paths)
     _post_store = catalog.get("post_store") or {}
     if _post_store.get("ok") is False:
@@ -1009,7 +1006,11 @@ def _cmd_queue_launch(args) -> int:
     # Carry the DENOMINATOR of the gate above, not just its verdict: "no open
     # gates" and "nobody has ever filed one" are the same zero. See
     # queue_pending_launch's docstring for the 0-of-540 measurement.
-    n_pages = len(catalog["pages"])
+    # `pages` is every post in the store; `with_status` is how many of them the
+    # gate could ever act on. Reading `pages` off the filtered catalog instead
+    # would make the two equal by construction and the EMPTY-roster warning
+    # below unreachable -- which is the exact blindness it exists to report.
+    n_pages = (catalog.get("post_store") or {}).get("total") or 0
     coverage = ({"pages": n_pages,
                  "with_status": sum(1 for pg in catalog["pages"] if pg["status"])}
                 if n_pages else None)
@@ -1547,6 +1548,10 @@ def _cmd_wiki_add(args) -> int:
     for need in ("title", "category", "content", "confidence"):
         if getattr(args, need) is None:
             raise SystemExit(f"--{need} is required in write mode (omit only with --from-report)")
+    if args.blocked_on is not None:
+        raise SystemExit("--blocked-on is unavailable in the hq post store")
+    if args.sources:
+        raise SystemExit("--sources is unavailable in the hq post store")
     tags = [t.strip() for t in (args.tags or "").split(",") if t.strip()]
     content = args.content
     if content == "-":
@@ -1563,12 +1568,11 @@ def _cmd_wiki_add(args) -> int:
     if forced:
         confidence = "low"
     try:
-        res = _wiki_ingest.ingest_knowledge(
-            paths, now=clock.now_iso_naive(), title=args.title, content=content,
+        res = _wiki_hq.write_knowledge(
+            paths.root, now=clock.now_iso_naive(), title=args.title, content=content,
             tags=tags, category=args.category, confidence=confidence,
-            sources=[s.strip() for s in (args.sources or "").split(",") if s.strip()],
             quality_score=score, quality_reasons=reasons,
-            status=args.status, blocked_on=args.blocked_on)
+            status=args.status)
     except OmxError as e:
         raise SystemExit(str(e))
     # `forced` is a gate on the INCOMING chunk; the score/reasons reported are the
@@ -1589,8 +1593,9 @@ def _cmd_wiki_delete(args) -> int:
         "error": "deprecated",
         "reason": "wiki is append-merge (INV-2); removal is git-guarded gc",
         "cli_replacement": (
-            f"omx wiki gc --root {root} … then omx wiki gc-apply "
-            f"--root {root} --proposal <approved-gc-proposal.md>"),
+            f"omx wiki gc --root {root} for the diagnosis, then remove the post "
+            "with `git rm <post file>` and `hq index` — gc-apply was retired "
+            "with the wiki store; git is the safety net it reimplemented"),
     }))
 
 
@@ -1662,16 +1667,8 @@ def _cmd_wiki_query(args) -> int:
 
 def _cmd_wiki_lint(args) -> int:
     paths = OmxPaths(root=_resolved_root(args))
-    from omx_core.wiki.quality import QUALITY_FLOOR
-    floor = QUALITY_FLOOR
     try:
-        floor = int(load_profile_metrics(_resolved_root(args)).get("wiki_quality_floor", floor))
-    except OmxError:
-        pass  # no profile yet — built-in floor (D12: override slot, generic default)
-    try:
-        res = _wiki_lint.lint_wiki(
-            paths, now=clock.now_iso_naive(), stale_days=args.stale_days,
-            max_page_size=args.max_page_size, quality_floor=floor)
+        res = _wiki_hq.hq_json(paths.root, "lint")
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(res))
@@ -1694,15 +1691,19 @@ def _cmd_wiki_read(args) -> int:
     'page absent' from 'page empty'."""
     paths = OmxPaths(root=_resolved_root(args))
     try:
-        page = _wiki_storage.read_page(paths, args.slug)
+        page = _wiki_hq.read_post(paths.root, args.slug)
     except OmxError as e:
         raise SystemExit(str(e))
     if page is None:
         raise SystemExit(f"wiki page not found: {args.slug}")
     if args.no_frontmatter:
-        print(page.content)
+        print(page.get("body") or "")
     else:
-        print(_wiki_storage.serialize_page(page))
+        # Title + body, not a rebuilt frontmatter block. Reconstructing the
+        # bullets here would be a second serializer for hq's format, which is
+        # the drift this migration removed on the reading side; a caller that
+        # needs the fields should ask hq for them (`hq query --post-id --json`).
+        print(f"# {page.get('title') or args.slug}\n\n{page.get('body') or ''}")
     return 0
 
 
@@ -1717,47 +1718,22 @@ def _cmd_wiki_sync_profile(args) -> int:
 
 
 def _cmd_wiki_gc(args) -> int:
-    """Read-only gc diagnosis: lint result + page metadata, as one JSON object for
-    the skill to read. Touches nothing (the skill judges, gc-apply executes)."""
+    """Delegate report-only garbage-collection diagnosis to hq."""
     paths = OmxPaths(root=_resolved_root(args))
     try:
-        lint_res = _wiki_lint.lint_wiki(paths, now=clock.now_iso_naive(),
-                                        stale_days=args.stale_days,
-                                        max_page_size=args.max_page_size)
-    except OmxError as e:
-        raise SystemExit(str(e))
-    pages = []
-    for slug in _wiki_storage.list_pages(paths):
-        try:
-            page = _wiki_storage.read_page(paths, slug)
-        except OmxError:
-            continue
-        if page is None:
-            continue
-        pages.append({
-            "slug": slug, "title": page.title, "category": page.category,
-            "updated": page.updated,
-            "bytes": len(page.content.encode("utf-8")),
-        })
-    suggestions = _wiki_gc.suggest_from_lint(lint_res)
-    print(json.dumps({"lint": lint_res, "pages": pages, "suggestions": suggestions}))
-    return 0
-
-
-def _cmd_wiki_gc_apply(args) -> int:
-    """Parse an approved proposal and two-phase apply it (validate-all, then execute
-    under the lock). git tracking is enforced by apply_gc as the recovery path."""
-    proposal = Path(args.proposal)
-    if not proposal.exists():
-        raise SystemExit(f"proposal not found: {proposal}")
-    paths = OmxPaths(root=_resolved_root(args))
-    try:
-        plan = _wiki_gc.parse_gc_proposal(proposal.read_text(encoding="utf-8"))
-        res = _wiki_gc.apply_gc(paths, plan, now=clock.now_iso_naive(), repo_root=_resolved_root(args))
+        res = _wiki_hq.hq_json(paths.root, "gc", "--stale-days", str(args.stale_days))
     except OmxError as e:
         raise SystemExit(str(e))
     print(json.dumps(res))
     return 0
+
+
+def _cmd_wiki_gc_apply(args) -> int:
+    raise SystemExit(json.dumps({
+        "error": "deprecated",
+        "reason": "hq gc is report-only; a post is removed through git, which is the safety net",
+        "cli_replacement": "git rm <post file>, then hq index",
+    }))
 
 
 def _cmd_clean(args) -> int:
@@ -2360,16 +2336,17 @@ def build_parser() -> argparse.ArgumentParser:
     pwg.set_defaults(func=_cmd_wiki_gc)
 
     pwga = wsub.add_parser("gc-apply",
-                           help="apply an approved wiki-gc proposal (two-phase, git-guarded) -- "
-                                "THIS is how you delete/merge pages; there is no separate 'delete' "
-                                "subcommand by design (add is append-merge, removal is git-guarded gc)")
+                           help="RETIRED: hq gc is report-only and a post is removed through "
+                                "git. Always errors with the git redirect; --proposal is "
+                                "accepted only so a mistaken call reaches it")
     pwga.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
-    pwga.add_argument("--proposal", required=True, help="path to the approved wiki-gc proposal .md")
+    pwga.add_argument("--proposal", default=None,
+                      help="ignored — accepted only so a mistaken call reaches the redirect")
     pwga.set_defaults(func=_cmd_wiki_gc_apply)
 
     pwd = wsub.add_parser("delete",
                           help="DEPRECATED: there is no page delete (append-merge, "
-                               "INV-2) — always errors with the gc/gc-apply redirect")
+                               "INV-2) — always errors with the gc/git redirect")
     pwd.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
     pwd.add_argument("slug", nargs="?", default=None,
                      help="ignored — accepted only so a mistaken call reaches the redirect")

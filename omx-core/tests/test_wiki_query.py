@@ -1,13 +1,28 @@
+"""Read-side tests for the wiki views after B4 moved the store to hq.
+
+The six scoring tests that used to live here (title-over-content, tag boost,
+confidence/status tie-breaking, near-tie inversion) are gone from this file on
+purpose: after B4 omx does not score anything, hq does. Their subject moved to
+`skills/harness/tests/test_hq.py` in oh-my-orchestrator, which covers the same
+claims against the ranker that now owns them. What stays here is what omx still
+decides -- the catalog, the tokenizer, the result shaping, and the limit.
+"""
 import json
 
+import pytest
+from conftest import hq_stub
 from omx_core.omx_paths import OmxPaths
-from omx_core.wiki import ingest, query
+from omx_core.wiki import hq_backend, query
 
 
 def _fake_hq(monkeypatch, *, posts=None, exc=None, rc=0, stdout=None):
-    """Stand in for the `hq` subprocess. The real one is neutralized by the
-    autouse `_no_hq_shellout` fixture, so a test that wants the post source has
-    to opt back in here."""
+    """Stand in for the `hq` subprocess.
+
+    Patches `hq_backend.subprocess`, not `query.subprocess`: after B4 every
+    shell-out goes through the one backend module, and a fake aimed at the old
+    location would silently let the real `hq` answer -- which is how a test
+    starts depending on whether this machine has the tool installed.
+    """
     import subprocess as _sp
 
     monkeypatch.undo()   # drop the autouse stub for this test
@@ -18,42 +33,58 @@ def _fake_hq(monkeypatch, *, posts=None, exc=None, rc=0, stdout=None):
         payload = stdout if stdout is not None else json.dumps({"posts": posts or []})
         return _sp.CompletedProcess(cmd, rc, stdout=payload, stderr="boom")
 
-    monkeypatch.setattr(query.subprocess, "run", _run)
+    monkeypatch.setattr(hq_backend, "subprocess", hq_stub(_run))
     return query
 
 
-def test_enumerate_pages_unions_the_post_store(tmp_path, monkeypatch):
-    """The wiki→posts conversion left open leads in posts while `omx wiki list`
+def _spy_hq(monkeypatch, payload=None):
+    """Like `_fake_hq` but hands back the argv it was called with."""
+    import subprocess as _sp
+
+    seen = {}
+    monkeypatch.undo()
+
+    def _run(cmd, **kw):
+        seen["cmd"] = cmd
+        return _sp.CompletedProcess(
+            cmd, 0, stdout=json.dumps(payload if payload is not None else {"posts": []}),
+            stderr="")
+
+    monkeypatch.setattr(hq_backend, "subprocess", hq_stub(_run))
+    return seen
+
+
+def test_enumerate_pages_reads_the_post_store(tmp_path, monkeypatch):
+    """The wiki->posts conversion left open leads in posts while `omx wiki list`
     kept reading the (now empty) wiki dir, so the queue-launch gate passed on a
-    blind roster. Both sources are enumerated now."""
+    blind roster. The post store is the only source now."""
     p = OmxPaths(root=tmp_path)
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Legacy", content="b",
-                            tags=[], category="reference", confidence="high", sources=[],
-                            status="needs-experiment")
     q = _fake_hq(monkeypatch, posts=[
         {"id": "finding/075", "title": "J2 cable snapped",
          "fields": {"topic": "debugging", "status": "needs-apply-before-retrain"}},
         {"id": "finding/001", "title": "no status", "fields": {"status": "none"}},
     ])
     res = q.enumerate_pages(p)
-    assert res["post_store"] == {"ok": True, "count": 1, "error": None}
-    assert {pg["slug"] for pg in res["pages"]} == {"legacy.md", "finding/075"}
-    post = [pg for pg in res["pages"] if pg["slug"] == "finding/075"][0]
+    assert res["post_store"] == {"ok": True, "count": 1, "total": 2,
+                                 "error": None}
+    # `total` counts every post, `count` only the actionable ones -- the
+    # denominator the queue-launch gate needs to tell "no open gates" from
+    # "nobody ever filed one".
+    assert [pg["slug"] for pg in res["pages"]] == ["finding/075"]
+    post = res["pages"][0]
     assert post["status"] == "needs-apply-before-retrain"   # the blocking status survives
     assert post["category"] == "debugging" and post["blocked_on"] is None
 
 
 def test_enumerate_pages_reports_an_unreadable_post_store(tmp_path, monkeypatch):
-    """An unreadable store is not an empty one — the whole point of the fix is
+    """An unreadable store is not an empty one -- the whole point of the fix is
     that a zero from an unread source must never read as 'nothing open'."""
     p = OmxPaths(root=tmp_path)
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Legacy", content="b",
-                            tags=[], category="reference", confidence="high", sources=[])
     q = _fake_hq(monkeypatch, exc=FileNotFoundError("hq"))
     res = q.enumerate_pages(p)
     assert res["post_store"]["ok"] is False
     assert "PATH" in res["post_store"]["error"]
-    assert [pg["slug"] for pg in res["pages"]] == ["legacy.md"]   # degrades, never fails
+    assert res["pages"] == []            # degrades, never fails
 
 
 def test_enumerate_pages_treats_a_failed_hq_as_unreadable(tmp_path, monkeypatch):
@@ -64,169 +95,133 @@ def test_enumerate_pages_treats_a_failed_hq_as_unreadable(tmp_path, monkeypatch)
     assert q.enumerate_pages(p)["post_store"]["ok"] is False
 
 
-def test_tokenize_latin_and_digits():
-    toks = query.tokenize("Roll Heavy-Tail 42")
-    assert "roll" in toks and "heavy" in toks and "tail" in toks and "42" in toks
+def test_enumerate_pages_passes_the_status_filter_through(tmp_path, monkeypatch):
+    seen = _spy_hq(monkeypatch)
+    query.enumerate_pages(OmxPaths(root=tmp_path), status="needs-experiment")
+    assert "--status" in seen["cmd"] and "needs-experiment" in seen["cmd"]
 
 
-def test_tokenize_korean_bigrams_and_singletons():
-    toks = query.tokenize("롤축")
-    assert "롤" in toks and "축" in toks   # singletons
-    assert "롤축" in toks                  # bigram
+def test_there_is_only_one_tokenizer_and_it_is_hqs():
+    """omx's `tokenize` is gone, and its absence is the point.
+
+    It was exported, unused after B4, and it disagreed with the engine that
+    actually searches: `자세 제어` gave omx `['자','세','자세','제','어','제어']`
+    and hq `['자세','제어']`. A caller trusting the exported one to predict what
+    a query would match was reading the wrong rule. Found by a cross-model
+    review.
+    """
+    assert not hasattr(query, "tokenize")
+    from omx_core import wiki
+    assert "tokenize" not in wiki.__all__ and not hasattr(wiki, "tokenize")
 
 
-def test_query_empty_wiki_returns_zero(tmp_path):
-    p = OmxPaths(root=tmp_path)
-    res = query.query_wiki(p, now="2026-05-31T10:00:00", text="anything")
-    assert res["n_matches"] == 0
-    assert res["matches"] == []
-    assert res["corrupt_pages"] == []
+def test_query_empty_store_returns_zero(tmp_path, monkeypatch):
+    q = _fake_hq(monkeypatch, posts=[])
+    res = q.query_wiki(OmxPaths(root=tmp_path), now="2026-05-31T10:00:00", text="anything")
+    assert res == {"n_matches": 0, "n_returned": 0, "matches": [], "corrupt_pages": []}
 
 
-def test_query_scores_title_over_content(tmp_path):
-    p = OmxPaths(root=tmp_path)
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Heavy tail",
-                            content="unrelated body text", tags=[],
-                            category="pattern", confidence="high", sources=[])
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Other",
-                            content="this body mentions heavy tail once", tags=[],
-                            category="pattern", confidence="high", sources=[])
-    res = query.query_wiki(p, now="2026-05-31T10:01:00", text="heavy tail")
-    assert res["n_matches"] == 2
-    assert res["matches"][0]["title"] == "Heavy tail"   # title match outranks content
+def test_query_is_not_silently_empty_when_hq_is_missing(tmp_path, monkeypatch):
+    """The defect B4 exists to fix, pinned from the other side: a store omx
+    cannot read must raise, never return the same shape as a store with nothing
+    in it. This repo has lost three tools to reading a zero as an absence."""
+    q = _fake_hq(monkeypatch, exc=FileNotFoundError("hq"))
+    with pytest.raises(hq_backend.HqUnavailable) as exc:
+        q.query_wiki(OmxPaths(root=tmp_path), now="2026-05-31T10:00:00", text="anything")
+    assert "PATH" in str(exc.value)
 
 
-def test_query_tag_match_boosts(tmp_path):
-    p = OmxPaths(root=tmp_path)
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="A",
-                            content="body", tags=["roll"], category="pattern",
-                            confidence="high", sources=[])
-    res = query.query_wiki(p, now="2026-05-31T10:01:00", text="roll", tags=["roll"])
-    assert res["n_matches"] == 1
-    assert res["matches"][0]["slug"] == "a.md"
+def test_query_match_dict_carries_the_fields_callers_read(tmp_path, monkeypatch):
+    q = _fake_hq(monkeypatch, posts=[
+        {"id": "finding/007", "title": "Heavy tail",
+         "fields": {"topic": "debugging", "confidence": "low",
+                    "status": "needs-experiment", "summary": "the tail is heavy"},
+         "score": {"field": 8, "body": 3}},
+    ])
+    m = q.query_wiki(OmxPaths(root=tmp_path), now="2026-05-31T10:00:00",
+                     text="heavy")["matches"][0]
+    assert m["slug"] == "finding/007" and m["category"] == "debugging"
+    assert m["confidence"] == "low" and m["status"] == "needs-experiment"
+    # One scalar, and one that AGREES with hq's (field, body) ordering:
+    # `field * 10 + body` let (7, 34.96) compose above (10, 0) and invert the
+    # list for anyone who re-sorted by it.
+    assert m["score"] == 8003
+    assert m["snippet"] == "the tail is heavy"
 
 
-def test_query_match_dict_includes_status(tmp_path):
-    p = OmxPaths(root=tmp_path)
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Heavy tail",
-                            content="body", tags=[], category="pattern",
-                            confidence="high", sources=[], status="needs-experiment")
-    res = query.query_wiki(p, now="2026-05-31T10:01:00", text="heavy tail")
-    assert res["matches"][0]["status"] == "needs-experiment"
+def test_the_scalar_score_never_contradicts_hqs_order(tmp_path, monkeypatch):
+    q = _fake_hq(monkeypatch, posts=[
+        {"id": "finding/001", "title": "a", "fields": {}, "score": {"field": 10, "body": 0}},
+        {"id": "finding/002", "title": "b", "fields": {}, "score": {"field": 7, "body": 34.96}},
+    ])
+    matches = q.query_wiki(OmxPaths(root=tmp_path), now="2026-05-31T10:00:00",
+                           text="x")["matches"]
+    assert [m["slug"] for m in matches] == ["finding/001", "finding/002"]
+    assert matches[0]["score"] > matches[1]["score"]   # sortable, and the same order
 
 
-def test_enumerate_pages_all_and_status_filtered(tmp_path):
-    # deterministic no-scoring catalog; backs both `wiki list` and the queue-launch gate.
-    p = OmxPaths(root=tmp_path)
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Lead", content="b",
-                            tags=[], category="reference", confidence="high", sources=[],
-                            status="needs-experiment")
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Plain", content="b",
-                            tags=[], category="reference", confidence="high", sources=[])
-    allp = query.enumerate_pages(p)
-    assert len(allp["pages"]) == 2 and allp["corrupt_pages"] == []
-    only = query.enumerate_pages(p, status="needs-experiment")
-    assert [pg["slug"] for pg in only["pages"]] == ["lead.md"]
-    assert only["pages"][0]["blocked_on"] is None
+def test_the_absence_sentinel_never_becomes_a_snippet(tmp_path, monkeypatch):
+    """`summary: none` is explicit absence, which hq's ranker already reads that
+    way. Rendering it produced a snippet reading literally `none`."""
+    q = _fake_hq(monkeypatch, posts=[
+        {"id": "finding/001", "title": "a", "fields": {"summary": "none"},
+         "score": {"field": 1, "body": 0}},
+    ])
+    m = q.query_wiki(OmxPaths(root=tmp_path), now="2026-05-31T10:00:00",
+                     text="x")["matches"][0]
+    assert m["snippet"] == ""
 
 
-def test_query_reports_corrupt_page_and_skips_it(tmp_path):
-    p = OmxPaths(root=tmp_path)
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Good",
-                            content="heavy tail here", tags=[], category="pattern",
-                            confidence="high", sources=[])
-    # write a corrupt page directly (no frontmatter)
-    p.wiki_dir().mkdir(parents=True, exist_ok=True)
-    (p.wiki_dir() / "broken.md").write_text("no frontmatter at all", encoding="utf-8")
-    res = query.query_wiki(p, now="2026-05-31T10:01:00", text="heavy")
-    assert "broken.md" in res["corrupt_pages"]
-    assert any(m["slug"] == "good.md" for m in res["matches"])  # good page still found
+def test_query_asks_hq_for_the_metadata_weighting(tmp_path, monkeypatch):
+    """omx opted into hq's `--weight-metadata` (user decision, r6). Dropping the
+    flag is a silent behaviour change nothing else would catch, since the
+    result shape is identical either way."""
+    seen = _spy_hq(monkeypatch)
+    query.query_wiki(OmxPaths(root=tmp_path), now="2026-05-31T10:00:00", text="x")
+    assert "--weight-metadata" in seen["cmd"]
 
 
-def test_query_n_matches_is_total_not_truncated(tmp_path):
-    p = OmxPaths(root=tmp_path)
-    for i in range(25):
-        ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title=f"Heavy tail {i}",
-                                content="heavy tail body", tags=[], category="pattern",
-                                confidence="high", sources=[])
-    res = query.query_wiki(p, now="2026-05-31T10:01:00", text="heavy tail", limit=20)
-    assert res["n_matches"] == 25      # total that matched
-    assert res["n_returned"] == 20     # capped by limit
-    assert len(res["matches"]) == 20
+def test_query_category_filters_by_hq_topic(tmp_path, monkeypatch):
+    seen = _spy_hq(monkeypatch)
+    query.query_wiki(OmxPaths(root=tmp_path), now="2026-05-31T10:00:00", text="x",
+                     category="debugging")
+    assert "--topic" in seen["cmd"] and "debugging" in seen["cmd"]
 
 
-def test_query_low_confidence_sinks_below_equal_keyword_high(tmp_path):
-    # same keyword content, different confidence -> high ranks first (was a tie).
-    # NOTE: second title is "Heavy tail 2", not a literal duplicate of the first --
-    # ingest_knowledge merges same-slug pages (INV-2 append-merge, ingest.py:59-109)
-    # and merge always keeps the higher confidence, so an identical title here would
-    # collapse both ingests into one "high"-confidence page (n_matches==1, no tie to
-    # rank). "Heavy tail 2" still contains "heavy tail" as a substring so it earns the
-    # same +5 title-match score, keeping the tie while landing on a distinct slug.
-    p = OmxPaths(root=tmp_path)
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Heavy tail",
-                            content="body", tags=[], category="pattern",
-                            confidence="low", sources=[])
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Heavy tail 2",
-                            content="body", tags=[], category="pattern",
-                            confidence="high", sources=[])
-    res = query.query_wiki(p, now="2026-05-31T10:01:00", text="heavy tail")
-    assert res["n_matches"] == 2
-    assert res["matches"][0]["confidence"] == "high"   # high wins the tie
-    assert res["matches"][1]["confidence"] == "low"
+def test_query_tags_filter_against_the_posts_keywords(tmp_path, monkeypatch):
+    """hq has no keyword-set filter, so this one stays omx-side. It must read
+    `keywords:` the way hq writes it -- comma-separated, case-insensitive."""
+    q = _fake_hq(monkeypatch, posts=[
+        {"id": "finding/001", "title": "a", "fields": {"keywords": "Servo, Gain"},
+         "score": {"field": 1, "body": 0}},
+        {"id": "finding/002", "title": "b", "fields": {"keywords": "buoyancy"},
+         "score": {"field": 1, "body": 0}},
+    ])
+    res = q.query_wiki(OmxPaths(root=tmp_path), now="2026-05-31T10:00:00",
+                       text="x", tags=["servo"])
+    assert [m["slug"] for m in res["matches"]] == ["finding/001"]
 
 
-def test_query_strong_keyword_low_still_outranks_weak_high(tmp_path):
-    # low-confidence TITLE match: title 'Heavy tail' also embeds into content
-    # (ingest heading), so real score is 7 -> weighted 7*0.80=5.6, beating the
-    # high-confidence CONTENT match (score 2 -> 2.0). Keyword dominant.
-    p = OmxPaths(root=tmp_path)
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Heavy tail",
-                            content="unrelated", tags=[], category="pattern",
-                            confidence="low", sources=[])
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Other",
-                            content="this mentions heavy tail once", tags=[],
-                            category="pattern", confidence="high", sources=[])
-    res = query.query_wiki(p, now="2026-05-31T10:01:00", text="heavy tail")
-    assert res["matches"][0]["title"] == "Heavy tail"   # low+title beats high+content
+def test_query_n_matches_is_total_not_truncated(tmp_path, monkeypatch):
+    """Skills read n_matches to judge coverage, so it has to be the full matched
+    set rather than the slice the limit returned."""
+    q = _fake_hq(monkeypatch, posts=[
+        {"id": f"finding/{i:03d}", "title": "Heavy tail", "fields": {},
+         "score": {"field": 1, "body": 0}} for i in range(5)
+    ])
+    res = q.query_wiki(OmxPaths(root=tmp_path), now="2026-05-31T10:00:00",
+                       text="heavy", limit=2)
+    assert res["n_matches"] == 5 and res["n_returned"] == 2
+    assert len(res["matches"]) == 2
 
 
-def test_query_resolved_status_demoted_on_tie(tmp_path):
-    # equal keyword + equal confidence; a resolved page sinks below a non-actionable one.
-    # NOTE: second title is "Heavy tail 2" for the same reason as the confidence-tie
-    # test above -- an identical title merges (INV-2, ingest.py:59-109) and a None
-    # status on merge KEEPS the existing status, so a literal duplicate title would
-    # collapse into one "resolved" page (n_matches==1) instead of two ranked pages.
-    p = OmxPaths(root=tmp_path)
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Heavy tail",
-                            content="body", tags=[], category="pattern",
-                            confidence="high", sources=[], status="resolved")
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Heavy tail 2",
-                            content="body", tags=[], category="pattern",
-                            confidence="high", sources=[])
-    res = query.query_wiki(p, now="2026-05-31T10:01:00", text="heavy tail")
-    assert res["matches"][0]["status"] is None       # active page first
-    assert res["matches"][1]["status"] == "resolved"  # resolved demoted
-
-
-def test_query_near_tie_inversion_is_intended(tmp_path):
-    # DESIGN NOTE (v0.7.1): keyword score is DOMINANT, not strictly primary.
-    # For NEAR-tied scores the combined confidence+status discount intentionally
-    # re-orders: a score-3 low+resolved page (3*0.80*0.70=1.68) sinks below a
-    # score-2 high active page (2*1.0=2.0). This is the stub-sinking feature, not
-    # a bug -- documented so a future change notices if it flips.
-    p = OmxPaths(root=tmp_path)
-    # content="stub" (not "tail"): ingest embeds the title as a "# Heavy" heading
-    # into content, so the title alone already contributes score 3 (title +2 for
-    # "heavy", content +1 for "heavy" via the heading) -- an explicit "tail" in
-    # content would double-count and push the score to 4.
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Heavy",
-                            content="stub", tags=[], category="pattern",
-                            confidence="low", sources=[], status="resolved")
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Other",
-                            content="heavy tail", tags=[], category="pattern",
-                            confidence="high", sources=[])
-    res = query.query_wiki(p, now="2026-05-31T10:01:00", text="heavy tail")
-    assert res["n_matches"] == 2
-    assert res["matches"][0]["title"] == "Other"   # score 2, weight 2.0 -- wins
-    assert res["matches"][1]["title"] == "Heavy"    # score 3, weight 1.68 -- sinks
+def test_query_preserves_hqs_order(tmp_path, monkeypatch):
+    """Ranking is hq's now. omx must not re-sort -- if it did, the two would
+    disagree about one ordering, which is the defect class this round keeps
+    finding."""
+    q = _fake_hq(monkeypatch, posts=[
+        {"id": "finding/003", "title": "third", "fields": {}, "score": {"field": 0, "body": 9}},
+        {"id": "finding/001", "title": "first", "fields": {}, "score": {"field": 5, "body": 0}},
+    ])
+    res = q.query_wiki(OmxPaths(root=tmp_path), now="2026-05-31T10:00:00", text="x")
+    assert [m["slug"] for m in res["matches"]] == ["finding/003", "finding/001"]

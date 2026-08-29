@@ -21,13 +21,7 @@ from omx_core.omx_paths import (
     validate_token,
 )
 from omx_core.report import Finding, ReportParseError, parse_findings
-from omx_core.wiki import (
-    WikiError,
-    WikiPage,
-    ingest_knowledge,
-    lint_wiki,
-    query_wiki,
-)
+from omx_core.wiki import query_wiki
 
 __all__ = [
     "OmxPaths", "Profile", "OmxPathError",
@@ -40,5 +34,5 @@ __all__ = [
     "deadline_passed",
     "queue_pending_launch",
     "read_pending_launch",
-    "WikiError", "WikiPage", "ingest_knowledge", "query_wiki", "lint_wiki",
+    "query_wiki",
 ]

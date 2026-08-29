@@ -3,6 +3,7 @@ commit into pending-launch.json (closing the audit-noted 'no sha' gap); the
 LAUNCH_TEMPLATE tells training to record its own HEAD and pass it to
 run-record."""
 import json
+import pathlib
 import subprocess
 
 from omx_core.loop import queue_pending_launch, read_pending_launch
@@ -93,14 +94,30 @@ def test_launch_template_mentions_commit_recording():
 # T6: pre-launch wiki forcing gate — REFUSE on open HARD gate, WARN on soft lead
 # ---------------------------------------------------------------------------
 
+def _anchor(root):
+    """A git anchor, so `write_knowledge` takes the edit path rather than
+    supersede (store-spec section 8) and hq has somewhere to put a post."""
+    root = pathlib.Path(root)
+    (root / ".hq").mkdir(parents=True, exist_ok=True)
+    (root / ".hq" / ".anchor").write_text("id: test-anchor\n")
+    (root / ".git").mkdir(exist_ok=True)
+
+
 def _seed(p, title, status, blocked_on=None):
-    from omx_core.wiki import ingest
-    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title=title, content="c",
-                            tags=[], category="decision", confidence="high", sources=[],
-                            status=status, blocked_on=blocked_on)
+    """Seed one open lead into the hq post store.
+
+    `blocked_on` is accepted and dropped: hq's schema has no such field, so the
+    gate reports None for it now. That is a real (small) capability loss, kept
+    visible here rather than silently by the call site.
+    """
+    from omx_core.wiki.hq_backend import write_knowledge
+    _anchor(p.root)
+    return write_knowledge(p.root, now="2026-05-31T10:00:00", title=title, content="c",
+                           tags=[], category="decision", confidence="high",
+                           status=status)["slug"]
 
 
-def test_queue_launch_refuses_on_open_hard_gate(tmp_path, capsys):
+def test_queue_launch_refuses_on_open_hard_gate(tmp_path, capsys, live_hq):
     from omx_core import cli
     p = _p(tmp_path)
     _seed(p, "TAM row rewrite", "needs-apply-before-retrain", "measure first")
@@ -109,37 +126,36 @@ def test_queue_launch_refuses_on_open_hard_gate(tmp_path, capsys):
                    "--gpu-gate", "g"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 2 and out["refused"] is True
-    assert out["open_gates"][0]["slug"] == "tam_row_rewrite.md"
-    assert out["open_gates"][0]["blocked_on"] == "measure first"
+    assert out["open_gates"][0]["slug"].startswith("finding/")
     assert read_pending_launch(p, "run1") is None   # REFUSE wrote NOTHING
 
 
-def test_queue_launch_ack_gate_allows_and_records(tmp_path, capsys):
+def test_queue_launch_ack_gate_allows_and_records(tmp_path, capsys, live_hq):
     from omx_core import cli
     p = _p(tmp_path)
-    _seed(p, "TAM row rewrite", "needs-apply-before-retrain")
+    gate = _seed(p, "TAM row rewrite", "needs-apply-before-retrain")
     rc = cli.main(["queue-launch", "--predicted-outcome", "test prediction", "--root", str(tmp_path), "--run-id", "run1",
                    "--proposal-id", "20260711-100000-x", "--launch-delta", "d",
-                   "--gpu-gate", "g", "--ack-gate", "tam_row_rewrite.md"])
+                   "--gpu-gate", "g", "--ack-gate", gate])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0
     # the human-approval artifact now carries the un-applied correction it launched over
-    assert out["acknowledged_gates"] == ["tam_row_rewrite.md"]
-    assert read_pending_launch(p, "run1")["acknowledged_gates"] == ["tam_row_rewrite.md"]
+    assert out["acknowledged_gates"] == [gate]
+    assert read_pending_launch(p, "run1")["acknowledged_gates"] == [gate]
 
 
-def test_queue_launch_warns_on_soft_lead(tmp_path, capsys):
+def test_queue_launch_warns_on_soft_lead(tmp_path, capsys, live_hq):
     from omx_core import cli
     p = _p(tmp_path)
-    _seed(p, "Command box eval", "needs-experiment")
+    lead = _seed(p, "Command box eval", "needs-experiment")
     rc = cli.main(["queue-launch", "--predicted-outcome", "test prediction", "--root", str(tmp_path), "--run-id", "run1",
                    "--proposal-id", "20260711-100000-x", "--launch-delta", "d",
                    "--gpu-gate", "g"])
     cap = capsys.readouterr()
     out = json.loads(cap.out)
     assert rc == 0                                  # soft leads WARN, never REFUSE
-    assert out["open_leads"] == ["command_box_eval.md"]
-    assert "command_box_eval.md" in cap.err
+    assert out["open_leads"] == [lead]
+    assert lead in cap.err
 
 
 def test_queue_launch_empty_wiki_passes_clean(tmp_path, capsys):
@@ -152,15 +168,19 @@ def test_queue_launch_empty_wiki_passes_clean(tmp_path, capsys):
     assert "open_leads" not in out and "acknowledged_gates" not in out   # backward-compatible shape
 
 
-def test_queue_launch_corrupt_page_does_not_block(tmp_path, capsys):
+def test_queue_launch_unreadable_store_warns_but_does_not_block(tmp_path, capsys):
+    """Replaces the old corrupt-page test: there is no wiki dir to corrupt now,
+    and hq owns parsing. The surviving question is the one that matters --
+    a store the gate could not read must WARN loudly and still pass, because an
+    unreadable store is not an empty one."""
     from omx_core import cli
-    p = _p(tmp_path)
-    p.wiki_dir().mkdir(parents=True, exist_ok=True)
-    (p.wiki_dir() / "broken.md").write_text("no frontmatter here", encoding="utf-8")
-    rc = cli.main(["queue-launch", "--predicted-outcome", "test prediction", "--root", str(tmp_path), "--run-id", "run1",
+    rc = cli.main(["queue-launch", "--predicted-outcome", "test prediction",
+                   "--root", str(tmp_path), "--run-id", "run1",
                    "--proposal-id", "20260711-100000-x", "--launch-delta", "d",
                    "--gpu-gate", "g"])
-    assert rc == 0   # a corrupt page is surfaced elsewhere (lint), never blocks a launch
+    cap = capsys.readouterr()
+    assert rc == 0                       # never blocks a launch
+    assert "post store could not be read" in cap.err
 
 
 def test_queue_pending_launch_records_open_leads_and_acks(tmp_path):
@@ -181,7 +201,7 @@ def test_queue_pending_launch_omits_gate_fields_when_none(tmp_path):
     assert "open_leads" not in data and "acknowledged_gates" not in data
 
 
-def test_queue_launch_records_wiki_coverage_and_warns_on_an_empty_roster(tmp_path, capsys):
+def test_queue_launch_records_wiki_coverage_and_warns_on_an_empty_roster(tmp_path, capsys, live_hq):
     """An empty gate and a gate nobody ever filed against are the same zero.
 
     albc 2026-08-10: 540 pages, 0 with a blocking status. Every launch that
@@ -201,7 +221,7 @@ def test_queue_launch_records_wiki_coverage_and_warns_on_an_empty_roster(tmp_pat
     assert "EMPTY roster" in cap.err
 
 
-def test_queue_launch_does_not_warn_once_the_wiki_is_filed_against(tmp_path, capsys):
+def test_queue_launch_does_not_warn_once_the_wiki_is_filed_against(tmp_path, capsys, live_hq):
     from omx_core import cli
     p = _p(tmp_path)
     _seed(p, "a lead someone filed", "needs-experiment")

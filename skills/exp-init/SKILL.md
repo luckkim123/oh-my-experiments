@@ -201,9 +201,12 @@ belongs on FINDINGS, and exp-analyze owns that call (see its "Decide `--status` 
 page you write" section) — it is the only input `queue-launch`'s pre-launch gate and the
 per-turn backlog hook ever read.
 
-Then project the profile into the wiki (repeatable, unlike the one-shot seed):
-`omx wiki sync-profile --root "<anchor>"` — regenerates the reserved `profile.md`
-page from `.hq/config/experiments/profile/*` (legacy `.omx/profile/*`) so wiki readers always see the CURRENT profile.
+Then project the profile (repeatable, unlike the one-shot seed):
+`omx wiki sync-profile --root "<anchor>"` — regenerates `.hq/work/experiments/profile.md`
+from `.hq/config/experiments/profile/*` (legacy `.omx/profile/*`) so readers always see
+the CURRENT profile. It is **not a post**: a projection a verb regenerates belongs in the
+`work/` layer, not in the shared post store (store-spec §3, rule ④ beats ②). Read it with
+`cat`, not `omx wiki read` — that verb reads posts. The command prints the path.
 
 ## Re-running exp-init
 

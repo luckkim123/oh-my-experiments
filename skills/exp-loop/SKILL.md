@@ -230,8 +230,9 @@ If `lint`'s `stats.by_type` shows several `info`+ issues (orphan / stale /
 contradiction-candidate accumulating), add a one-line cleanup reminder to the
 summary: "wiki cleanup review suggested — run `omx wiki gc --root <root>` to see
 delete candidates (orphans) and a ready-to-edit proposal skeleton." This only
-SURFACES the suggestion; the human reviews and approves any `gc-apply` (the
-git-guarded executor). NEVER run gc-apply automatically.
+SURFACES the suggestion; the human reviews and approves the removal, then executes
+it by hand (`git rm` + `hq edit` + `hq index` — `gc-apply` was retired with the wiki
+store; git is the safety net it used to reimplement). NEVER remove a post automatically.
 
 ### 7. Loop or stop
 If a deadline is set and `omx loop-status` says it has NOT passed AND there is a
