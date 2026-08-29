@@ -979,6 +979,16 @@ def _cmd_queue_launch(args) -> int:
     # a corrupt page is surfaced by lint, never blocks; an unknown status never blocks.
     acked = {_wiki_gc._norm_slug(s) for s in (args.ack_gate or [])}
     catalog = _wiki_query.enumerate_pages(paths)
+    _post_store = catalog.get("post_store") or {}
+    if _post_store.get("ok") is False:
+        # An unreadable store is not an empty one. Open leads live in posts since
+        # the wiki→posts conversion, so a gate that cannot reach them is running
+        # on the legacy dir alone and its pass means less than it looks.
+        print(f"WARNING: the post store could not be read "
+              f"({_post_store.get('error')}) — open leads live there since the "
+              "wiki→posts conversion, so this gate saw only the legacy wiki dir. "
+              "Enumerate manually before trusting this pass: "
+              "`hq query --status needs-apply-before-retrain`", file=sys.stderr)
     blocking = [pg for pg in catalog["pages"] if pg["status"] in _WIKI_BLOCKING_STATUSES]
     unacked = [pg for pg in blocking if pg["slug"] not in acked]
     if unacked:

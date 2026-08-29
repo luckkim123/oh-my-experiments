@@ -7,7 +7,9 @@ weights). A page with broken frontmatter is SKIPPED but reported in
 """
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 
 from omx_core.omx_paths import OmxPaths
 from omx_core.wiki import storage
@@ -50,13 +52,77 @@ def tokenize(text: str) -> list[str]:
     return tokens
 
 
+#: How long `hq` gets to answer. It reads one directory tree of markdown; a
+#: slower answer than this means something is wrong, and a hung gate is worse
+#: than a loud one.
+_HQ_TIMEOUT_S = 10
+
+
+def _post_store_pages(paths: OmxPaths, status: str | None) -> tuple:
+    """Open leads from the `.hq/` post store, shaped like wiki pages.
+
+    The wiki→posts conversion (vault 55a12dc8, 2026-08-28) emptied
+    `community/wiki/` and moved every open lead into `community/posts/`, keeping
+    the same `status:` vocabulary — store-spec §4 says `needs-apply-before-retrain`
+    keeps its launch-blocking meaning there. The readers did not follow, so this
+    function is the half that did: measured 2026-08-29 on the vault,
+    `omx wiki list` returned 0 pages while 5 open leads (2 of them blocking) sat
+    in posts, and the queue-launch gate read that zero as a pass.
+
+    Shelling out to `hq` rather than parsing posts here is deliberate: a second
+    frontmatter parser for the same format is the drift the store unification
+    exists to prevent. The cost is that `hq` (shipped by `oh-my-orchestrator`)
+    must be on PATH.
+
+    Returns (pages, info). `info["ok"]` is False when the store could not be
+    read — which is NOT the same as empty, and every caller must say so rather
+    than treat the zero as an answer.
+    """
+    cmd = ["hq", "--anchor", str(paths.root), "--json", "query"]
+    if status is not None:
+        cmd += ["--status", status]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=_HQ_TIMEOUT_S)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"hq exited {proc.returncode}: {(proc.stderr or '').strip()[:200]}")
+        posts = json.loads(proc.stdout).get("posts", [])
+        if not isinstance(posts, list):
+            raise RuntimeError("unexpected `hq query` output shape")
+    except FileNotFoundError:
+        return [], {"ok": False, "count": 0,
+                    "error": "hq not on PATH (ships with oh-my-orchestrator)"}
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        return [], {"ok": False, "count": 0,
+                    "error": f"{type(exc).__name__}: {exc}"}
+
+    pages = []
+    for p in posts:
+        fields = p.get("fields") or {}
+        st = fields.get("status")
+        if st in (None, "", "none"):
+            continue          # a post with no status is not a backlog item
+        pages.append({
+            "slug": p.get("id"), "title": p.get("title"),
+            "category": fields.get("topic"), "status": st,
+            "blocked_on": None,     # posts carry no blocked_on field
+        })
+    return pages, {"ok": True, "count": len(pages), "error": None}
+
+
 def enumerate_pages(paths: OmxPaths, *, status: str | None = None) -> dict:
     """Deterministic (no-scoring) catalog, optionally filtered to one status value.
 
-    Returns {pages:[{slug, title, category, status, blocked_on}], corrupt_pages:[...]}.
-    This is the "backlog by construction" surface — ZERO keyword involvement — and it
-    backs BOTH `omx wiki list` and the queue-launch gate, so the human's view and the
-    gate's view can never drift. Read-only; no lock; a corrupt page is visible-skipped."""
+    Returns {pages:[{slug, title, category, status, blocked_on}], corrupt_pages:[...],
+    post_store:{ok, count, error}}. This is the "backlog by construction" surface —
+    ZERO keyword involvement — and it backs BOTH `omx wiki list` and the queue-launch
+    gate, so the human's view and the gate's view can never drift. Read-only; no lock;
+    a corrupt page is visible-skipped.
+
+    Two sources, unioned: the wiki dir (legacy, empty on a converted store) and the
+    `.hq/` post store, which is where open leads live now — see `_post_store_pages`.
+    Slugs cannot collide: a post id always contains '/'."""
     pages = []
     corrupt = []
     for slug in storage.list_pages(paths):
@@ -73,7 +139,9 @@ def enumerate_pages(paths: OmxPaths, *, status: str | None = None) -> dict:
             "slug": slug, "title": page.title, "category": page.category,
             "status": page.status, "blocked_on": page.blocked_on,
         })
-    return {"pages": pages, "corrupt_pages": corrupt}
+    post_pages, post_info = _post_store_pages(paths, status)
+    pages.extend(post_pages)
+    return {"pages": pages, "corrupt_pages": corrupt, "post_store": post_info}
 
 
 def query_wiki(paths: OmxPaths, *, now: str, text: str, tags: list | None = None,

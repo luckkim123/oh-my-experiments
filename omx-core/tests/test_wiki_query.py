@@ -1,5 +1,67 @@
+import json
+
 from omx_core.omx_paths import OmxPaths
 from omx_core.wiki import ingest, query
+
+
+def _fake_hq(monkeypatch, *, posts=None, exc=None, rc=0, stdout=None):
+    """Stand in for the `hq` subprocess. The real one is neutralized by the
+    autouse `_no_hq_shellout` fixture, so a test that wants the post source has
+    to opt back in here."""
+    import subprocess as _sp
+
+    monkeypatch.undo()   # drop the autouse stub for this test
+
+    def _run(cmd, **kw):
+        if exc is not None:
+            raise exc
+        payload = stdout if stdout is not None else json.dumps({"posts": posts or []})
+        return _sp.CompletedProcess(cmd, rc, stdout=payload, stderr="boom")
+
+    monkeypatch.setattr(query.subprocess, "run", _run)
+    return query
+
+
+def test_enumerate_pages_unions_the_post_store(tmp_path, monkeypatch):
+    """The wiki→posts conversion left open leads in posts while `omx wiki list`
+    kept reading the (now empty) wiki dir, so the queue-launch gate passed on a
+    blind roster. Both sources are enumerated now."""
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Legacy", content="b",
+                            tags=[], category="reference", confidence="high", sources=[],
+                            status="needs-experiment")
+    q = _fake_hq(monkeypatch, posts=[
+        {"id": "finding/075", "title": "J2 cable snapped",
+         "fields": {"topic": "debugging", "status": "needs-apply-before-retrain"}},
+        {"id": "finding/001", "title": "no status", "fields": {"status": "none"}},
+    ])
+    res = q.enumerate_pages(p)
+    assert res["post_store"] == {"ok": True, "count": 1, "error": None}
+    assert {pg["slug"] for pg in res["pages"]} == {"legacy.md", "finding/075"}
+    post = [pg for pg in res["pages"] if pg["slug"] == "finding/075"][0]
+    assert post["status"] == "needs-apply-before-retrain"   # the blocking status survives
+    assert post["category"] == "debugging" and post["blocked_on"] is None
+
+
+def test_enumerate_pages_reports_an_unreadable_post_store(tmp_path, monkeypatch):
+    """An unreadable store is not an empty one — the whole point of the fix is
+    that a zero from an unread source must never read as 'nothing open'."""
+    p = OmxPaths(root=tmp_path)
+    ingest.ingest_knowledge(p, now="2026-05-31T10:00:00", title="Legacy", content="b",
+                            tags=[], category="reference", confidence="high", sources=[])
+    q = _fake_hq(monkeypatch, exc=FileNotFoundError("hq"))
+    res = q.enumerate_pages(p)
+    assert res["post_store"]["ok"] is False
+    assert "PATH" in res["post_store"]["error"]
+    assert [pg["slug"] for pg in res["pages"]] == ["legacy.md"]   # degrades, never fails
+
+
+def test_enumerate_pages_treats_a_failed_hq_as_unreadable(tmp_path, monkeypatch):
+    p = OmxPaths(root=tmp_path)
+    q = _fake_hq(monkeypatch, rc=2)
+    assert q.enumerate_pages(p)["post_store"]["ok"] is False
+    q = _fake_hq(monkeypatch, stdout="not json")
+    assert q.enumerate_pages(p)["post_store"]["ok"] is False
 
 
 def test_tokenize_latin_and_digits():

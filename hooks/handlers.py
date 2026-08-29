@@ -148,7 +148,13 @@ def _fetch_open_backlog(payload):
             )
             if proc.returncode != 0:
                 raise RuntimeError(f"omx wiki list exited {proc.returncode}")
-            pages = json.loads(proc.stdout).get("pages", [])
+            _out = json.loads(proc.stdout)
+            pages = _out.get("pages", [])
+            # Absent on an omx older than the post-store union — treat that as
+            # readable, since there was no second source to fail.
+            _ps = _out.get("post_store") or {"ok": True, "error": None}
+            store_ok = _ps.get("ok") is not False
+            store_err = _ps.get("error")
             if not isinstance(pages, list):
                 # valid JSON but wrong shape must degrade VISIBLY too, not fall
                 # through to the silent outer catch during formatting.
@@ -169,8 +175,22 @@ def _fetch_open_backlog(payload):
                 blocked = page.get("blocked_on") or "unblocked"
                 lines.append(f"  [{st}] {page.get('slug', '?')} (blocked: {blocked})")
         if not lines:
+            if not store_ok:
+                # Silence here would be the original defect in a new place: the
+                # store that HOLDS the open leads was unreachable, and a zero from
+                # an unread source is not a zero.
+                return (
+                    "<omx-open-backlog>\n"
+                    f"WARN: the post store could not be read ({store_err}) — open "
+                    "leads live there since the wiki→posts conversion, so this turn "
+                    "saw only the legacy wiki dir. Enumerate manually before any "
+                    "next-steps / plan / launch decision: "
+                    "`hq query --status needs-experiment` and "
+                    "`--status needs-apply-before-retrain`.\n"
+                    "</omx-open-backlog>"
+                )
             if not pages:
-                return ""   # no wiki yet — there is genuinely nothing to say
+                return ""   # store readable and genuinely empty — nothing to say
             # An empty backlog is ALSO what a wiki whose writers never set
             # --status looks like, and the zero alone cannot tell the two apart.
             # Measured on one workspace 2026-08-10: 540 pages, 0 blocking,

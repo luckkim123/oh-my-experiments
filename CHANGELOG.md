@@ -4,6 +4,45 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.15.0] - 2026-08-29 — the backlog moved to posts and the readers stayed behind
+
+### Fixed
+- **`omx wiki list` and the queue-launch gate were blind to every open lead.**
+  The wiki→posts conversion (vault `55a12dc8`, 2026-08-28) emptied
+  `community/wiki/` and moved the leads into `community/posts/`, carrying the
+  `status:` vocabulary with them — store-spec §4 keeps `needs-apply-before-retrain`
+  launch-blocking there. `OmxPaths.wiki_dir()` still pointed at the emptied
+  directory, so measured on the vault 2026-08-29: `omx wiki list` returned
+  `{"pages": []}` while **5 open leads sat in posts, 2 of them blocking**, and
+  `omx queue-launch` read that zero as a pass.
+
+  `enumerate_pages` now unions both sources, so the one fix reaches both consumers
+  — which is exactly what its docstring promised by backing `wiki list` and the
+  gate from one helper. Post ids always contain `/`, so slugs cannot collide.
+
+  Posts are read by shelling out to `hq --json query` rather than by parsing them
+  here. A second frontmatter parser for the same format is the drift the store
+  unification exists to prevent; the cost is that `hq` (from
+  `oh-my-orchestrator`) must be on PATH.
+
+- **A store it could not read no longer looks like a store with nothing in it.**
+  `enumerate_pages` returns `post_store: {ok, count, error}`; the gate prints a
+  loud WARNING and the `UserPromptSubmit` backlog hook emits a WARN block instead
+  of its previous `return ""`. That silent branch was commented
+  `# no wiki yet — there is genuinely nothing to say`, a premise the conversion
+  falsified: after it, zero pages meant "the wiki layer was emptied on purpose",
+  and the branch right below it — the one that warns a zero cannot be trusted —
+  was the branch that stopped being reached.
+
+  Neither path fails a launch on an unreachable store. A machine without `hq` is
+  a supported configuration; being quiet about it is not.
+
+### Changed
+- `omx-core/tests/conftest.py` neutralizes the `hq` shell-out by default. Without
+  it, results would depend on whether the machine has `hq` and whether an anchor
+  happens to sit above `tmp_path` — the same non-hermetic trap fixed in
+  `claudebase` the same day.
+
 ## [0.14.0] - 2026-08-28 — fallback removed: the anchor decides, full stop
 
 Store-spec §7 stage 2. 0.13.0 shipped "write new, read both" — a read tried
