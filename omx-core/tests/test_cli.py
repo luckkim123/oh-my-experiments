@@ -558,6 +558,22 @@ def test_wiki_list_fails_loudly_on_an_unreadable_post_store(tmp_path, capsys, mo
     assert "hq not on PATH" in captured.err
 
 
+def test_wiki_list_does_not_prescribe_command_v_hq_for_other_failures(tmp_path, capsys, monkeypatch):
+    """`command -v hq` passes when hq is installed but the root is unanchored,
+    which points the reader away from the cause (codex, 2026-09-01)."""
+    import omx_core.cli as cli
+    from omx_core.cli import build_parser
+    monkeypatch.setattr(cli._wiki_query, "enumerate_pages", lambda *a, **kw: {
+        "pages": [], "corrupt_pages": [],
+        "post_store": {"ok": False, "count": 0, "total": 0,
+                       "error": "hq exited 2: no .hq/.anchor found ascending from /x"}})
+    args = build_parser().parse_args(["wiki", "list", "--root", str(tmp_path)])
+    assert args.func(args) == 2
+    err = capsys.readouterr().err
+    assert "no .hq/.anchor found" in err
+    assert "command -v hq" not in err
+
+
 def test_wiki_add_with_status_and_blocked_on(tmp_path, capsys):
     from omx_core.cli import build_parser
     args = build_parser().parse_args(

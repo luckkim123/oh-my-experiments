@@ -27,6 +27,12 @@ project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.jso
   printed), because its own store-unreadable message says more than the
   generic pre-fetch-FAILED text rc 2 would otherwise have fallen into.
 
+  The remediation is chosen from the error, not fixed. `command -v hq` is the
+  right check for a PATH miss and useless for an unanchored root, a corrupt
+  store, a timeout, or invalid JSON — where it passes and points the reader
+  away from the cause (found by codex in the 2-family review of the sibling
+  oh-my-orchestrator 0.23.0 change).
+
 ## [0.16.0] - 2026-08-29 — the wiki engine is hq now, and 979 lines of it are gone
 
 ### Fixed

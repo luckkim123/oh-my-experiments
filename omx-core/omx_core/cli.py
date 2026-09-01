@@ -1689,10 +1689,17 @@ def _cmd_wiki_list(args) -> int:
         # library and both programmatic callers already keep failure and absence
         # distinct; this verb -- the one a human actually types -- did not, so
         # the whole chain's care was invisible at the only surface it reached.
-        print(f"ERROR: the post store could not be read ({store.get('error')}) — "
-              "`pages` above is EMPTY BECAUSE IT IS UNREADABLE, not because the "
-              "store is empty. `hq` ships with oh-my-orchestrator; check "
-              "`command -v hq` before reading this output as a knowledge base.",
+        err = str(store.get("error") or "")
+        # The remediation has to match the failure. `command -v hq` is the right
+        # check for a PATH miss and useless for an unanchored root, a corrupt
+        # store, a timeout, or invalid JSON -- where it passes and points the
+        # reader away from the actual cause (codex, 2026-09-01).
+        fix = ("`hq` ships with oh-my-orchestrator; check `command -v hq`."
+               if "not on PATH" in err else
+               "The error above is the cause; `hq` itself resolved. Run "
+               "`hq --anchor <root> --json query` directly to see it in full.")
+        print(f"ERROR: the post store could not be read ({err}) — `pages` above is "
+              f"EMPTY BECAUSE IT IS UNREADABLE, not because the store is empty. {fix}",
               file=sys.stderr)
         return 2
     return 0
