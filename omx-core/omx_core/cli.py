@@ -1679,7 +1679,22 @@ def _cmd_wiki_list(args) -> int:
     paths = OmxPaths(root=_resolved_root(args))
     # --status enumerates the backlog by construction (keyword-independent); the same
     # helper backs the queue-launch gate so the two views can never drift.
-    print(json.dumps(_wiki_query.enumerate_pages(paths, status=args.status)))
+    catalog = _wiki_query.enumerate_pages(paths, status=args.status)
+    print(json.dumps(catalog))
+    store = catalog.get("post_store") or {}
+    if store.get("ok") is False:
+        # `pages: []` with rc 0 and no stderr is what a store holding 300 posts
+        # looked like on a machine where `hq` was not on PATH (ksm-MS-7E01,
+        # 2026-09-01), and the reader concluded the wiki had been lost. The
+        # library and both programmatic callers already keep failure and absence
+        # distinct; this verb -- the one a human actually types -- did not, so
+        # the whole chain's care was invisible at the only surface it reached.
+        print(f"ERROR: the post store could not be read ({store.get('error')}) — "
+              "`pages` above is EMPTY BECAUSE IT IS UNREADABLE, not because the "
+              "store is empty. `hq` ships with oh-my-orchestrator; check "
+              "`command -v hq` before reading this output as a knowledge base.",
+              file=sys.stderr)
+        return 2
     return 0
 
 

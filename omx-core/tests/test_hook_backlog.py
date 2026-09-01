@@ -69,13 +69,35 @@ def test_backlog_nonzero_rc_emits_visible_warning(monkeypatch):
     # A FAILED fetch on a real omx root must degrade VISIBLY, not to "" — a
     # silently dropped backlog re-arms the 2026-07-15 stranded-instruction
     # incident (open leads exist but vanish with zero signal).
+    # rc 1, not 2: 2 is now `wiki list`'s specific "post store unreadable" code
+    # and has its own, better-worded branch (see the test below).
     mod = _load_handlers()
     monkeypatch.setattr(mod, "_resolve_backlog_root", lambda p: "/fake/root")
     monkeypatch.setattr(subprocess, "run", _fake_run(
-        [{"slug": "x.md", "status": "needs-experiment"}], returncode=2))
+        [{"slug": "x.md", "status": "needs-experiment"}], returncode=1))
     out = mod._fetch_open_backlog({"cwd": "/fake/root"})
     assert "<omx-open-backlog>" in out and "WARN" in out
     assert "omx wiki list --status needs-experiment" in out   # manual fallback command
+
+
+def test_backlog_rc2_keeps_the_specific_post_store_message(monkeypatch):
+    """rc 2 carries a full catalog, so it must not fall into the generic FAILED text.
+
+    `wiki list` exits 2 on an unreadable post store so that a shell caller stops
+    reading `pages: []` as an empty store (ksm-MS-7E01, 2026-09-01: 300 posts on
+    disk, `hq` off PATH, rc 0). That rc must not cost this hook the more precise
+    message it already had for the same condition.
+    """
+    mod = _load_handlers()
+    monkeypatch.setattr(mod, "_resolve_backlog_root", lambda p: "/fake/root")
+    monkeypatch.setattr(subprocess, "run", _fake_run(
+        [], returncode=2,
+        stdout=json.dumps({"pages": [], "post_store": {
+            "ok": False, "error": "hq not on PATH (ships with oh-my-orchestrator)"}})))
+    out = mod._fetch_open_backlog({"cwd": "/fake/root"})
+    assert "the post store could not be read" in out
+    assert "hq not on PATH" in out
+    assert "pre-fetch FAILED" not in out
 
 
 def test_backlog_subprocess_timeout_emits_visible_warning(monkeypatch):

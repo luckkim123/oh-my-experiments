@@ -146,7 +146,10 @@ def _fetch_open_backlog(payload):
                 ["omx", "wiki", "list", "--root", root],
                 capture_output=True, text=True, timeout=_BACKLOG_FETCH_TIMEOUT_S,
             )
-            if proc.returncode != 0:
+            # rc 2 is `wiki list`'s "the post store is unreadable" — it still
+            # prints the full catalog, and the store-unreadable branch below says
+            # more than the generic FAILED text this would otherwise fall into.
+            if proc.returncode not in (0, 2):
                 raise RuntimeError(f"omx wiki list exited {proc.returncode}")
             _out = json.loads(proc.stdout)
             pages = _out.get("pages", [])

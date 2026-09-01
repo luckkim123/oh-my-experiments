@@ -541,6 +541,23 @@ def test_wiki_list_returns_json(tmp_path, capsys, monkeypatch):
     assert out["pages"][0]["slug"] == "finding/001"
 
 
+def test_wiki_list_fails_loudly_on_an_unreadable_post_store(tmp_path, capsys, monkeypatch):
+    """`pages: []` + rc 0 + silence is what 300 posts looked like without hq on PATH."""
+    import omx_core.cli as cli
+    from omx_core.cli import build_parser
+    monkeypatch.setattr(cli._wiki_query, "enumerate_pages", lambda *a, **kw: {
+        "pages": [], "corrupt_pages": [],
+        "post_store": {"ok": False, "count": 0, "total": 0,
+                       "error": "hq not on PATH (ships with oh-my-orchestrator)"}})
+    args = build_parser().parse_args(["wiki", "list", "--root", str(tmp_path)])
+    rc = args.func(args)
+    captured = capsys.readouterr()
+    # The JSON still goes out -- a caller that already reads `post_store` keeps working.
+    assert json.loads(captured.out)["post_store"]["ok"] is False
+    assert rc == 2, "an unreadable store must not exit 0 like an empty one"
+    assert "hq not on PATH" in captured.err
+
+
 def test_wiki_add_with_status_and_blocked_on(tmp_path, capsys):
     from omx_core.cli import build_parser
     args = build_parser().parse_args(

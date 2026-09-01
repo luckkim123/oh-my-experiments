@@ -4,6 +4,29 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.16.1] - 2026-09-01 — an unreadable store exited 0 and printed `pages: []`
+
+### Fixed
+- **`omx wiki list` reported an unreadable post store exactly the way it
+  reports an empty one.** On a machine where `hq` was not on `PATH`
+  (ksm-MS-7E01, 2026-09-01, 300 posts sitting on disk) the verb printed
+  `{"pages": [], ..., "post_store": {"ok": false, ...}}`, exited **0**, and
+  wrote nothing to stderr. The reader concluded the wiki had been lost.
+
+  What is notable is where the defect was *not*: `wiki/hq_backend.py` raises
+  `HqUnavailable`, `wiki/query.py` turns it into an explicit `ok: false`, and
+  both programmatic callers — the queue-launch gate (`cli.py`) and the
+  open-backlog hook (`hooks/handlers.py`) — already print a specific warning
+  for it. Every layer built to keep failure and absence distinct did its job,
+  and all of that care was invisible at the one surface a human actually
+  types. `_cmd_wiki_list` now writes the reason to stderr and exits **2**;
+  the JSON on stdout is unchanged, so a caller already reading `post_store`
+  keeps working.
+
+  `hooks/handlers.py` treats rc 2 as a normal read (the catalog is still
+  printed), because its own store-unreadable message says more than the
+  generic pre-fetch-FAILED text rc 2 would otherwise have fallen into.
+
 ## [0.16.0] - 2026-08-29 — the wiki engine is hq now, and 979 lines of it are gone
 
 ### Fixed
