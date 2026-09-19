@@ -8,7 +8,7 @@ The skill writes nothing to .omx/profile/ directly.
 from __future__ import annotations
 
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 
@@ -76,6 +76,64 @@ def validate_metrics_schema(data: dict) -> dict:
             "metrics.yaml: pending_approval must be true on a freshly bootstrapped profile")
 
     return data
+
+
+def validate_run_completion(block: dict) -> dict:
+    """Validate an OPTIONAL `run_completion` block from metrics.yaml (loud-fail
+    OmxError); return it unchanged on success (design doc §3, D2).
+
+    Deliberately separate from validate_metrics_schema, which runs only at
+    bootstrap time and requires pending_approval=True — a live, already-
+    approved profile gaining a run_completion block must never be forced back
+    through that validator.
+    """
+    if not isinstance(block, dict):
+        raise OmxError(f"run_completion must be a mapping, got {type(block).__name__}")
+
+    for key in ("runs", "finished", "required", "how"):
+        if key not in block:
+            raise OmxError(f"run_completion: missing required key {key!r}")
+
+    for key in ("runs", "finished", "how"):
+        value = block[key]
+        if not isinstance(value, str) or value == "":
+            raise OmxError(f"run_completion: {key!r} must be a non-empty string, got {value!r}")
+
+    required = block["required"]
+    if not isinstance(required, list) or not required or not all(
+            isinstance(g, str) and g for g in required):
+        raise OmxError(
+            f"run_completion: 'required' must be a non-empty list of non-empty strings, got {required!r}")
+
+    exclude = block.get("exclude")
+    if exclude is not None and (
+            not isinstance(exclude, list) or not all(isinstance(g, str) for g in exclude)):
+        raise OmxError(f"run_completion: 'exclude' must be a list of strings, got {exclude!r}")
+
+    # Every glob field is checked for the same two traversal shapes: absolute
+    # (escapes output_root entirely) or containing a '..' segment (escapes it
+    # relatively). 'how' is excluded -- it is an opaque command template, not a glob.
+    globs = [("runs", block["runs"]), ("finished", block["finished"])]
+    globs += [("required", g) for g in required]
+    globs += [("exclude", g) for g in (exclude or [])]
+    for key, g in globs:
+        p = PurePosixPath(g)
+        if p.is_absolute() or ".." in p.parts:
+            raise OmxError(
+                f"run_completion: {key!r} glob must be relative with no '..' segments, got {g!r}")
+
+    return block
+
+
+def load_run_completion(root) -> dict | None:
+    """Read the optional `run_completion` block from profile/metrics.yaml and
+    validate it. Returns None when the key is absent -- a legitimate
+    "no contract" state, not an error (design doc §3/§4, success criterion 3)."""
+    data = load_profile_metrics(root)
+    block = data.get("run_completion")
+    if block is None:
+        return None
+    return validate_run_completion(block)
 
 
 RULES_TEMPLATE = """\
