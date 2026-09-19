@@ -152,12 +152,23 @@ def test_non_bash_tools_pass(tmp_path):
     assert out is None
 
 
-def test_malformed_command_shlex_valueerror_allows(tmp_path):
+def test_malformed_command_shlex_valueerror_denies(tmp_path):
+    """Ruling 37 (Task-11 cross-model fresh-loop round-1): reverses this
+    test's original assertion. The brief's own step 1 ("ValueError -> None,
+    allow") was withdrawn -- a shlex tokenizer failure is a parse failure,
+    the same class Ruling 30 already governs for the heredoc scanner, and
+    letting it fall through to the outer fail-open turned "I could not read
+    this command" into a silent allow. This round's worst finding was
+    exactly that shape (an apostrophe in an ordinary comment), reached
+    through a DIFFERENT cause than this test's unterminated quote -- both
+    now deny, with the minimal fixed message and the close-defer escape."""
     mod = _load_handlers()
     _setup(tmp_path)
     _finish(tmp_path / "experiments" / "runs" / "alpha")
     out = _run(mod, 'hq post --category handoff "unterminated', tmp_path)
-    assert out is None
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert 'omx close-defer --reason "<why>"' in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_missing_or_non_string_command_allows(tmp_path):
@@ -409,7 +420,18 @@ def test_unquoted_here_string_word_does_not_open_a_phantom_heredoc(tmp_path):
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_backslash_in_delimiter_never_matches_and_does_not_swallow(tmp_path):
+def test_backslash_in_delimiter_still_denies_the_command_after_the_heredoc(tmp_path):
+    """Renamed and corrected (Task-11 cross-model round-1): this test's
+    original name and framing ("never matches") described the round-5
+    MECHANISM, not real bash semantics -- a mid-word backslash (`<<E\\OF`)
+    quotes one character the same way `<<\\EOF` does (see
+    test_backslash_quoted_heredoc_delimiter_strips_the_backslash above), and
+    with backslash-stripping now correct, the delimiter DOES match "EOF"
+    here. The verdict is unchanged (deny) but the REASON is now the correct
+    one: the heredoc genuinely closes at the "EOF" line, swallowing only
+    "body", and `hq post --category handoff` is a real, separate command
+    AFTER the terminator -- not, as the old framing implied, an accidental
+    deny from Ruling 30 giving up on an unmatchable delimiter."""
     mod = _load_handlers()
     _setup(tmp_path)
     _finish(tmp_path / "experiments" / "runs" / "alpha")
@@ -465,6 +487,105 @@ def test_quoted_heredoc_marker_and_fd_prefixed_heredoc_controls(tmp_path):
     assert _run(mod, 'echo "<<EOF"\nhq post --category handoff', tmp_path) is not None
     assert _run(mod, "echo redirect > /tmp/x\nhq post --category handoff", tmp_path) is not None
     assert _run(mod, "cat 2<<EOF\nbody\nEOF\nhq post --category handoff", tmp_path) is not None
+
+
+# --- Task-11 cross-model findings, fresh loop round-1 (six defects, exact --
+# strings verified by the controller against the code before dispatch) -----
+
+def test_apostrophe_in_trailing_comment_denies_not_allows(tmp_path):
+    """1.1, the worst finding of this round: an apostrophe in an ordinary
+    bash comment ("# don't fail") corrupted this scan's own quote-tracking,
+    made shlex.split raise on the marked string, and the outer fail-open
+    turned that into a silent allow -- with no error anywhere. Ruling 37:
+    dropping comment text at the source (rather than copying it through)
+    removes the trigger; a residual shlex failure now denies regardless."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "hq post --category handoff # don't fail", tmp_path)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_apostrophe_in_leading_comment_denies_not_allows(tmp_path):
+    """1.1b, same mechanism, comment on its own leading line."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "# Let's finish up\nhq post --category handoff", tmp_path)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_ansi_c_quoted_apostrophe_denies_not_allows(tmp_path):
+    """1.2: not a comment at all -- this scan doesn't understand bash's
+    $'...' ANSI-C quoting, mis-tracks the embedded escaped apostrophe as an
+    unterminated single-quote span, and shlex.split correctly raises on the
+    resulting marked string. Ruling 37 doesn't ask this scan to learn
+    $'...' syntax -- only that the resulting parse failure denies instead
+    of silently allowing (the second half of the ruling, independent of the
+    comment-dropping fix, since no '#' is involved here at all)."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "echo $'don\\'t stop' ; hq post --category handoff", tmp_path)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_ampersand_background_operator_is_a_separator(tmp_path):
+    """2.1/2.1b: `&` is a POSIX list separator (backgrounds the preceding
+    command) and was simply absent from _CLOSURE_SEPARATORS -- both the
+    spaced and glued-with-no-whitespace forms must be seen, the same
+    distinction already proven for `&&`/`;`/`|` in earlier rounds."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    for command in ("sleep 1 & hq post --category handoff",
+                     "sleep 1&hq post --category handoff"):
+        out = _run(mod, command, tmp_path)
+        assert out is not None, command
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny", command
+
+
+def test_and_and_is_still_recognized_after_adding_ampersand(tmp_path):
+    """Negative twin for the `&` addition: `&&` must keep matching as ONE
+    two-character operator, not as two separate `&` separators -- pins that
+    _CLOSURE_SEP_RE's alternation order (`&&` before the bare `&`) is what
+    it needs to be, not just that the tuple membership check happens to
+    work out."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "cd /tmp && hq post --category handoff", tmp_path)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_backslash_quoted_heredoc_delimiter_strips_the_backslash(tmp_path):
+    """3.1: `<<\\EOF` backslash-quotes ONE character of the delimiter word,
+    the same way a backslash quotes anything else in unquoted bash -- the
+    real terminator is "EOF", backslash removed. Treating the backslash as
+    literal manufactured a delimiter that could never match, so a genuine
+    heredoc whose body reads exactly like the closure declaration was
+    scanned as a real command instead of swallowed as body data."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "cat <<\\EOF\nhq post --category handoff\nEOF\n", tmp_path)
+    assert out is None
+
+
+def test_crlf_heredoc_terminator_matches_with_cr_stripped(tmp_path):
+    """3.2: a CRLF-terminated command left every candidate body/terminator
+    line carrying a trailing \\r ("EOF\\r" != "EOF"), so a heredoc that
+    should close normally looked unterminated to Ruling 30's lookahead and
+    fell through to being scanned as commands."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "cat <<EOF\r\nhq post --category handoff\r\nEOF\r\n", tmp_path)
+    assert out is None
 
 
 # --- F4 (task-5 fix-round-2): a renderer failure must still deny -----------

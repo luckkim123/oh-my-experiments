@@ -724,8 +724,13 @@ def loop_gate(payload):
 # hence the strict root resolver below, which short-circuits BEFORE touching
 # the filesystem rather than trusting evaluate_completion to classify an
 # unrelated tree correctly.
-_CLOSURE_SEPARATORS = ("&&", "||", ";", "|")
-_CLOSURE_SEP_RE = re.compile(r"(\|\||&&|;|\|)")
+_CLOSURE_SEPARATORS = ("&&", "||", "&", ";", "|")
+#: `&&` is listed before the bare `&` alternative so the regex engine tries
+#: the two-character operator FIRST at each position (Task-11 cross-model
+#: finding: `&` -- a POSIX list separator, backgrounding the preceding
+#: command -- was simply absent here, so `sleep 1 & hq post ...` and its
+#: glued form `sleep 1&hq post ...` both walked straight through).
+_CLOSURE_SEP_RE = re.compile(r"(\|\||&&|&|;|\|)")
 _CLOSURE_REASON_MAX_CHARS = 1200
 
 
@@ -793,7 +798,19 @@ def _closure_read_heredoc_word(command, i, n):
     (`EOF`); returns (word_with_quotes_stripped, index_after_word). Not full
     shell word-parsing (no escape handling inside the word, no mixed
     quoting) -- sufficient for the ordinary `<<EOF` / `<<'EOF'` / `<<-EOF`
-    shapes this gate needs to not be fooled by (N3, task-5 fix-round-4)."""
+    shapes this gate needs to not be fooled by (N3, task-5 fix-round-4).
+
+    An UNQUOTED word strips backslashes as it reads (Task-11 cross-model
+    finding): `<<\\EOF` and `<<E\\OF` both quote a single character of the
+    delimiter the same way a backslash does anywhere else in unquoted bash
+    -- the word bash actually compares terminator lines against is `EOF` in
+    both cases, backslash removed. Treating the backslash as literal (the
+    pre-fix behavior) manufactures a delimiter that can never match anything
+    real, so a genuine heredoc whose body happens to read like a closure
+    declaration -- `cat <<\\EOF` / a real "EOF" terminator two lines down --
+    fell through to being scanned as commands instead of swallowed as data.
+    A SINGLE-quoted word does NOT strip backslashes (POSIX: single quotes
+    are fully literal) -- unaffected, handled by the branch above."""
     if i < n and command[i] in ("'", '"'):
         q = command[i]
         j = i + 1
@@ -804,18 +821,40 @@ def _closure_read_heredoc_word(command, i, n):
         return word, (j + 1 if j < n else j)
     start = i
     j = i
+    chars = []
     while j < n and not command[j].isspace() and command[j] not in ("<", ">", "|", "&", ";"):
+        if command[j] == "\\" and j + 1 < n:
+            chars.append(command[j + 1])
+            j += 2
+            continue
+        chars.append(command[j])
         j += 1
-    return command[start:j], j
+    return "".join(chars), j
+
+
+def _closure_strip_crlf(line: str) -> str:
+    """Drop a trailing `\\r` from a heredoc body/terminator LINE before
+    comparing it against a delimiter (Task-11 cross-model finding): the scan
+    splits body content on a literal `\\n` only, so a CRLF-terminated
+    command left every candidate line carrying a trailing `\\r` (`"EOF\\r"`
+    never equals `"EOF"`), and a heredoc that should close normally instead
+    looked unterminated to Ruling 30 -- falling through to being scanned as
+    commands instead of swallowed as data. The delimiter word itself never
+    carries a `\\r` (`_closure_read_heredoc_word` already stops at any
+    whitespace, `\\r` included), so only the LINE side needs this."""
+    return line[:-1] if line.endswith("\r") else line
 
 
 def _closure_heredoc_terminator_exists(command, start, delim, strip_tabs) -> bool:
     """Ruling 30 (task-5 fix-round-5): whether SOME line in `command[start:]`
-    exactly equals `delim` (leading tabs stripped first when `strip_tabs`).
-    The pre-commitment check every candidate heredoc opener must pass BEFORE
-    the scan starts treating anything as body -- see `_closure_mark_line_breaks`."""
+    exactly equals `delim` (CRLF's trailing `\\r` stripped first, then
+    leading tabs stripped when `strip_tabs`). The pre-commitment check every
+    candidate heredoc opener must pass BEFORE the scan starts treating
+    anything as body -- see `_closure_mark_line_breaks`."""
     for line in command[start:].split("\n"):
-        candidate = line.lstrip("\t") if strip_tabs else line
+        candidate = _closure_strip_crlf(line)
+        if strip_tabs:
+            candidate = candidate.lstrip("\t")
         if candidate == delim:
             return True
     return False
@@ -912,7 +951,7 @@ def _closure_mark_line_breaks(command: str) -> str:
         if active_heredocs:
             c = command[i]
             if c == "\n":
-                line = "".join(body_line_buf)
+                line = _closure_strip_crlf("".join(body_line_buf))
                 delim, strip_tabs = active_heredocs[0]
                 candidate = line.lstrip("\t") if strip_tabs else line
                 if candidate == delim:
@@ -957,10 +996,17 @@ def _closure_mark_line_breaks(command: str) -> str:
             i += 1
             continue
         if c == "#" and (i == 0 or command[i - 1] in _CLOSURE_WORD_START_PRECEDERS):
-            # a comment runs to end of line -- nothing inside it (an
-            # embedded "<<EOF", a quote, a continuation) is special.
+            # Ruling 37 (Task-11 cross-model finding): DROP the comment
+            # text rather than copy it through. A comment can contain
+            # anything -- an unmatched quote character ("# don't fail",
+            # "# Let's finish up") corrupted this scan's own quote-tracking
+            # and, further down, made shlex.split raise on the marked
+            # string, which the caller's fail-open then turned into a
+            # silent allow. Excluding comment text at the source removes
+            # the whole class rather than patching the quoting rules for
+            # one apostrophe shape. Nothing inside a comment is a heredoc
+            # opener either, so this still closes that case too.
             while i < n and command[i] not in ("\n", "\r"):
-                out.append(command[i])
                 i += 1
             continue
         if c == "\\" and i + 1 < n and command[i + 1] in ("\n", "\r"):
@@ -1022,8 +1068,10 @@ def _closure_declares(command: str) -> bool:
     """Whether `command` contains a closure declaration in any `&&`/`||`/`;`/`|`
     segment -- a real line break counts too, marked as `;` first (F1, see
     `_closure_mark_line_breaks`). Raises ValueError on unbalanced quotes
-    (shlex) -- the caller treats that as allow, same as every other internal
-    failure (D9).
+    (shlex) -- Ruling 37 (Task-11 cross-model finding): the caller treats
+    THAT specific failure as DENY, not allow (a tokenizer failure is a
+    parse failure, the same class Ruling 30 already governs for the
+    heredoc scanner) -- every other internal failure still fails open (D9).
 
     ponytail: the closure verb must still be the literal head of its
     segment, so `env FOO=1 hq post ...`, `sudo hq post ...`,
@@ -1112,6 +1160,15 @@ def _closure_unreadable_reason(verdict: dict, root) -> str:
     return _closure_fit_reason(_CLOSURE_UNREADABLE_HEADER, body, _CLOSURE_UNREADABLE_FOOTER)
 
 
+_CLOSURE_UNPARSEABLE_REASON = (
+    "omx run-completion gate: this Bash command's quoting could not be parsed, so the gate "
+    "cannot tell whether it declares session closure. It denies rather than silently "
+    "allowing when it cannot read the command at all -- an ordinary comment with an "
+    "apostrophe (\"# don't fail\") is enough to trigger this. If this is not a closure "
+    "declaration, proceed with: omx close-defer --reason \"<why>\"."
+)
+
+
 def _closure_resolve_root(payload) -> str:
     """Resolve the omx root for closure_guard (Ruling 27, fix-round-1).
 
@@ -1164,7 +1221,27 @@ def closure_guard(payload):
         command = (payload.get("tool_input") or {}).get("command")
         if not isinstance(command, str) or not command:
             return None
-        if not _closure_declares(command):
+        try:
+            declares = _closure_declares(command)
+        except ValueError:
+            # Ruling 37 (Task-11 cross-model finding, withdraws the brief's
+            # original step 1): a shlex tokenizer failure is a PARSE
+            # failure, the same class Ruling 30 already governs for the
+            # heredoc scanner -- it must not fall through to the outer
+            # fail-open below and become a silent allow. Worst finding of
+            # this round: an apostrophe in an ordinary bash comment
+            # ("# don't fail") broke shlex and turned the gate off with no
+            # error anywhere. Deny with a minimal, fixed message instead;
+            # the cost is a command whose quoting genuinely cannot be
+            # parsed gets a deny the operator can escape with
+            # `close-defer`, rather than a pass nobody can see -- the right
+            # direction for this gate.
+            return {"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": _CLOSURE_UNPARSEABLE_REASON,
+            }}
+        if not declares:
             return None
 
         from omx_core.clock import now_iso
