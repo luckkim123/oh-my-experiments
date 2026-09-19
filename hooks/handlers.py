@@ -1216,23 +1216,52 @@ def closure_guard(payload):
 # and none of its own `omx` CLI verbs were run (Ruling 35), anywhere in the
 # session.
 #
-# NOT REGISTERED (fix-round-2): even with Ruling 35's widened evidence,
-# measuring against the 17 real STAGE-declaring transcripts in this
-# workspace still shows severe over-blocking on 8/17 sessions -- up to
-# 100% of their turns, on sessions doing substantial, correctly-classified,
-# genuine work (confirmed by reading the transcripts, not just counting) --
-# see task-8-report.md's fix-round-2 section for the full table, the two
-# transcripts read in full, and the structural argument (a declare-then-do
-# temporal lag inherent to a per-turn Stop re-check, not merely a
-# verb-coverage gap) for why no verb mapping can close this. The function
-# below is fully implemented and tested (it is exactly the mechanism Ruling
-# 35 asked for, and it is measurably correct on its own terms) but is
-# deliberately absent from both `HANDLERS` and plugin.json's `Stop` array,
-# so it never fires live -- per the team lead's own stated preference ("I
-# would rather hear it from you with numbers than ship a gate that traps
-# people") given this measured, severe evidence of harm. Re-registering is a
-# two-line change (this file's HANDLERS dict + plugin.json's Stop array) if
-# the team lead decides otherwise after reading the numbers.
+# DISARMED (2026-09-19, run-completion-gate round, task 8 fix-round-3,
+# user decision "ship it disarmed"): what follows is the whole reason a
+# future re-registration attempt has to answer BEFORE touching HANDLERS or
+# plugin.json, not just a status note.
+#
+# What this was for: a Stop gate on a false STAGE declaration -- route_emit
+# (spec 2.1, above) asks the assistant to print `STAGE(exp) -> <token> ·
+# <reason>` when a turn is experiment work, and this handler was meant to
+# read that back off the transcript and block when the session's CURRENT
+# declaration names an exp-* stage whose skill (or, after Ruling 35, its own
+# omx CLI verbs) was never actually used anywhere in the session.
+#
+# It is deliberately NOT in `HANDLERS` below, and NOT in plugin.json's
+# `Stop` array (only `loop_gate` is registered there) -- confirmed by the
+# team lead independently, not just claimed here, and pinned by
+# test_stage_check_is_not_registered.py so a future PR cannot silently
+# re-wire it as a tidy-up.
+#
+# The measurement (fix-round-2, re-verified by the team lead): of the 17
+# real STAGE-declaring transcripts under ~/.claude/projects, 8 blocked at
+# least once -- 100.0%, 88.2%, 80.3%, 59.2%, 32.9%, 23.9%, 13.1%, 4.2% of
+# their turns respectively, the other 9 sessions 0%. The 100% session
+# (31b90898) declared `exp-analyze` NINE times, made 143 Bash calls, and
+# invoked not one `omx` verb -- hours of genuine analysis work, blocked on
+# every turn.
+#
+# The two structural reasons a wider verb list or a smarter regex cannot
+# fix, and any re-registration attempt must answer:
+#   1. A per-turn Stop re-check of "has the evidence appeared yet" cannot
+#      distinguish "not yet" from "never" against a growing transcript
+#      prefix -- the declaration is printed BEFORE the work by design (that
+#      is what a declaration is), so every Stop between declaring and
+#      finishing is a false block.
+#   2. This workspace's real analysis tooling is bespoke (its own eval.py,
+#      ad-hoc scripts, ssh to a remote host) and leaves no omx-CLI-shaped
+#      trace at all for a meaningful share of real work -- "did the work
+#      with local tools" and "declared and did nothing" produce the exact
+#      same observable string, which is this round's signature defect one
+#      last time and not one Ruling 35's widened evidence could close.
+#
+# Kept on purpose: the function, every test below, and _STAGE_CLI_VERBS's
+# drift-detection test (test_stage_cli_verbs_match_source.py) -- so a future
+# redesign has a correct, current verb mapping and a full behavioral spec to
+# build from, rather than starting over. Full corpus table and the two
+# transcripts read in full: task-8-report.md, fix-round-2 and fix-round-3
+# sections.
 #
 # fix-round-1 (task-8-review Finding 1, Rulings 33-34): the extraction regex
 # cannot tell "the session invented/mistyped a stage name" apart from "we
