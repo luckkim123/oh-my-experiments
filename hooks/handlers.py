@@ -101,9 +101,12 @@ _OPEN_STATUSES = ("needs-experiment", "needs-apply-before-retrain")
 
 
 def _resolve_backlog_root(payload) -> str:
-    """Resolve the STRICT omx anchor -- shared by the backlog pre-fetch and by
-    closure_guard (task 5), both of which must treat an unanchored cwd as "no
-    omx project here" rather than silently operating on some fallback root.
+    """Resolve the anchor for the backlog pre-fetch / campaign-drift check
+    ONLY (omx-2 fix). NOT used by closure_guard (task 5, fix-round-1,
+    Ruling 27) -- that gate needs a ladder "no anchor" result to fall back to
+    an omx-LAYER check (`_has_omx_marker`) before giving up, which this
+    function deliberately does not do; see `_closure_resolve_root`'s
+    docstring for why that lives separately instead of being folded in here.
     Raises when the payload cwd is missing/empty OR when the #13 ladder never
     anchors (stage == "cwd") — resolve_omx_root itself never raises (root.py:36
     always falls back at least to cwd), so THIS caller treats that weakest
@@ -677,20 +680,26 @@ def _closure_has_adjacent(tokens, a, b) -> bool:
     return any(tokens[i] == a and tokens[i + 1] == b for i in range(len(tokens) - 1))
 
 
-def _closure_reason_done(tokens) -> bool:
-    return _closure_has_adjacent(tokens, "--reason", "done") or "--reason=done" in tokens
+def _closure_kv_present(tokens, flag: str, value: str) -> bool:
+    """True when `tokens` carries `flag value` as adjacent tokens, or the
+    single glued token `flag=value` -- both forms this gate must recognize
+    for EVERY flag it matches (Ruling 28/fix-round-1: `--category=handoff`
+    was missed the same way `--reason=done` was originally handled, and a
+    gate with a one-character `=`-form bypass on some flags but not others is
+    the same class of hole as the separator-gluing bypass closed earlier)."""
+    return _closure_has_adjacent(tokens, flag, value) or f"{flag}={value}" in tokens
 
 
 def _closure_segment_declares(seg) -> bool:
-    """§6: `hq post ... --category handoff`; `omx loop-disarm`/`loop-mark-done
-    ... --reason done` (or `--reason=done`)."""
+    """§6: `hq post ... --category handoff` (or `--category=handoff`);
+    `omx loop-disarm`/`loop-mark-done ... --reason done` (or `--reason=done`)."""
     if len(seg) < 2:
         return False
     head = (seg[0], seg[1])
     if head == ("hq", "post"):
-        return _closure_has_adjacent(seg, "--category", "handoff")
+        return _closure_kv_present(seg, "--category", "handoff")
     if head in (("omx", "loop-disarm"), ("omx", "loop-mark-done")):
-        return _closure_reason_done(seg)
+        return _closure_kv_present(seg, "--reason", "done")
     return False
 
 
@@ -774,6 +783,51 @@ def _closure_unreadable_reason(verdict: dict, root) -> str:
     return _closure_fit_reason(_CLOSURE_UNREADABLE_HEADER, body, _CLOSURE_UNREADABLE_FOOTER)
 
 
+def _closure_resolve_root(payload) -> str:
+    """Resolve the omx root for closure_guard (Ruling 27, fix-round-1).
+
+    The #13 ladder (`resolve_omx_root`) as usual -- but its stage "cwd" means
+    only "no explicit root / OMX_STATE_DIR / .omx-workspace marker / git
+    toplevel found"; the ladder never checks for an omx LAYER (`.omx/` or a
+    `.hq/` layer dir) at all, so "the ladder found no anchor" is NOT the same
+    fact as "there is no omx project here" -- conflating those two was
+    exactly the bug this round shipped once already (a directory with a
+    bootstrapped profile and a real, unevaluated finished run allowed every
+    closure command, because the ladder alone was trusted to say "no
+    project"). A project that opted in (its own store is present) but sits
+    outside git and without a marker is a real omx project and must still be
+    gated: when the ladder lands on stage "cwd", fall back to
+    `_has_omx_marker(cwd)` -- the existing bare-pathlib, zero-subprocess probe
+    that already checks BOTH stores (shared with the route_emit checkpoint
+    gate) -- and gate against `cwd` itself if it finds one. Only when
+    NEITHER the ladder anchors NOR an omx layer is present at cwd does this
+    raise, which the caller treats as allow: an unrelated directory on the
+    machine must never be gated (the Finding-8 regression class).
+
+    A dedicated resolver, deliberately NOT a change to `_resolve_backlog_root`:
+    that one backs the route_emit backlog pre-fetch / campaign-drift check, a
+    different call site with its own already-shipped, tested contract
+    (`test_hook_backlog.py` monkeypatches it by NAME) -- widening its
+    anchoring was not part of this task, and giving closure_guard its own
+    function keeps that contract untouched.
+
+    ponytail: `_has_omx_marker` does not climb toward a parent directory the
+    way the ladder's OWN marker stage does -- a cwd one level below a
+    bootstrapped project's root still falls through to allow here, same as
+    it already does for the existing route_emit checkpoint-gate probe this
+    reuses. Left alone deliberately for consistency with that shared probe's
+    existing meaning; climb (or resolve via OmxPaths' own layer-detection
+    walk) if a real cwd-below-root closure attempt ever turns up."""
+    from omx_core.root import resolve_omx_root
+    cwd = payload.get("cwd")
+    if not isinstance(cwd, str) or not cwd:
+        raise ValueError("hook payload carries no usable cwd")
+    root, stage = resolve_omx_root(cwd=cwd)
+    if stage == "cwd" and not _has_omx_marker(cwd):
+        raise ValueError(f"no omx root anchor or layer found for cwd {cwd!r}")
+    return str(root)
+
+
 def closure_guard(payload):
     try:
         if payload.get("tool_name") != "Bash":
@@ -789,7 +843,7 @@ def closure_guard(payload):
                                           read_receipt, receipt_satisfies)
         from omx_core.omx_paths import OmxPaths
 
-        root = _resolve_backlog_root(payload)  # raises on an unanchored cwd -- see its docstring
+        root = _closure_resolve_root(payload)  # raises on no anchor AND no omx layer
         paths = OmxPaths(root=root)
         now = now_iso()
 

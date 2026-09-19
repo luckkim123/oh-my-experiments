@@ -104,6 +104,19 @@ def test_reason_done_also_matches_the_equals_form(tmp_path):
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+def test_category_handoff_also_matches_the_equals_form(tmp_path):
+    """Ruling 28, fix-round-1: `--category=handoff` was originally missed --
+    the brief scoped `=`-form handling to `--reason` only, and that scoping
+    was an oversight, not a decision. A gate with a one-character `=`-form
+    bypass on one flag but not another is the same hole class as the
+    separator-gluing bypass closed in the first round."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "hq post --category=handoff", tmp_path)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
 # --- non-closure commands / non-Bash tools / malformed input allow ----------
 
 def test_reason_cancel_is_not_a_closure_declaration(tmp_path):
@@ -207,9 +220,11 @@ def test_checked_zero_runs_allows(tmp_path):
 
 # --- success criterion 3: an unanchored cwd never speaks ---------------------
 
-def test_unanchored_cwd_allows_a_closure_command_with_no_contract(tmp_path):
-    """No .omx-workspace marker and no git repo here -- the #13 ladder falls
-    back to stage 'cwd', which the strict resolver raises on. The handler
+def test_unanchored_cwd_with_no_omx_layer_at_all_allows(tmp_path):
+    """Negative twin of the test below (Ruling 27, fix-round-1): no
+    .omx-workspace marker, no git repo, and -- the fact that actually
+    matters -- no `.omx/` or `.hq/` layer either. The #13 ladder falls back
+    to stage 'cwd' and `_has_omx_marker(cwd)` is also False, so the handler
     must short-circuit BEFORE touching the filesystem: this is the
     Finding-8-class regression (a Bash-matched gate denying in every
     unrelated repo on the machine) the round exists to close."""
@@ -218,21 +233,25 @@ def test_unanchored_cwd_allows_a_closure_command_with_no_contract(tmp_path):
     assert out is None
 
 
-def test_unanchored_but_bootstrapped_project_is_still_not_protected(tmp_path):
-    """Deliberate tradeoff (wiring-facts §2), NOT a bug: the strict resolver
-    treats 'no git repo, no .omx-workspace marker' as no omx project at all
-    and short-circuits BEFORE evaluate_completion ever runs -- even when the
-    cwd genuinely has a bootstrapped profile with an incomplete contract. The
-    alternative (a lenient resolver) is exactly Finding 8's regression class:
-    a Bash-matched gate that can speak in every unrelated repo on the
-    machine. Verified by a revert experiment (swap in the lenient
-    `_omx_root`): this flips from allow to deny, proving the choice is
-    load-bearing and this test actually discriminates it."""
+def test_unanchored_but_bootstrapped_project_now_denies(tmp_path):
+    """Fix-round-1, Ruling 27 -- corrects a defect this round shipped once:
+    a directory that is a REAL omx project (bootstrapped profile, declared
+    contract, a genuinely incomplete finished run) but sits outside git and
+    without a `.omx-workspace` marker used to allow every closure command,
+    because the #13 ladder's stage=='cwd' was wrongly treated as "no omx
+    project here" -- the ladder never checks for `.omx/`/`.hq/` at all, so
+    that conflated "ladder found no anchor" with "no project exists".
+    `_closure_resolve_root` now falls back to `_has_omx_marker(cwd)` when the
+    ladder itself doesn't anchor, and gates against cwd when it finds a real
+    omx layer there. This is the twin of the allow test above: same
+    ladder outcome (stage 'cwd'), opposite omx-layer presence, opposite
+    verdict."""
     mod = _load_handlers()
     _setup(tmp_path, anchor=False)  # bootstrapped profile, but no marker/git
     _finish(tmp_path / "experiments" / "runs" / "alpha")
     out = _run(mod, "omx loop-disarm --reason done", tmp_path)
-    assert out is None
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 # --- defer / receipt rescue, verified both ways (revert experiment) ---------
