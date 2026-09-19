@@ -427,6 +427,43 @@ def test_close_ack_accepts_checked_payload_from_file(tmp_path, capsys):
     assert receipt["checked_at"] == payload["checked_at"]
 
 
+def test_close_ack_accept_message_shows_reason_when_present(tmp_path, capsys):
+    """N2 (task-5 fix-round-4): close-ack's accept line was dropping the
+    payload's `reason` while its own refusal branch already prints it, so an
+    operator accepting a Ruling-29 missing-output_root pass (a genuine
+    `checked` state that still carries a distinct reason) saw a pass they
+    could not interpret. Assert the two accept outputs literally DIFFER --
+    not merely that one contains the reason text, which would still pass if
+    both grew the same fixed suffix."""
+    from omx_core import cli
+    _setup(tmp_path)
+
+    # same checked_at for both -- the ONLY difference between the two
+    # payloads must be `reason`. Two separate now_iso() calls would make the
+    # printed lines differ on timestamp alone, a confound that would let this
+    # test pass even if the reason itself were never shown.
+    checked_at = now_iso()
+    payload_no_reason = {"state": "checked", "runs": [], "root": "/container/project",
+                          "checked_at": checked_at}
+    p1 = tmp_path / "p1.json"
+    p1.write_text(json.dumps(payload_no_reason))
+    rc1 = cli.main(["close-ack", "--root", str(tmp_path), "--from", str(p1)])
+    out_no_reason = capsys.readouterr().out
+
+    payload_with_reason = {"state": "checked", "runs": [], "root": "/container/project",
+                            "checked_at": checked_at,
+                            "reason": "output_root does not exist yet: /container/experiments"}
+    p2 = tmp_path / "p2.json"
+    p2.write_text(json.dumps(payload_with_reason))
+    rc2 = cli.main(["close-ack", "--root", str(tmp_path), "--from", str(p2)])
+    out_with_reason = capsys.readouterr().out
+
+    assert rc1 == 0 and rc2 == 0
+    assert out_no_reason != out_with_reason
+    assert "does not exist" in out_with_reason
+    assert "does not exist" not in out_no_reason
+
+
 def test_close_ack_reads_stdin(tmp_path, capsys, monkeypatch):
     import io
 

@@ -242,6 +242,102 @@ def test_quoted_newline_in_summary_argument_does_not_trigger(tmp_path):
     assert out is None
 
 
+# --- N1 (task-5 fix-round-4): an unquoted backslash-newline is a line
+# CONTINUATION, not a separator -- the round-2 fix marked EVERY newline as a
+# separator, which was right for an ordinary multi-line command but wrong for
+# a continuation, which bash joins into ONE logical line.
+
+def test_backslash_continuation_after_the_declaration_still_denies(tmp_path):
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "hq post --category handoff \\\n  --summary x", tmp_path)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_backslash_continuation_inside_the_declaration_now_denies(tmp_path):
+    """team-lead's own repro: the continuation splits `hq post` and
+    `--category handoff` onto different physical lines -- round-2 marked
+    that newline as a separator too, putting the verb and its own flag in
+    different segments and silently allowing."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "hq post \\\n  --category handoff \\\n  --summary x", tmp_path)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_backslash_continuation_neighbor_shapes_still_deny(tmp_path):
+    """The controller's own thirteen-shape sweep, the load-bearing subset:
+    CRLF, tabs, an unrelated preceding continuation, chained continuations,
+    and comment lines must all still see the declaration."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    for command in (
+        "hq post --category handoff\r\n--summary x",
+        "hq post\t\\\n--category handoff",
+        "foo \\\nbar\nhq post --category handoff",
+        "hq \\\npost \\\n--category handoff",
+        "# comment\nhq post --category handoff",
+        "hq post --category handoff\n# comment",
+    ):
+        out = _run(mod, command, tmp_path)
+        assert out is not None, command
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny", command
+
+
+# --- N3 (task-5 fix-round-4): a heredoc BODY is data, not a command --------
+
+def test_heredoc_body_containing_the_phrase_as_prose_allows(tmp_path):
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod,
+               "cat >> f <<'EOF'\nthe gate denies `hq post --category handoff` when ungraded\nEOF",
+               tmp_path)
+    assert out is None
+
+
+def test_heredoc_body_that_is_literally_the_closure_command_allows(tmp_path):
+    """team-lead's own repro: the false positive the round-3 re-review found
+    -- a heredoc body line that reads exactly like the closure declaration
+    (writing a runbook, a doc, a report) must not deny."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "cat > f <<'EOF'\nhq post --category handoff\nEOF", tmp_path)
+    assert out is None
+
+
+def test_heredoc_variants_all_allow(tmp_path):
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    for command in (
+        "cat > f <<EOF\nhq post --category handoff\nEOF",              # unquoted delimiter
+        "cat > f <<-EOF\n\thq post --category handoff\nEOF",           # <<- strips leading tabs
+        "cat > f <<'A'\nx\nA\ncat > g <<'B'\ny\nB",                     # two heredocs, no real command
+        "python3 <<'PY'\nprint('hq post --category handoff')\nPY",     # text inside print()
+    ):
+        assert _run(mod, command, tmp_path) is None, command
+
+
+def test_real_closure_command_after_a_closed_heredoc_still_denies(tmp_path):
+    """The required negative twin: option (a) (track heredoc regions) must
+    not blind the gate to a genuine closure command placed after a heredoc
+    in the same command -- option (b) (stop marking after the first `<<`)
+    would have silently missed exactly this."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "cat > f <<'EOF'\nsome text\nEOF\nhq post --category handoff", tmp_path)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
 # --- F4 (task-5 fix-round-2): a renderer failure must still deny -----------
 
 def test_renderer_failure_still_denies_with_a_fallback_message(tmp_path, monkeypatch):

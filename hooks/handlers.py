@@ -714,51 +714,165 @@ def _closure_segment_declares(seg) -> bool:
     return False
 
 
+def _closure_read_heredoc_word(command, i, n):
+    """Parse a heredoc delimiter word starting at `i` (already past any
+    whitespace following `<<`/`<<-`). Quoted (`'EOF'`/`"EOF"`) or bare
+    (`EOF`); returns (word_with_quotes_stripped, index_after_word). Not full
+    shell word-parsing (no escape handling inside the word, no mixed
+    quoting) -- sufficient for the ordinary `<<EOF` / `<<'EOF'` / `<<-EOF`
+    shapes this gate needs to not be fooled by (N3, task-5 fix-round-4)."""
+    if i < n and command[i] in ("'", '"'):
+        q = command[i]
+        j = i + 1
+        start = j
+        while j < n and command[j] != q:
+            j += 1
+        word = command[start:j]
+        return word, (j + 1 if j < n else j)
+    start = i
+    j = i
+    while j < n and not command[j].isspace() and command[j] not in ("<", ">", "|", "&", ";"):
+        j += 1
+    return command[start:j], j
+
+
 def _closure_mark_line_breaks(command: str) -> str:
-    """Replace every line break (`\\n`, `\\r`) OUTSIDE single/double quotes
-    with `;` before tokenizing (F1, task-5 fix-round-2).
+    """Replace every line break (`\\n`, `\\r`) OUTSIDE quotes and OUTSIDE a
+    heredoc body with `;` before tokenizing (F1, task-5 fix-round-2), while
+    an unquoted backslash immediately before one is a line CONTINUATION and
+    vanishes instead (N1, fix-round-4): bash joins `verb \\<newline>  flag`
+    into one logical line, so marking that newline as a separator was
+    putting the closure verb and its own flag into two different segments
+    -- exactly the shape this scan exists to keep together, done backwards.
 
     `shlex.split` treats a literal newline exactly like a space -- it is
     absorbed into inter-token whitespace and produces no token of its own --
     so a multi-line Bash `tool_input.command` (an entirely ordinary shape,
-    not an adversarial one) never gets split into segments, and the closure
-    verb silently walks through whenever it isn't literally the first line.
-    By the time you have tokens this information is already destroyed, so
-    the mark has to happen on the RAW string, before `shlex.split` ever runs.
-    Once marked, the existing `;`-handling in `_closure_split_glued_separators`
-    / `_closure_segments` does the rest -- no other change needed.
+    not an adversarial one) never gets split into segments on its own, and
+    the closure verb silently walks through whenever it isn't literally the
+    first line. By the time you have tokens this information is already
+    destroyed, so both marks have to happen on the RAW string, before
+    `shlex.split` ever runs. Once marked, the existing `;`-handling in
+    `_closure_split_glued_separators` / `_closure_segments` does the rest for
+    the separator case -- no other change needed there.
 
-    A minimal quote-aware scan, not full shell grammar -- just enough that a
-    newline genuinely embedded in a quoted ARGUMENT (data, e.g. a multi-line
-    `--summary`) is never mistaken for a command separator. Single quotes:
-    fully literal, nothing escapes (matches POSIX). Double quotes: a
-    backslash escapes the next character, so an escaped `"` doesn't
-    prematurely end the quoted span."""
+    Heredoc bodies (N3, fix-round-4) are DATA, not commands -- `cat > f
+    <<'EOF'` followed by a body line that happens to read like a closure
+    declaration must not deny, the same way a doc or a runbook showing the
+    command on its own line must not deny. Tracks the region from the
+    newline after `<<WORD`/`<<-WORD` (optionally quoted; `<<-` strips
+    leading tabs from candidate terminator lines) through the line that
+    equals WORD, copying every character in between through UNMARKED --
+    option (a) from the dispatch, not the cheaper "stop marking after the
+    first `<<`" option (b), because (b) would silently stop detecting a
+    REAL closure command placed after a closed heredoc in the same
+    command, which is the required negative case here. Multiple heredocs
+    declared on one line are consumed as separate body blocks in order; the
+    newline ending the FINAL terminator line (once no heredoc remains
+    pending) is marked as a real separator, same as any other line break.
+
+    A minimal quote-aware scan otherwise, not full shell grammar -- just
+    enough that a newline genuinely embedded in a quoted ARGUMENT (data,
+    e.g. a multi-line `--summary`) is never mistaken for a command
+    separator either. Single quotes: fully literal, nothing escapes
+    (matches POSIX). Double quotes: a backslash escapes the next character,
+    so an escaped `"` doesn't prematurely end the quoted span. Quote
+    tracking and the continuation rule apply OUTSIDE heredoc bodies only --
+    inside one, everything is copied verbatim until the terminator line."""
     out = []
-    quote = None  # None | "'" | '"'
+    quote = None  # None | "'" | '"' -- meaningful only outside a heredoc body
+    pending_heredocs = []   # [(delim, strip_tabs)] declared on the CURRENT command line
+    active_heredocs = []    # queue of heredocs currently being consumed as body, in order
+    body_line_buf = []      # chars of the CURRENT heredoc body line, for terminator matching
     i, n = 0, len(command)
     while i < n:
+        if active_heredocs:
+            c = command[i]
+            if c == "\n":
+                line = "".join(body_line_buf)
+                delim, strip_tabs = active_heredocs[0]
+                candidate = line.lstrip("\t") if strip_tabs else line
+                if candidate == delim:
+                    active_heredocs.pop(0)
+                    body_line_buf = []
+                    out.append(c)
+                    if not active_heredocs and not pending_heredocs:
+                        out[-1] = ";"  # heredoc(s) done -- back to normal separator rules
+                    i += 1
+                    continue
+                body_line_buf = []
+                out.append(c)
+                i += 1
+                continue
+            body_line_buf.append(c)
+            out.append(c)
+            i += 1
+            continue
+
         c = command[i]
         if quote == "'":
             out.append(c)
+            i += 1
             if c == "'":
                 quote = None
-        elif quote == '"':
+            continue
+        if quote == '"':
             if c == "\\" and i + 1 < n:
                 out.append(c)
                 out.append(command[i + 1])
-                i += 1
-            else:
-                out.append(c)
-                if c == '"':
-                    quote = None
-        elif c in ("'", '"'):
+                i += 2
+                continue
+            out.append(c)
+            i += 1
+            if c == '"':
+                quote = None
+            continue
+        # unquoted context
+        if c in ("'", '"'):
             quote = c
             out.append(c)
-        elif c in ("\n", "\r"):
-            out.append(";")
-        else:
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n and command[i + 1] in ("\n", "\r"):
+            # N1: unquoted line continuation -- the backslash AND the
+            # newline (CRLF counted as one) vanish, joining the two lines.
+            j = i + 2
+            if command[i + 1] == "\r" and j < n and command[j] == "\n":
+                j += 1
+            i = j
+            continue
+        if c == "<" and i + 1 < n and command[i + 1] == "<":
+            j = i + 2
+            strip_tabs = False
+            if j < n and command[j] == "-":
+                strip_tabs = True
+                j += 1
+            if j < n and command[j] == "<":
+                out.append(c)  # <<< here-string, not a heredoc -- leave alone
+                i += 1
+                continue
+            k = j
+            while k < n and command[k] in (" ", "\t"):
+                k += 1
+            word, k2 = _closure_read_heredoc_word(command, k, n)
+            if word:
+                pending_heredocs.append((word, strip_tabs))
+                out.append(command[i:k2])
+                i = k2
+                continue
             out.append(c)
+            i += 1
+            continue
+        if c in ("\n", "\r"):
+            if pending_heredocs:
+                active_heredocs.extend(pending_heredocs)
+                pending_heredocs = []
+                out.append(c)  # into the heredoc body -- unmarked
+            else:
+                out.append(";")
+            i += 1
+            continue
+        out.append(c)
         i += 1
     return "".join(out)
 

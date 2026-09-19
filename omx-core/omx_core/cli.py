@@ -2138,11 +2138,19 @@ def _cmd_close_ack(args) -> int:
 
     origin_root = payload.get("root")
     runs_checked = len(payload["runs"])
+    # N2 (task-5 fix-round-4): a `checked` receipt is not always "nothing to
+    # say" -- Ruling 29 makes a missing output_root a genuine `checked` PASS
+    # that still carries a distinct `reason`, and dropping that one field
+    # here defeated requirement 6 (print what is about to be trusted BEFORE
+    # storing it) in the exact verb written to satisfy it: an operator
+    # cannot judge a pass they cannot interpret. The refusal branch above
+    # already prints `reason` when present; this mirrors that.
+    reason_part = f" reason={payload['reason']!r}" if payload.get("reason") else ""
     # requirement 6: print what is about to be trusted BEFORE storing it — a
     # receipt's root cannot be verified across an ssh boundary, so this is a
     # deliberate human act made visible, the same trust close-defer gets.
     print(f"accepting: origin_root={origin_root} state={state} checked_at={checked_at} "
-          f"runs_checked={runs_checked}")
+          f"runs_checked={runs_checked}{reason_part}")
     write_receipt(paths, payload, source="remote", now_iso=checked_at, origin_root=origin_root)
     return 0
 
