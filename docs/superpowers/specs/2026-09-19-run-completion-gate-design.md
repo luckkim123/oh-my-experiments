@@ -153,6 +153,24 @@ satisfy the gate.
 For a local tree, `omx close-check --record` writes the same receipt directly and
 step 2 is unnecessary.
 
+**Whose receipt is it, and why that cannot be enforced.** The receipt records the root it
+was computed for, and nothing compares that root against the root the gate is evaluating.
+That is not an oversight: a remote receipt's root is a path inside a container and the
+local root is a path on the workstation, so the two differ *by construction* in the
+primary case this mechanism exists for, and there is no identifier that survives the
+crossing. A locally written receipt cannot be confused with another project's, because it
+is stored under its own root's runtime layer and read back from there. The one exposed
+surface is `close-ack`, which ingests a receipt produced anywhere and stores it here.
+
+So `close-ack` is trusted the way `close-defer` is trusted — it is a deliberate human
+act, and the design makes it visible rather than pretending to verify it. Three
+consequences follow, and they are requirements: the ack **prints** the receipt's origin
+root, state, timestamp and run count before storing; the stored receipt keeps that origin
+root under a distinct key so it is never mistaken for a local one; and `close-check`
+reports "satisfied by a remote receipt for &lt;root&gt;, checked at &lt;time&gt;" rather
+than a bare pass. The ack also **refuses a receipt that is already stale** at ack time,
+since storing one is a no-op dressed as a success.
+
 **Where the contract has to be declared for this to bind.** The hook resolves the root
 from the session's own cwd, so a contract that exists only at the far end of the ssh is
 a contract the hook never sees, and the project reads as `no-contract` — allowed,
