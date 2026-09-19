@@ -64,6 +64,16 @@ def _setup(root, run_completion=CONTRACT, output_root="experiments", anchor=True
     return paths
 
 
+def _setup_unreadable(root, **kwargs):
+    """A genuinely-unreadable output_root (Ruling 29, task-5 fix-round-2): a
+    FILE where a directory was declared. A never-created output_root is now
+    `checked` (see test_missing_output_root_now_allows_a_closure_command), so
+    it no longer produces `unreadable` and can't stand in for it here."""
+    paths = _setup(root, output_root="not-a-dir", **kwargs)
+    (root / "not-a-dir").write_text("nope")
+    return paths
+
+
 def _finish(run_dir):
     (run_dir / "checkpoints").mkdir(parents=True)
     (run_dir / "checkpoints" / "final.pt").write_text("x")
@@ -186,14 +196,98 @@ def test_pipe_and_semicolon_compound_commands_are_seen(tmp_path):
     assert _run(mod, "true || omx loop-disarm --reason done", tmp_path) is not None
 
 
+# --- F1 (task-5 fix-round-2): a real newline is a segment separator too -----
+
+def test_newline_before_closure_command_denies(tmp_path):
+    """team-lead's own repro: a literal newline (not `;`) is the ordinary
+    shape of a multi-line Bash tool_input.command, and shlex.split treats it
+    exactly like a space -- it produced no segment boundary before this fix,
+    so a closure declaration on line 2 was invisible."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "echo starting\nhq post --category handoff", tmp_path)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_multiline_script_before_closure_command_denies(tmp_path):
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "set -e\ncd .\nomx loop-mark-done --reason=done", tmp_path)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_closure_command_on_first_line_still_denies_control(tmp_path):
+    """Control pinning WHERE the gap was: closure-first-then-newline always
+    worked (the closure verb was already at the segment head); this is not a
+    generic "newlines break shlex" story."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "hq post --category handoff\necho done", tmp_path)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_quoted_newline_in_summary_argument_does_not_trigger(tmp_path):
+    """The quoted-argument property must survive the newline fix: this text
+    is DATA (an argument), not a command, and must still allow."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, 'hq post --summary "see\n--category handoff"', tmp_path)
+    assert out is None
+
+
+# --- F4 (task-5 fix-round-2): a renderer failure must still deny -----------
+
+def test_renderer_failure_still_denies_with_a_fallback_message(tmp_path, monkeypatch):
+    """Once evaluate_completion has already decided incomplete/unreadable, a
+    bug in the deny-TEXT renderer must not silently downgrade that decision
+    into an allow (the reviewer's own demonstration: a malformed verdict
+    missing the `missing`/`how` keys `_closure_incomplete_reason` needs).
+    Patched on the real omx_core.completion module, since closure_guard's
+    `from omx_core.completion import evaluate_completion` resolves against
+    that same module object on every call."""
+    import omx_core.completion as completion_mod
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+
+    bad_verdict = {"state": "incomplete", "missing": [{"run": "runs/alpha"}]}  # no "missing"/"how" per entry
+    monkeypatch.setattr(completion_mod, "evaluate_completion", lambda paths: bad_verdict)
+
+    out = _run(mod, "omx loop-disarm --reason done", tmp_path)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "omx close-check" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert 'omx close-defer --reason "<why>"' in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
 # --- unreadable / no-contract / checked states -------------------------------
 
 def test_unreadable_denies(tmp_path):
     mod = _load_handlers()
-    _setup(tmp_path, output_root="never-created")
+    _setup_unreadable(tmp_path)
     out = _run(mod, "omx loop-disarm --reason done", tmp_path)
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "never-created" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "not-a-dir" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_missing_output_root_now_allows_a_closure_command(tmp_path):
+    """Ruling 29 (task-5 fix-round-2): a project that bootstrapped a
+    contract but has not produced any training output at all -- output_root
+    literally never created -- is the ordinary shape of a project between
+    declaring a contract and finishing its first run, and must not lock an
+    operator out of closing a completely unrelated session. Negative twin of
+    test_unreadable_denies above: same "cannot list" family of causes,
+    opposite existence, opposite verdict."""
+    mod = _load_handlers()
+    _setup(tmp_path, output_root="never-created")
+    assert _run(mod, "omx loop-disarm --reason done", tmp_path) is None
 
 
 def test_no_contract_allows(tmp_path):
@@ -328,7 +422,7 @@ def test_receipt_copied_from_another_root_does_not_rescue(tmp_path):
 
 def test_remote_receipt_rescues_an_unreadable_tree(tmp_path):
     mod = _load_handlers()
-    paths = _setup(tmp_path, output_root="never-created")  # unreadable locally
+    paths = _setup_unreadable(tmp_path)  # unreadable locally
     write_receipt(paths, {"state": "checked", "runs": []}, source="remote", now_iso=now_iso(),
                   origin_root="/container/project")
     assert _run(mod, "omx loop-disarm --reason done", tmp_path) is None
@@ -366,7 +460,7 @@ def test_deny_reason_never_advertises_the_skip_hook_bypass(tmp_path):
     incomplete = _run(mod, "omx loop-disarm --reason done", tmp_path)
     assert "OMX_SKIP_HOOKS" not in incomplete["hookSpecificOutput"]["permissionDecisionReason"]
 
-    _setup(tmp_path / "other", output_root="never-created")
+    _setup_unreadable(tmp_path / "other")
     unreadable = _run(mod, "omx loop-disarm --reason done", tmp_path / "other")
     assert "OMX_SKIP_HOOKS" not in unreadable["hookSpecificOutput"]["permissionDecisionReason"]
 
@@ -392,10 +486,10 @@ def test_incomplete_deny_reason_shares_one_how_line_when_many_runs_match(tmp_pat
 
 def test_unreadable_deny_reason_names_reason_and_escape_commands(tmp_path):
     mod = _load_handlers()
-    _setup(tmp_path, output_root="never-created")
+    _setup_unreadable(tmp_path)
     out = _run(mod, "omx loop-disarm --reason done", tmp_path)
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "never-created" in reason
+    assert "not-a-dir" in reason
     assert "omx close-check --root" in reason
     assert "omx close-ack --from -" in reason
     assert 'omx close-defer --reason "<why>"' in reason

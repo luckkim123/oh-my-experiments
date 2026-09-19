@@ -94,13 +94,32 @@ def test_close_check_incomplete_exits_1(tmp_path, capsys):
 
 
 def test_close_check_unreadable_exits_2(tmp_path, capsys):
+    """Ruling 29 (task-5 fix-round-2): a never-created output_root is no
+    longer unreadable (it's `checked` -- see test_close_check_missing_output_root_exits_0
+    below), so this genuinely-unreadable fixture is a FILE where a directory
+    was declared -- "output_root is not a directory" is unchanged."""
     from omx_core import cli
-    _setup(tmp_path, output_root="never-created")
+    _setup(tmp_path, output_root="not-a-dir")
+    (tmp_path / "not-a-dir").write_text("nope")
     rc = cli.main(["close-check", "--root", str(tmp_path), "--json"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 2
     assert out["state"] == "unreadable"
     assert out["reason"]  # requirement 2: reason surfaces, not paraphrased away
+
+
+def test_close_check_missing_output_root_exits_0(tmp_path, capsys):
+    """Ruling 29 (task-5 fix-round-2): the never-created case is now a PASS
+    (there is nothing there yet, a definite answer), with a reason a human
+    can still see -- distinct from the genuinely-unreadable FILE case above."""
+    from omx_core import cli
+    _setup(tmp_path, output_root="never-created")
+    rc = cli.main(["close-check", "--root", str(tmp_path), "--json"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out["state"] == "checked"
+    assert out["subject_count"] == 0
+    assert "does not exist" in out["reason"]
 
 
 # --- close-check human output ------------------------------------------------
@@ -118,12 +137,15 @@ def test_close_check_human_output_shows_run_missing_how(tmp_path, capsys):
 
 
 def test_close_check_unreadable_human_output_names_reason(tmp_path, capsys):
+    """Ruling 29 (task-5 fix-round-2): same fixture swap as
+    test_close_check_unreadable_exits_2 -- never-created is now a pass."""
     from omx_core import cli
-    _setup(tmp_path, output_root="never-created")
+    _setup(tmp_path, output_root="not-a-dir")
+    (tmp_path / "not-a-dir").write_text("nope")
     rc = cli.main(["close-check", "--root", str(tmp_path)])
     out = capsys.readouterr().out
     assert rc == 2
-    assert "never-created" in out
+    assert "not-a-dir" in out
 
 
 def test_close_check_unreadable_from_malformed_contract_block_has_no_none_prefix(tmp_path, capsys):
@@ -279,8 +301,14 @@ def test_close_check_defer_empty_reason_does_not_satisfy(tmp_path, capsys):
 # --- close-check rescued by a fresh remote receipt (via close-ack) ----------
 
 def test_close_check_rescued_by_a_remote_receipt(tmp_path, capsys):
+    """Ruling 29 (task-5 fix-round-2): never-created is now `checked` on its
+    own, so it would never even reach the receipt-rescue path (that path only
+    fires on incomplete/unreadable) -- use a genuinely unreadable fixture (a
+    FILE where a directory was declared) so this test still exercises what it
+    says it does."""
     from omx_core import cli
-    _setup(tmp_path, output_root="never-created")  # unreadable locally by construction
+    _setup(tmp_path, output_root="not-a-dir")
+    (tmp_path / "not-a-dir").write_text("nope")  # unreadable locally by construction
     payload = {"state": "checked", "runs": ["runs/alpha"], "missing": [], "subject_count": 1,
                "output_root": "/container/experiments", "how": "eval.py --run {run}", "reason": None,
                "root": "/container/project", "checked_at": now_iso()}
@@ -298,8 +326,11 @@ def test_close_check_rescued_by_a_remote_receipt(tmp_path, capsys):
 
 
 def test_close_check_human_pass_via_receipt_names_the_origin_root(tmp_path, capsys):
+    """Ruling 29 (task-5 fix-round-2): same fixture swap as the test above --
+    a receipt only rescues a genuinely incomplete/unreadable local state."""
     from omx_core import cli
-    _setup(tmp_path, output_root="never-created")
+    _setup(tmp_path, output_root="not-a-dir")
+    (tmp_path / "not-a-dir").write_text("nope")
     payload = {"state": "checked", "runs": [], "root": "/container/project", "checked_at": now_iso()}
     payload_path = tmp_path / "payload.json"
     payload_path.write_text(json.dumps(payload))

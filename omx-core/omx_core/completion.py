@@ -134,6 +134,28 @@ def evaluate_completion(root) -> dict:
         output_root = paths.root / output_root  # output_root is caller-supplied, never derived (omx_paths.py:601-607)
 
     try:
+        if not output_root.exists() and not output_root.is_symlink():
+            # Ruling 29 (task-5 fix-round-2): a MISSING output_root is a
+            # DEFINITE answer -- there is nothing there, therefore no
+            # finished runs, therefore nothing ungraded -- not "I cannot
+            # tell". Collapsing it into `unreadable` (the same state as a
+            # permission-denied or network-down tree) denied every project
+            # between declaring a contract and finishing its first run,
+            # including the ordinary case of a project that just ran
+            # `exp-init`. Same shape as "0 run dirs under an EXISTING
+            # output_root" (a pass) -- NOT a new fifth state -- but with a
+            # distinct `reason` so a human running `close-check` can still
+            # see that the declared path doesn't exist (a typo'd
+            # output_root and a project that genuinely hasn't run yet must
+            # not read identically). A present-but-not-a-directory path (a
+            # FILE where a dir was expected), a BROKEN SYMLINK (excluded by
+            # the `is_symlink()` half above -- something was configured and
+            # is now broken, a different fact than "never created"), or a
+            # present-but-unreadable one (EACCES, below) is unchanged --
+            # "I cannot tell" stays `unreadable` for all three.
+            return {"state": "checked", "runs": [], "missing": [], "subject_count": 0,
+                    "output_root": str(output_root), "how": how,
+                    "reason": f"output_root does not exist yet: {output_root}"}
         if not output_root.is_dir():
             return _unreadable(str(output_root), how, reason=f"output_root is not a directory: {output_root}")
         _assert_tree_readable(output_root)

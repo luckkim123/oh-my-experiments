@@ -311,7 +311,18 @@ def _has_omx_marker(cwd) -> bool:
     checked .omx/ would silently stop firing the checkpoint gate there —
     a live hole, not a style question, caught after this file was first
     excluded from the re-entry lint (the exclusion itself stands; it hid
-    this line from a human's eye, which is the thing worth noting)."""
+    this line from a human's eye, which is the thing worth noting).
+
+    ponytail (F2, task-5 fix-round-2, accepted not fixed): `.is_dir()`
+    transparently follows a symlink, so a layer that is ITSELF a symlink
+    into a different tree's real `.omx`/`.hq` is trusted as-is -- combined
+    with closure_guard's Ruling-27 fallback, this gates cwd against an
+    unrelated project's runs. Requires a filesystem shape (a symlinked state
+    directory) that nothing in the bootstrap/CLI paths ever creates; a
+    relative cwd, a bare non-experiments `.hq/` (a different harness), and a
+    git worktree were all checked and do NOT false-positive. Add a
+    filesystem-identity check here only if a more ordinary trigger for the
+    same shape ever turns up -- see task-5-review.md Finding F2."""
     if not (isinstance(cwd, str) and cwd):
         return False
     base = Path(cwd)
@@ -703,12 +714,75 @@ def _closure_segment_declares(seg) -> bool:
     return False
 
 
+def _closure_mark_line_breaks(command: str) -> str:
+    """Replace every line break (`\\n`, `\\r`) OUTSIDE single/double quotes
+    with `;` before tokenizing (F1, task-5 fix-round-2).
+
+    `shlex.split` treats a literal newline exactly like a space -- it is
+    absorbed into inter-token whitespace and produces no token of its own --
+    so a multi-line Bash `tool_input.command` (an entirely ordinary shape,
+    not an adversarial one) never gets split into segments, and the closure
+    verb silently walks through whenever it isn't literally the first line.
+    By the time you have tokens this information is already destroyed, so
+    the mark has to happen on the RAW string, before `shlex.split` ever runs.
+    Once marked, the existing `;`-handling in `_closure_split_glued_separators`
+    / `_closure_segments` does the rest -- no other change needed.
+
+    A minimal quote-aware scan, not full shell grammar -- just enough that a
+    newline genuinely embedded in a quoted ARGUMENT (data, e.g. a multi-line
+    `--summary`) is never mistaken for a command separator. Single quotes:
+    fully literal, nothing escapes (matches POSIX). Double quotes: a
+    backslash escapes the next character, so an escaped `"` doesn't
+    prematurely end the quoted span."""
+    out = []
+    quote = None  # None | "'" | '"'
+    i, n = 0, len(command)
+    while i < n:
+        c = command[i]
+        if quote == "'":
+            out.append(c)
+            if c == "'":
+                quote = None
+        elif quote == '"':
+            if c == "\\" and i + 1 < n:
+                out.append(c)
+                out.append(command[i + 1])
+                i += 1
+            else:
+                out.append(c)
+                if c == '"':
+                    quote = None
+        elif c in ("'", '"'):
+            quote = c
+            out.append(c)
+        elif c in ("\n", "\r"):
+            out.append(";")
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _closure_declares(command: str) -> bool:
     """Whether `command` contains a closure declaration in any `&&`/`||`/`;`/`|`
-    segment. Raises ValueError on unbalanced quotes (shlex) -- the caller
-    treats that as allow, same as every other internal failure (D9)."""
+    segment -- a real line break counts too, marked as `;` first (F1, see
+    `_closure_mark_line_breaks`). Raises ValueError on unbalanced quotes
+    (shlex) -- the caller treats that as allow, same as every other internal
+    failure (D9).
+
+    ponytail: the closure verb must still be the literal head of its
+    segment, so `env FOO=1 hq post ...`, `sudo hq post ...`,
+    `command hq post ...`, and `x=$(hq post ...)` all still bypass this
+    gate. Accepted, not fixed: each requires deliberately dressing up the
+    command to evade an ADVISORY, fail-open gate -- the same class as a
+    shell `alias`, which cannot be resolved without a shell either -- and a
+    determined operator always has the honest escape,
+    `omx close-defer --reason "<why>"`. Widen to "closure verb anywhere as a
+    contiguous subsequence in its segment" if one of these ever turns out to
+    be an ordinary shape (like the newline case was) rather than a
+    deliberate one."""
     import shlex
-    tokens = shlex.split(command)
+    tokens = shlex.split(_closure_mark_line_breaks(command))
     return any(_closure_segment_declares(seg) for seg in _closure_segments(tokens))
 
 
@@ -856,15 +930,29 @@ def closure_guard(payload):
         state = verdict["state"]
         if state in ("no-contract", "checked"):
             return None
+    except Exception:
+        return None  # fail-open (D9): an infra/setup failure BEFORE a verdict exists allows
+
+    # F4 (task-5 fix-round-2): evaluate_completion has ALREADY decided this
+    # command must be denied -- a bug in the TEXT-RENDERING code that turns
+    # that verdict into the reason string must not silently downgrade an
+    # already-made deny into an allow. D9's fail-open is for infrastructure
+    # failures upstream of a verdict (root resolution, defer/receipt reads,
+    # evaluate_completion itself, all still covered by the try/except
+    # above); a formatting bug in code that runs AFTER the decision is a
+    # different failure class and must still deny, minimally.
+    try:
         reason = (_closure_incomplete_reason(verdict) if state == "incomplete"
                   else _closure_unreadable_reason(verdict, paths.root))
-        return {"hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
-        }}
     except Exception:
-        return None  # fail-open (D9): any failure anywhere allows the command through
+        reason = ("omx run-completion gate: this closure declaration is blocked, but the "
+                   "deny-reason renderer itself failed -- run `omx close-check` for the real "
+                   "verdict, or `omx close-defer --reason \"<why>\"` to proceed.")
+    return {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": reason,
+    }}
 
 
 HANDLERS = {

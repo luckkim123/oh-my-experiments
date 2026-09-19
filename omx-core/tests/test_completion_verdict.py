@@ -106,13 +106,25 @@ def test_unfinished_run_is_not_a_subject(tmp_path):
     assert result["subject_count"] == 1
 
 
-def test_missing_output_root_is_unreadable_not_checked(tmp_path):
+def test_missing_output_root_is_checked_not_unreadable(tmp_path):
+    """Ruling 29 (task-5 fix-round-2), reversing this test's original
+    assertion: a NEVER-CREATED output_root is a definite answer (nothing
+    there, therefore no finished runs) -- the exact shape of every project
+    between declaring a contract and finishing its first run. It is NOT the
+    same fact as "I cannot tell" (a permission-denied or genuinely broken
+    tree, still `unreadable` -- see test_output_root_broken_symlink_is_unreadable
+    and test_output_root_is_a_file_not_a_directory_is_unreadable below,
+    unchanged). Same shape as test_readable_output_root_zero_run_dirs_is_checked
+    (a pass), distinguished only by a non-None `reason` a human can see."""
     _setup(tmp_path)
     # "experiments" is never created
     result = evaluate_completion(tmp_path)
-    assert result["state"] == "unreadable"
+    assert result["state"] == "checked"
+    assert result["runs"] == []
+    assert result["missing"] == []
+    assert result["subject_count"] == 0
     assert result["output_root"] == str(tmp_path / "experiments")
-    assert "not a directory" in result["reason"]
+    assert "does not exist" in result["reason"]
 
 
 def test_readable_output_root_zero_run_dirs_is_checked(tmp_path):
