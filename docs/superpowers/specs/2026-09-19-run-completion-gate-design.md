@@ -94,7 +94,7 @@ re-implements it.
 
 | State | Condition | Verdict | Exit |
 |:--|:--|:--|:--|
-| `no-contract` | the profile has no `run_completion` | pass, silently | 0 |
+| `no-contract` | no profile, a profile that does not parse, or a profile with no `run_completion` key | pass, silently | 0 |
 | `checked` | contract present, `output_root` readable, every finished non-excluded run has every `required` glob | pass | 0 |
 | `incomplete` | same, but at least one finished run is missing a `required` glob | **fail**, listing run → missing globs → `how` | 1 |
 | `unreadable` | contract present, `output_root` absent or unreadable | **fail**, naming the root it could not read | 2 |
@@ -105,7 +105,26 @@ report that as "nothing to grade, pass". It is the same defect class 0.16.1 fixe
 `omx wiki list` — an unreadable store exiting 0 with `pages: []` — and it is the one
 that would silently disarm this gate on the machine it matters on.
 
-A readable `output_root` with genuinely zero finished runs **does** pass, and says so.
+A readable `output_root` with genuinely zero finished runs **does** pass, and says so —
+and it must be distinguishable from "no run directories matched at all", because a
+project that typos its `finished` glob would otherwise get a permanent silent pass with
+nothing to debug from.
+
+**Where the opt-in line is drawn, and why it is drawn literally.** `no-contract` covers
+every state up to and including a profile that cannot be parsed, and only a profile that
+parses *and carries a `run_completion` key* can produce `unreadable`. The reason is a
+measured one: an earlier implementation caught every `OmxError` from loading the profile
+and reported all of them as `unreadable`, which on this machine meant a directory with no
+omx store at all returned `unreadable` — so the gate, wired to the `Bash` matcher, would
+have denied a closure in every repository on the machine. Criterion 3 exists precisely to
+prevent that, and the only way to honour it is for the verdict to answer "is the block
+there?" before it is willing to call anything broken.
+
+That choice has a cost, taken deliberately: a project that had a contract and then
+corrupted its whole `metrics.yaml` reads as `no-contract` and is allowed. The other side
+of that trade is denying every unrelated project, which is how an operator ends up
+disabling the gate instead of using it. `omx close-check` still reports the parse error
+to a human who runs it.
 
 ## 5. Crossing the ssh boundary
 
