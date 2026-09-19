@@ -50,7 +50,10 @@ def test_non_mapping_raises():
 def test_missing_key_raises(key):
     d = _good_block()
     del d[key]
-    with pytest.raises(OmxError, match=key):
+    # match=key alone is inert for key="required": "missing required key" always
+    # contains the substring "required" regardless of which key is actually missing.
+    # Pin the quotes so the assertion checks the NAMED key, not template boilerplate.
+    with pytest.raises(OmxError, match=rf"'{key}'"):
         validate_run_completion(d)
 
 
@@ -187,4 +190,8 @@ def test_load_present_invalid_raises(tmp_path):
 
 def test_load_accepts_omxpaths_or_plain_root(tmp_path):
     paths = _bootstrap_with(tmp_path, run_completion=_good_block())
-    assert load_run_completion(tmp_path) == load_run_completion(paths)
+    # Assert against the expected block, not just cross-equality -- two None
+    # results would satisfy a bare `load_run_completion(a) == load_run_completion(b)`.
+    expected = _good_block()
+    assert load_run_completion(tmp_path) == expected
+    assert load_run_completion(paths) == expected

@@ -3,9 +3,15 @@ run-completion verdict engine. Fixture trees under tmp_path; no network, no ssh.
 import os
 
 import pytest
+import yaml
 from omx_core.completion import evaluate_completion
 from omx_core.omx_paths import OmxPaths
 from omx_core.profile import bootstrap_profile, default_metrics
+
+_SKIP_UNLESS_POSIX_NONROOT = pytest.mark.skipif(
+    os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="requires POSIX permission enforcement as a non-root user",
+)
 
 CONTRACT = {
     "runs": "runs/*",
@@ -42,7 +48,8 @@ def test_no_contract_returns_no_contract_state(tmp_path):
     _setup(tmp_path, run_completion=None)
     result = evaluate_completion(tmp_path)
     assert result == {
-        "state": "no-contract", "runs": [], "missing": [], "output_root": None, "how": None,
+        "state": "no-contract", "runs": [], "missing": [], "subject_count": None,
+        "output_root": None, "how": None,
     }
 
 
@@ -79,6 +86,10 @@ def test_exclude_keeps_smoke_run_out_of_subject_set(tmp_path):
     assert result["state"] == "checked"
     assert result["runs"] == []
     assert result["missing"] == []
+    # excluded runs never survive `exclude`, so they don't count as subjects either --
+    # same 0 as the genuinely-empty-tree case (test_readable_output_root_zero_run_dirs_is_checked),
+    # which is correct: both are "nothing eligible", not "something eligible but unfinished".
+    assert result["subject_count"] == 0
 
 
 def test_unfinished_run_is_not_a_subject(tmp_path):
@@ -89,6 +100,10 @@ def test_unfinished_run_is_not_a_subject(tmp_path):
     assert result["state"] == "checked"
     assert result["runs"] == []
     assert result["missing"] == []
+    # one run dir matched `runs` and survived `exclude` but wasn't finished -- distinct
+    # from a genuinely empty tree (subject_count 0): this is the case a typo'd `finished`
+    # glob would produce, and subject_count > 0 with runs == [] is how a reader tells them apart.
+    assert result["subject_count"] == 1
 
 
 def test_missing_output_root_is_unreadable_not_checked(tmp_path):
@@ -106,6 +121,7 @@ def test_readable_output_root_zero_run_dirs_is_checked(tmp_path):
     assert result["state"] == "checked"
     assert result["runs"] == []
     assert result["missing"] == []
+    assert result["subject_count"] == 0  # the honest zero: genuinely nothing matched `runs`
 
 
 def test_output_root_resolved_relative_to_omx_root(tmp_path):
@@ -154,10 +170,7 @@ def test_run_glob_matching_a_file_is_silently_skipped(tmp_path):
     assert result["runs"] == []
 
 
-@pytest.mark.skipif(
-    os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0),
-    reason="requires POSIX permission enforcement as a non-root user",
-)
+@_SKIP_UNLESS_POSIX_NONROOT
 def test_permission_denied_on_output_root_is_unreadable(tmp_path):
     _setup(tmp_path)
     out = tmp_path / "experiments"
@@ -168,4 +181,83 @@ def test_permission_denied_on_output_root_is_unreadable(tmp_path):
         result = evaluate_completion(tmp_path)
     finally:
         os.chmod(out, 0o755)
+    assert result["state"] == "unreadable"
+
+
+# --- Finding 1: an unreadable subtree at ANY depth below output_root must read as
+# `unreadable`, never as "no runs, pass" -- Path.glob() silently swallows OSError at
+# every level of its own walk, so this must not be checked via glob() alone. One test
+# per row of the reviewed table.
+
+@_SKIP_UNLESS_POSIX_NONROOT
+def test_unreadable_runs_directory_is_unreadable_not_checked(tmp_path):
+    _setup(tmp_path)
+    runs_dir = tmp_path / "experiments" / "runs"
+    run_dir = runs_dir / "alpha"
+    _finish(run_dir)
+    _satisfy_required(run_dir)
+    os.chmod(runs_dir, 0o000)
+    try:
+        result = evaluate_completion(tmp_path)
+    finally:
+        os.chmod(runs_dir, 0o755)
+    assert result["state"] == "unreadable"
+
+
+@_SKIP_UNLESS_POSIX_NONROOT
+def test_unreadable_run_dir_itself_is_unreadable_not_checked(tmp_path):
+    _setup(tmp_path)
+    run_dir = tmp_path / "experiments" / "runs" / "alpha"
+    _finish(run_dir)
+    _satisfy_required(run_dir)
+    os.chmod(run_dir, 0o000)
+    try:
+        result = evaluate_completion(tmp_path)
+    finally:
+        os.chmod(run_dir, 0o755)
+    assert result["state"] == "unreadable"
+
+
+@_SKIP_UNLESS_POSIX_NONROOT
+def test_unreadable_checkpoints_subdir_is_unreadable_not_checked(tmp_path):
+    _setup(tmp_path)
+    run_dir = tmp_path / "experiments" / "runs" / "alpha"
+    _finish(run_dir)
+    _satisfy_required(run_dir)
+    os.chmod(run_dir / "checkpoints", 0o000)
+    try:
+        result = evaluate_completion(tmp_path)
+    finally:
+        os.chmod(run_dir / "checkpoints", 0o755)
+    assert result["state"] == "unreadable"
+
+
+def test_output_root_broken_symlink_is_unreadable(tmp_path):
+    _setup(tmp_path)
+    (tmp_path / "experiments").symlink_to(tmp_path / "does_not_exist_target")
+    result = evaluate_completion(tmp_path)
+    assert result["state"] == "unreadable"
+
+
+# --- Finding 5(a): output_root exists but is a FILE, not a directory.
+
+def test_output_root_is_a_file_not_a_directory_is_unreadable(tmp_path):
+    _setup(tmp_path)
+    (tmp_path / "experiments").write_text("not a directory")
+    result = evaluate_completion(tmp_path)
+    assert result["state"] == "unreadable"
+
+
+# --- Finding 7: a profile that opted into the gate (declared run_completion) and
+# then broke itself (output_root removed from metrics.yaml) must resolve to
+# `unreadable`, not raise -- a raise hits the hook's fail-open (D9) and becomes a
+# silent ALLOW, which is the exact hole this round exists to close.
+
+def test_malformed_output_root_is_unreadable_not_raise(tmp_path):
+    paths = _setup(tmp_path)
+    metrics_path = paths.profile_file("metrics.yaml")
+    data = yaml.safe_load(metrics_path.read_text())
+    del data["output_root"]  # simulate a profile broken after the contract was declared
+    metrics_path.write_text(yaml.safe_dump(data, sort_keys=True))
+    result = evaluate_completion(tmp_path)  # must not raise
     assert result["state"] == "unreadable"
