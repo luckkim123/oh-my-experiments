@@ -51,6 +51,13 @@ def _assistant_skill(skill, sidechain=False):
                                     "input": {"skill": skill}}]}}
 
 
+def _assistant_bash(command, sidechain=False):
+    return {"type": "assistant", "isSidechain": sidechain,
+            "message": {"role": "assistant",
+                        "content": [{"type": "tool_use", "name": "Bash",
+                                    "input": {"command": command}}]}}
+
+
 def _user_text(text, sidechain=False):
     return {"type": "user", "isSidechain": sidechain,
             "message": {"role": "user",
@@ -302,3 +309,77 @@ def test_corrupt_json_line_does_not_abort_scan(tmp_path):
     ]
     tp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     assert handlers.stage_check(_payload(str(tp))) is None
+
+
+# --- Ruling 35 (fix-round-2): CLI-verb evidence, the way work is really done
+
+def test_distinctive_cli_verb_counts_as_opened_with_no_skill_call(tmp_path):
+    # the corpus finding this round exists for: 173 exp-analyze declarations,
+    # zero Skill invocations of it. `report-review` is exp-analyze-distinctive.
+    tp = _write_transcript(tmp_path, [
+        _assistant_text(f"STAGE(exp) {ARROW} exp-analyze {DOT} reason"),
+        _assistant_bash("omx report-review --root . --analysis-id x-20260919-120000"),
+    ])
+    assert handlers.stage_check(_payload(tp)) is None
+
+
+def test_another_stages_distinctive_verb_does_not_count(tmp_path):
+    # `loop-arm` is exp-loop-distinctive; it must not clear an exp-analyze
+    # declaration -- CLI-verb evidence is per-stage, not blanket omx activity.
+    tp = _write_transcript(tmp_path, [
+        _assistant_text(f"STAGE(exp) {ARROW} exp-analyze {DOT} reason"),
+        _assistant_bash("omx loop-arm --run-id r1 --max-runtime-s 3600"),
+    ])
+    out = handlers.stage_check(_payload(tp))
+    assert out["decision"] == "block"
+    assert "exp-analyze" in out["reason"]
+
+
+def test_shared_utility_verb_does_not_count_as_stage_evidence(tmp_path):
+    # `doctor` and `wiki query` are used by every stage's SKILL.md -- they
+    # are deliberately excluded from _STAGE_CLI_VERBS (see its docstring
+    # comment): counting them would make the check pass on ANY omx activity
+    # regardless of which stage is actually declared.
+    tp = _write_transcript(tmp_path, [
+        _assistant_text(f"STAGE(exp) {ARROW} exp-analyze {DOT} reason"),
+        _assistant_bash("omx doctor"),
+        _assistant_bash('omx wiki query --root . "something"'),
+    ])
+    out = handlers.stage_check(_payload(tp))
+    assert out["decision"] == "block"
+    assert "exp-analyze" in out["reason"]
+
+
+def test_verb_in_a_longer_command_still_counts(tmp_path):
+    # real commands are rarely a bare verb -- they chain cd/flags/pipes.
+    tp = _write_transcript(tmp_path, [
+        _assistant_text(f"STAGE(exp) {ARROW} exp-design {DOT} reason"),
+        _assistant_bash("cd /tmp/x && omx probe-novelty --root . --probe p1 | tee out.log"),
+    ])
+    assert handlers.stage_check(_payload(tp)) is None
+
+
+def test_sidechain_cli_verb_does_not_count(tmp_path):
+    # same principle as the Skill-based isSidechain guard: a subagent running
+    # a stage's verb must not count as the main session having done it.
+    tp = _write_transcript(tmp_path, [
+        _assistant_text(f"STAGE(exp) {ARROW} exp-loop {DOT} reason"),
+        _assistant_bash("omx loop-arm --run-id r1 --max-runtime-s 3600", sidechain=True),
+    ])
+    out = handlers.stage_check(_payload(tp))
+    assert out["decision"] == "block"
+    assert "exp-loop" in out["reason"]
+
+
+def test_stage_cli_verbs_are_distinctive_not_shared():
+    # structural check on the constant itself: no verb should appear in more
+    # than one stage's set, or CLI-verb evidence would stop discriminating
+    # between stages (the same failure the vocabulary check had).
+    seen = {}
+    dupes = []
+    for stage, verbs in handlers._STAGE_CLI_VERBS.items():
+        for v in verbs:
+            if v in seen:
+                dupes.append((v, seen[v], stage))
+            seen[v] = stage
+    assert not dupes, f"non-distinctive verbs shared across stages: {dupes}"

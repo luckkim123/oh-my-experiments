@@ -1212,8 +1212,27 @@ def closure_guard(payload):
 # work; this handler reads that back off the transcript at Stop and blocks
 # when the session's CURRENT (most recent) declaration names one of the
 # exp-* stages (exp-init/exp-analyze/exp-design/exp-loop — the ones with a
-# real Skill under skills/, per plugin.json) whose skill was never actually
-# opened anywhere in the session.
+# real Skill under skills/, per plugin.json) whose skill was never opened,
+# and none of its own `omx` CLI verbs were run (Ruling 35), anywhere in the
+# session.
+#
+# NOT REGISTERED (fix-round-2): even with Ruling 35's widened evidence,
+# measuring against the 17 real STAGE-declaring transcripts in this
+# workspace still shows severe over-blocking on 8/17 sessions -- up to
+# 100% of their turns, on sessions doing substantial, correctly-classified,
+# genuine work (confirmed by reading the transcripts, not just counting) --
+# see task-8-report.md's fix-round-2 section for the full table, the two
+# transcripts read in full, and the structural argument (a declare-then-do
+# temporal lag inherent to a per-turn Stop re-check, not merely a
+# verb-coverage gap) for why no verb mapping can close this. The function
+# below is fully implemented and tested (it is exactly the mechanism Ruling
+# 35 asked for, and it is measurably correct on its own terms) but is
+# deliberately absent from both `HANDLERS` and plugin.json's `Stop` array,
+# so it never fires live -- per the team lead's own stated preference ("I
+# would rather hear it from you with numbers than ship a gate that traps
+# people") given this measured, severe evidence of harm. Re-registering is a
+# two-line change (this file's HANDLERS dict + plugin.json's Stop array) if
+# the team lead decides otherwise after reading the numbers.
 #
 # fix-round-1 (task-8-review Finding 1, Rulings 33-34): the extraction regex
 # cannot tell "the session invented/mistyped a stage name" apart from "we
@@ -1249,6 +1268,15 @@ def closure_guard(payload):
 # restricting the whole scan to type == "assistant" costs nothing on that
 # side and closes this on the declaration side.
 #
+# Ruling 35 (fix-round-2, task-8-review Finding "the check fires on 8-100%
+# of turns"): the corpus says real omx work is done via Bash CLI verbs, not
+# the Skill tool (95 Skill invocations vs 28,727 Bash invocations across 612
+# sessions; 173 exp-analyze declarations and not one Skill invocation of it
+# among them). `opened` now also gains a stage when that stage's DISTINCTIVE
+# `omx` CLI verb (`_STAGE_CLI_VERBS`, derived from build_parser() + the
+# skill bodies, not invented) appears in a Bash command -- see that constant
+# for the corpus numbers and the drift-detection test that keeps it honest.
+#
 # stop_hook_active IS honoured here, unlike loop_gate: this gate has nothing
 # to iterate toward (no analyze->design->eval cycle), so one block is the
 # whole contract — re-blocking a session that already got the message would
@@ -1275,10 +1303,46 @@ def closure_guard(payload):
 # declaration is not a cleanly-parsed exp-* skill token (includes: a
 # non-skill vocabulary word, an out-of-vocabulary/mistyped token, and any
 # markdown-mangled extraction — Ruling 33: these cannot be told apart, so
-# none of them block); (5) the current declared stage's skill WAS opened
-# somewhere in the session.
+# none of them block); (5) the current declared stage's skill WAS opened, OR
+# that stage's own CLI verbs (Ruling 35) WERE run, somewhere in the session.
 _STAGE_TOKEN_RE = re.compile(r"STAGE\(exp\)\s*(?:→|->)\s*([^\s·]+)")
 _STAGE_SKILL_TOKENS = frozenset({"exp-init", "exp-analyze", "exp-design", "exp-loop"})
+
+# --- Ruling 35 (fix-round-2): "the stage was entered" measured the way the
+# work is actually done. Measured on 612 real transcripts under
+# ~/.claude/projects: 371 STAGE(exp) declarations across 17 sessions (173
+# exp-analyze, 50 exp-loop, 9 exp-design, 0 exp-init), against 95 Skill
+# tool_use invocations total across ALL 612 sessions and 28,727 Bash
+# invocations -- real omx work in this workspace is done by running `omx`
+# verbs in Bash, essentially never by opening a skill through the Skill
+# tool. `_STAGE_CLI_VERBS` is each stage's DISTINCTIVE verb set: a verb from
+# the live `omx_core.cli.build_parser()` that is named in exactly ONE
+# stage's `skills/<stage>/SKILL.md` body (not invented, not reverse-
+# engineered from the corpus). Verbs shared across 2+ stages (doctor, eval,
+# wiki add/query/...) are deliberately excluded -- counting them would make
+# the check pass on ANY omx activity regardless of which stage is actually
+# current, the same "too-permissive detector goes silent on the class it
+# should catch" failure this repo has hit before. `omx-core/tests/
+# test_stage_cli_verbs_match_source.py` recomputes this same mapping fresh
+# from build_parser() + the skill bodies and asserts it still equals this
+# constant, so a verb added to a skill or the parser without updating this
+# dict is NOTICED (a red test) rather than silently stale.
+_STAGE_CLI_VERBS = {
+    "exp-init": frozenset({"init", "tree-codify"}),
+    "exp-analyze": frozenset({"clean", "plot", "promote-plots", "reduce tb-final",
+                               "report-coverage", "report-review", "tree-audit",
+                               "wiki gc-apply", "wiki promote-recipe"}),
+    "exp-design": frozenset({"campaign-plan-add", "probe-novelty", "program-status",
+                              "proposal-lint"}),
+    "exp-loop": frozenset({"campaign-init", "campaign-log", "loop-arm", "loop-disarm",
+                            "loop-health", "loop-status", "queue-launch", "revert-config",
+                            "run-record", "run-seed", "tree-alias", "tree-scaffold",
+                            "wiki lint"}),
+}
+_STAGE_CLI_VERB_RE = {
+    stage: re.compile(r"\bomx (?:" + "|".join(re.escape(v) for v in verbs) + r")\b")
+    for stage, verbs in _STAGE_CLI_VERBS.items()
+}
 
 
 def _stage_opened_skill(skill_name):
@@ -1291,20 +1355,32 @@ def _stage_opened_skill(skill_name):
     return tail if tail in _STAGE_SKILL_TOKENS else None
 
 
+def _stage_opened_verb(command):
+    """Ruling 35: a Bash `command` counts as opening a stage when it invokes
+    one of that stage's DISTINCTIVE `omx` CLI verbs (_STAGE_CLI_VERBS).
+    Returns the set of stages the command opens (usually 0 or 1 -- a single
+    command naming two different stages' verbs is possible but rare)."""
+    if not isinstance(command, str) or not command:
+        return frozenset()
+    return frozenset(stage for stage, rgx in _STAGE_CLI_VERB_RE.items()
+                      if rgx.search(command))
+
+
 def _stage_scan_transcript(transcript_path):
     """One pass over the transcript: return (latest_declared: str | None,
     opened: set[str]). `latest_declared` is overwritten on every new
     STAGE(exp) match, so it ends up holding only the session's CURRENT stage
     (Ruling 34) — an earlier mis-parsed or superseded declaration cannot
     poison a later, correct one. `opened` stays a lifetime union across the
-    whole session: a skill may legitimately be opened well before the
-    checkpoint line that later names it. Only `type == "assistant"` records
-    are read (Finding 2) — a user pasting a STAGE line into their own prompt
-    must never read as the assistant having declared it; Skill tool_use never
-    occurs in a `user` record anyway, so this costs nothing on that side.
-    Raises on a read failure (missing/unreadable file) -- the caller treats
-    that as no verdict. A parse problem on one line/record never raises; it
-    is simply skipped so every record after it still counts."""
+    whole session: a skill (or a stage's CLI verb, Ruling 35) may
+    legitimately run well before the checkpoint line that later names it.
+    Only `type == "assistant"` records are read (Finding 2) — a user pasting
+    a STAGE line into their own prompt must never read as the assistant
+    having declared it; Skill and Bash tool_use never occur in a `user`
+    record anyway, so this costs nothing on that side. Raises on a read
+    failure (missing/unreadable file) -- the caller treats that as no
+    verdict. A parse problem on one line/record never raises; it is simply
+    skipped so every record after it still counts."""
     latest_declared = None
     opened = set()
     with open(transcript_path, "r", encoding="utf-8") as fh:
@@ -1335,6 +1411,8 @@ def _stage_scan_transcript(transcript_path):
                     tok = _stage_opened_skill((b.get("input") or {}).get("skill"))
                     if tok:
                         opened.add(tok)
+                elif b.get("type") == "tool_use" and b.get("name") == "Bash":
+                    opened.update(_stage_opened_verb((b.get("input") or {}).get("command")))
     return latest_declared, opened
 
 
@@ -1353,12 +1431,13 @@ def stage_check(payload):
         return None  # (4) no STAGE line, or the current one isn't a clean exp-* skill token
 
     if latest_declared in opened:
-        return None  # (5) the declared stage's skill WAS opened in this session
+        return None  # (5) the declared stage's skill or CLI verb WAS used in this session
 
     return {"decision": "block", "reason": (
         f"omx stage-check: this session's current stage declaration, "
-        f"'{latest_declared}', was never opened as a skill -- open the skill "
-        "before closing, or correct the STAGE declaration.")}
+        f"'{latest_declared}', was never opened as a skill or run via its "
+        "own omx CLI verbs -- do the stage's work before closing, or correct "
+        "the STAGE declaration.")}
 
 
 HANDLERS = {
@@ -1369,5 +1448,10 @@ HANDLERS = {
     "completion_notice": completion_notice,
     "loop_gate": loop_gate,
     "closure_guard": closure_guard,
-    "stage_check": stage_check,
+    # stage_check (task 8): deliberately NOT registered -- see its own
+    # comment block above and task-8-report.md's fix-round-2 section. Built,
+    # tested, and measurably correct on its own terms; measured to still
+    # over-block on 8/17 real STAGE-declaring sessions (up to 100% of their
+    # turns) even with Ruling 35's widened evidence, so it stays out of both
+    # this dict and plugin.json's Stop array until that is resolved.
 }
