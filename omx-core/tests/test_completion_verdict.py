@@ -271,12 +271,44 @@ def test_malformed_output_root_is_unreadable_not_raise(tmp_path):
 
 
 def test_malformed_run_completion_block_is_unreadable_not_raise(tmp_path):
-    # load_run_completion (task 1) still raises OmxError for this shape when called
-    # directly -- evaluate_completion is the one caller that must downgrade it,
-    # since a raise here meets the hook's fail-open and becomes a silent ALLOW.
+    # validate_run_completion (task 1) still raises OmxError for this shape when
+    # called directly -- evaluate_completion is the one caller that must downgrade
+    # it, since a raise here meets the hook's fail-open and becomes a silent ALLOW.
     bad_contract = dict(CONTRACT)
-    bad_contract["required"] = [42]  # not a list of strings
+    bad_contract["required"] = [42]  # not a list of strings -- the reviewer's own repro
     _setup(tmp_path, run_completion=bad_contract)
     result = evaluate_completion(tmp_path)  # must not raise
     assert result["state"] == "unreadable"
     assert "required" in result["reason"]
+
+
+# --- Finding 8: the run_completion KEY is the opt-in signal, and it is literal. A
+# missing profile, an unparseable metrics.yaml, or a profile with no run_completion
+# key at all are three ways of saying "never opted in" -- no-contract, allowed,
+# silently. Collapsing these into the same `unreadable` a malformed BLOCK produces
+# (finding 7) would deny every unrelated project on the machine (success criterion 3
+# inverted). One test per row of the reviewed table, plus the explicit "unrelated
+# directory" case the finding called out by name.
+
+def test_omx_dir_present_but_no_profile_is_no_contract(tmp_path):
+    # .omx/ exists (partial setup) but exp-init never ran -- no profile file at all.
+    (tmp_path / ".omx").mkdir()
+    result = evaluate_completion(tmp_path)
+    assert result["state"] == "no-contract"
+
+
+def test_no_omx_store_at_all_is_no_contract(tmp_path):
+    # tmp_path is used completely bare here -- an unrelated directory with no omx
+    # store whatsoever, e.g. any other repository on the machine. This is the
+    # blast-radius case: before this fix, every such directory read as unreadable.
+    result = evaluate_completion(tmp_path)
+    assert result["state"] == "no-contract"
+
+
+def test_metrics_yaml_parses_as_non_mapping_is_no_contract(tmp_path):
+    paths = OmxPaths(root=tmp_path)
+    metrics_path = paths.profile_file("metrics.yaml")
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    metrics_path.write_text("- not\n- a\n- mapping\n")
+    result = evaluate_completion(tmp_path)
+    assert result["state"] == "no-contract"

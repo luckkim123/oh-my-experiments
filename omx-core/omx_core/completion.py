@@ -12,14 +12,24 @@ verdict.
 The one state this design exists to keep distinct from `checked`-with-zero-
 runs is `unreadable`: an output_root that cannot be listed -- at ANY depth,
 not just its own top level -- must never silently present as "nothing to
-grade, pass" (the same defect class 0.16.1 fixed in `omx wiki list`). A
-run_completion block is also an opt-in signal: once a project has declared
-one, a profile broken after that (output_root missing/invalid, or the
-run_completion block itself now malformed) must resolve to `unreadable`
-rather than raise -- the hook's standing fail-open (D9) would otherwise turn
-that raise into a silent ALLOW. `reason` names which of those three causes
-fired and the offending path or key, since "could not read the tree" and "the
-contract itself is broken" call for different next actions.
+grade, pass" (the same defect class 0.16.1 fixed in `omx wiki list`).
+
+The `run_completion` KEY is the opt-in signal, and it is a literal one: a
+missing profile, an unparseable metrics.yaml, or a profile with no
+run_completion key at all are three ways of saying "this project never opted
+in" -- `no-contract`, allowed, silently. That must hold for every unrelated
+project on the machine, not just ones that ran `exp-init`. Only once the key
+is actually present does a broken profile become `unreadable` rather than
+no-contract: a malformed run_completion block, or (once that block is valid)
+an unusable/absent output_root, or an unreadable tree at any depth below it.
+Conflating "never opted in" with "opted in and broken" -- which a single
+`except OmxError` around the whole load once did -- would deny every project
+on the machine that has nothing to do with omx. That is why the profile is
+read and the key is checked BEFORE the one narrow try/except that can raise
+`unreadable`, rather than wrapping the whole load in one catch. `reason`
+names which cause fired and the offending path or key, since "could not read
+the tree" and "the contract itself is broken" call for different next
+actions.
 """
 from __future__ import annotations
 
@@ -28,7 +38,7 @@ import os
 from pathlib import Path
 
 from omx_core.omx_paths import OmxError, OmxPaths
-from omx_core.profile import load_profile_metrics, load_run_completion
+from omx_core.profile import load_profile_metrics, validate_run_completion
 
 
 def _no_contract() -> dict:
@@ -71,21 +81,36 @@ def evaluate_completion(root) -> dict:
     Returns {"state", "runs", "missing", "subject_count", "output_root", "how",
     "reason"}; state is one of no-contract | checked | incomplete | unreadable.
     """
+    paths = root if isinstance(root, OmxPaths) else OmxPaths(root=root)
+
     try:
-        contract = load_run_completion(root)
-    except OmxError as err:
-        # A run_completion block is the opt-in signal; a MALFORMED block after that
-        # opt-in is a state the gate refuses, not an internal error to wave through --
-        # the hook's fail-open (D9) would otherwise turn this raise into a silent
-        # ALLOW on a project that declared a contract and then typoed it. The loud
-        # raise stays correct for exp-init and for anyone calling the validator
-        # directly; only this caller downgrades it to a verdict.
-        return _unreadable(None, None, reason=str(err))
-    if contract is None:
+        metrics = load_profile_metrics(paths)
+    except OmxError:
+        # No profile at all (never ran exp-init), or metrics.yaml doesn't even parse
+        # as a mapping -- nobody declared anything, so this is "no contract", not
+        # "broken contract". The opt-in signal (a run_completion key) can only be
+        # read from a profile that parses; a project unrelated to omx entirely --
+        # or one that just hasn't been initialized yet -- must never be blocked
+        # (success criterion 3). This is a DIFFERENT try than the one below: this one
+        # is deliberately wide (any parse failure -> no-contract), the one below is
+        # deliberately narrow (only the run_completion block itself -> unreadable).
         return _no_contract()
 
-    paths = root if isinstance(root, OmxPaths) else OmxPaths(root=root)
-    metrics = load_profile_metrics(paths)
+    block = metrics.get("run_completion")
+    if block is None:
+        return _no_contract()
+
+    try:
+        contract = validate_run_completion(block)
+    except OmxError as err:
+        # The run_completion key IS the opt-in signal; once it's there, a MALFORMED
+        # block is a state the gate refuses, not an internal error to wave through --
+        # the hook's fail-open (D9) would otherwise turn this raise into a silent
+        # ALLOW on a project that declared a contract and then typoed it. This except
+        # can fire for exactly one reason now (unlike wrapping load_run_completion,
+        # which also raises for the two profile-absent/unparseable cases above).
+        return _unreadable(None, None, reason=str(err))
+
     how = contract["how"]
 
     output_root_raw = metrics.get("output_root")
