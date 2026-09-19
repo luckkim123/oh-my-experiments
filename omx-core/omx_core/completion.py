@@ -216,17 +216,40 @@ def _read_json(target: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _same_root(a, b) -> bool:
-    """True when `a` and `b` resolve to the same filesystem path -- tolerant of
-    a trailing separator, a redundant './' segment, a relative path, or a
-    symlink to the same tree (finding 5), and tolerant of a hostile receipt's
-    `root` being the wrong TYPE entirely (a number, a list, absent -- `!=`
-    absorbed that for free; `Path()` does not, so it is caught here explicitly
-    rather than silently disappearing). `Path.resolve()` does not require the
-    path to exist (strict=False is the default) -- a receipt legitimately
-    outlives the tree it was written for."""
+def _same_root(receipt_root, expected_root) -> bool:
+    """True when `receipt_root` (the value that crossed a boundary as text,
+    untrusted) names the same filesystem path as `expected_root` (supplied by
+    the calling code from its own OmxPaths, trusted).
+
+    Tolerant of a trailing separator, a redundant './' segment, or a symlink
+    to the same tree (finding 5) -- both sides are compared via
+    `Path.resolve()`, which does not require the path to exist (strict=False
+    is the default), since a receipt legitimately outlives the tree it was
+    written for.
+
+    `receipt_root` must additionally be a non-empty ABSOLUTE path BEFORE
+    resolving, or this returns False outright (finding 6): `Path("").resolve()`
+    and `Path(".").resolve()` both silently return the current working
+    directory, which would let an empty/dot/relative receipt root satisfy
+    whatever project the session happens to be sitting in -- resolving is what
+    manufactures that false identity, so the check runs before it, and only
+    on the untrusted side. `write_receipt` always writes an absolute root, so
+    this never rejects a receipt this module itself produced; `expected_root`
+    gets no such restriction since it is caller-supplied and may legitimately
+    be relative.
+
+    Also tolerant of `receipt_root`/`expected_root` being the wrong TYPE
+    entirely (a number, a list, absent -- plain `!=` absorbed that for free;
+    `Path()` does not, so it is caught here explicitly rather than silently
+    disappearing)."""
     try:
-        return Path(a).resolve() == Path(b).resolve()
+        receipt_path = Path(receipt_root)
+    except TypeError:
+        return False
+    if not receipt_path.is_absolute():
+        return False
+    try:
+        return receipt_path.resolve() == Path(expected_root).resolve()
     except TypeError:
         return False
 

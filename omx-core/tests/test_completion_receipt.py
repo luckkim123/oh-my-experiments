@@ -210,11 +210,58 @@ def test_local_receipt_root_as_symlink_to_same_tree_still_satisfies(tmp_path):
     assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=real) is True
 
 
-def test_local_receipt_root_as_relative_path_to_same_tree_still_satisfies(tmp_path):
+def test_local_receipt_with_relative_expected_root_still_satisfies(tmp_path):
+    """`expected_root` is caller-supplied and may legitimately be relative --
+    only the receipt's OWN stored `root` is held to the absolute-path rule
+    (finding 6). `write_receipt` always writes an absolute root, so this is
+    the realistic shape: the untrusted side is absolute, the trusted caller
+    argument happens not to be."""
+    t0 = now_iso()
+    receipt = _local_receipt(tmp_path, t0)
+    rel_expected = os.path.relpath(tmp_path)
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=rel_expected) is True
+
+
+def test_local_receipt_with_relative_root_does_not_satisfy(tmp_path):
+    """finding 6: a receipt's stored root crossed a boundary as text and must
+    be absolute to count as an identity at all -- a relative one is refused
+    even though it happens to point at the right tree from the current cwd
+    (this replaces the round-2 test that put the relative path on the wrong
+    side of the comparison)."""
     t0 = now_iso()
     rel = os.path.relpath(tmp_path)
     receipt = _local_receipt(rel, t0)
-    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is True
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is False
+
+
+def test_local_receipt_with_empty_root_does_not_satisfy(tmp_path):
+    t0 = now_iso()
+    receipt = _local_receipt("", t0)
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is False
+
+
+def test_local_receipt_with_dot_root_does_not_satisfy(tmp_path):
+    t0 = now_iso()
+    receipt = _local_receipt(".", t0)
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is False
+
+
+def test_local_receipt_with_whitespace_only_root_does_not_satisfy(tmp_path):
+    t0 = now_iso()
+    receipt = _local_receipt("   ", t0)
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is False
+
+
+def test_empty_or_dot_root_never_manufactures_a_match_against_the_cwd(tmp_path, monkeypatch):
+    """The exact measured bug: Path("").resolve() and Path(".").resolve() both
+    return the CURRENT working directory, so an empty/dot root must not match
+    even when expected_root truly IS the cwd -- resolving must not run before
+    the absoluteness check."""
+    monkeypatch.chdir(tmp_path)
+    t0 = now_iso()
+    for bogus_root in ("", "."):
+        receipt = _local_receipt(bogus_root, t0)
+        assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=os.getcwd()) is False
 
 
 def test_local_receipt_root_a_number_does_not_satisfy_and_does_not_raise(tmp_path):
