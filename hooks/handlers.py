@@ -514,13 +514,31 @@ def compact_breadcrumb(payload):
 # outside. This handler is the other half: tell such a project the block
 # exists, once per session start.
 #
-# Four routes all return bare None here -- contract already declared, no omx
-# layer at cwd, an unbootstrapped/unreadable/malformed profile, and any other
+# Five routes all return bare None here -- contract already declared, no omx
+# layer at cwd, an unbootstrapped/unreadable/malformed profile, a
+# half-migrated store (fifth, see the ponytail note below), and any other
 # internal error. Deliberately NOT distinguished at runtime (same "silence
 # over noise" contract as compact_breadcrumb above): a SessionStart hook with
 # a per-case runtime signal would be a second, noisier channel for something
 # this file's comments already say plainly. Told apart only by reading this
 # source, never by the hook's own output.
+#
+# ponytail (fix-round-1, task-6-review Finding 1, accepted not fixed):
+# _has_omx_marker ORs across both stores -- .omx/ is-dir, OR any of
+# .hq/{config,work,runtime}/experiments is-dir -- but omx_paths._resolve
+# picks exactly ONE store, gated on has_anchor() alone (a parseable
+# .hq/.anchor). A tree with a real .omx/profile/metrics.yaml, a
+# .hq/config/experiments/ dir, AND a parseable anchor file is
+# marker=True, yet _resolve sends profile_dir to the .hq/ side, where no
+# profile exists -- load_run_completion raises, this handler goes
+# silent. Not a Task-6-only symptom: close-check, evaluate_completion,
+# and every other omx_core consumer read the SAME unreadable profile as
+# no-contract, so a half-migrated store goes invisible to all of omx,
+# not just this notice -- which is why lifting it here would be treating
+# the symptom. The ceiling is the marker/resolver disagreement itself
+# (_has_omx_marker's OR vs _resolve's has_anchor()-only pick), shared by
+# every handler and the CLI; fix it once, at that shared root, when a
+# half-migrated store turns up for real.
 def completion_notice(payload):
     try:
         if payload.get("source") not in ("startup", "resume"):
@@ -537,10 +555,15 @@ def completion_notice(payload):
         # project's profile than the one whose marker was just found.
         if load_run_completion(cwd) is not None:
             return None  # already opted in -- nothing to say
+        # Task-6-review Finding 2: no "see <verb> --help" pointer -- `omx
+        # close-check --help` documents --root/--json/--record and never
+        # mentions run_completion or metrics.yaml, so pointing there sent a
+        # user on a trip that doesn't answer the question this line raised.
+        # Name the two concrete things instead (the key, the file) and stop
+        # there until a real doc/skill target exists (Task 10).
         body = (
             "omx: this project has no `run_completion` block in profile/metrics.yaml "
-            "-- finished runs are never grade-checked before closure. Add one to opt in "
-            "(see `omx close-check --help`).")
+            "-- finished runs are never grade-checked before closure. Add one to opt in.")
         return {"hookSpecificOutput": {
             "hookEventName": "SessionStart",
             "additionalContext": body,

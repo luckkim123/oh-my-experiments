@@ -83,6 +83,11 @@ def test_contract_absent_names_run_completion_and_its_file(tmp_path):
     ctx = hso["additionalContext"]
     assert "run_completion" in ctx
     assert "metrics.yaml" in ctx
+    # fix-round-1, Finding 2: `omx close-check --help` documents --root/--json/
+    # --record and never mentions run_completion or metrics.yaml -- pointing a
+    # user there sent them on a trip that doesn't answer the question. No
+    # dead-end pointer until a real doc/skill target exists (Task 10).
+    assert "close-check" not in ctx
 
 
 def test_contract_absent_also_fires_on_resume(tmp_path):
