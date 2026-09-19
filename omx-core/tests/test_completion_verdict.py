@@ -50,6 +50,11 @@ def test_no_contract_returns_no_contract_state(tmp_path):
     assert result == {
         "state": "no-contract", "runs": [], "missing": [], "subject_count": None,
         "output_root": None, "how": None, "reason": None,
+        # Ruling 39 (task 14): the profile parsed fine, `run_completion` is simply
+        # absent -- the ONE no-contract cause hooks/handlers.py:completion_notice
+        # needs distinguished from the other (see the no-profile/unparseable
+        # tests below, which stay `no_contract_reason: None`).
+        "no_contract_reason": "no_run_completion_key",
     }
 
 
@@ -336,6 +341,10 @@ def test_omx_dir_present_but_no_profile_is_no_contract(tmp_path):
     (tmp_path / ".omx").mkdir()
     result = evaluate_completion(tmp_path)
     assert result["state"] == "no-contract"
+    # Ruling 39 (task 14): this cause is NOT the "profile parsed fine, key
+    # absent" one -- no_contract_reason stays None, same as before this field
+    # existed. completion_notice relies on exactly this to stay silent here.
+    assert result["no_contract_reason"] is None
 
 
 def test_no_omx_store_at_all_is_no_contract(tmp_path):
@@ -344,6 +353,7 @@ def test_no_omx_store_at_all_is_no_contract(tmp_path):
     # blast-radius case: before this fix, every such directory read as unreadable.
     result = evaluate_completion(tmp_path)
     assert result["state"] == "no-contract"
+    assert result["no_contract_reason"] is None
 
 
 def test_metrics_yaml_parses_as_non_mapping_is_no_contract(tmp_path):
@@ -353,3 +363,4 @@ def test_metrics_yaml_parses_as_non_mapping_is_no_contract(tmp_path):
     metrics_path.write_text("- not\n- a\n- mapping\n")
     result = evaluate_completion(tmp_path)
     assert result["state"] == "no-contract"
+    assert result["no_contract_reason"] is None

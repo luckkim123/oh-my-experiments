@@ -162,6 +162,33 @@ def test_garbage_cwd_is_silent():
     assert mod.completion_notice({"source": "startup"}) is None  # cwd missing entirely
 
 
+def test_omx_cli_unavailable_is_silent(tmp_path, monkeypatch):
+    """Ruling 39 (task 14): completion_notice now gets its answer from `omx
+    close-check --json` (never an in-process omx_core import). Unlike
+    closure_guard, this handler never denies anything -- it only ever nudges
+    or stays silent -- so BOTH failure causes ("no-omx" and "parse-error")
+    must fail toward silence here, even on a directory that WOULD otherwise
+    have injected the nudge (a real omx layer with a readable, key-absent
+    profile)."""
+    mod = _load_handlers()
+    root = _omx_profile(tmp_path)  # contract absent -- would otherwise fire
+    monkeypatch.setenv("PATH", "")  # `omx` cannot be found or exec'd
+    assert mod.completion_notice({"cwd": str(root), "source": "startup"}) is None
+
+
+def test_omx_cli_garbage_output_is_silent(tmp_path, monkeypatch):
+    mod = _load_handlers()
+    root = _omx_profile(tmp_path)
+
+    class _FakeProc:
+        returncode = 0
+        stdout = "not json{{{"
+        stderr = ""
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _FakeProc())
+    assert mod.completion_notice({"cwd": str(root), "source": "startup"}) is None
+
+
 def test_registered_in_handlers_table():
     mod = _load_handlers()
     assert mod.HANDLERS["completion_notice"] is mod.completion_notice

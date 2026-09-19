@@ -10,6 +10,7 @@ Fail-open: unparseable input or an unavailable omx_core -> allow (None).
 """
 import json
 import re
+import subprocess
 from pathlib import Path, PurePosixPath
 
 _GATED_NAMES = frozenset({"report.md", "report.ko.md", "manifest.json"})
@@ -505,6 +506,61 @@ def compact_breadcrumb(payload):
         return None  # fail-open (D9)
 
 
+# --- Ruling 39 (run-completion-gate round, task 14): closure_guard and
+# completion_notice get their answer from the `omx` CONSOLE SCRIPT, never
+# from an in-process `omx_core` import. Task 13 measured this live: every
+# hook is wired in plugin.json as bare "python3", resolved via the CALLER's
+# PATH -- on this machine that is Homebrew's 3.14, which has neither
+# omx_core nor yaml, so the in-process import raised ImportError, D9's
+# fail-open swallowed it, and both gates went silently inert with no error
+# anywhere. `omx` itself is immune to this: its console-script shebang is
+# written by the installer at `pip install`/`pip install -e` time and always
+# names the interpreter omx_core was actually installed into (`head -1
+# $(command -v omx)`), regardless of what "python3" resolves to for whoever
+# invoked the hook. Shelling out to it costs ~0.09s per call (measured)
+# against ~0.066s in-process -- and only ever happens after the cheap,
+# stdlib-only checks (tool_name/command shape, `_closure_declares`,
+# `_has_omx_marker`) have already confirmed there is something worth asking.
+_OMX_CLI_TIMEOUT_S = 2.0  # comfortably inside run_hook.py's 3s SIGALRM budget
+
+
+def _run_omx_cli_json(args):
+    """Run an `omx ... --json` subcommand and return a trust-tagged result --
+    never raises. `{"ok": True, "data": <parsed JSON dict>}` on a clean run;
+    otherwise `{"ok": False, "cause": "no-omx" | "parse-error", "detail": str}`.
+
+    The two failure causes are NOT interchangeable (Rulings 30/37, restated
+    for this call site): "no-omx" (the `omx` executable itself could not be
+    started -- missing from PATH, not executable) is the same fact as "no
+    omx installation here", which every consumer of this helper already
+    treats as silent allow. "parse-error" (the process WAS invoked but
+    produced something that cannot be trusted -- a timeout, non-JSON stdout,
+    a JSON value that isn't an object) is a different class: the check did
+    not complete, and "could not tell" must never read the same as "checked
+    and clean". `timeout` is kept well under run_hook.py's own 3s SIGALRM
+    budget so a hang here is turned into a parse-error class result BY THIS
+    FUNCTION -- if the alarm fired instead, run_hook.py's outer `except
+    BaseException: return 0` would swallow it as a silent, indistinguishable
+    allow, exactly the failure this Ruling exists to close."""
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True,
+                               timeout=_OMX_CLI_TIMEOUT_S)
+    except OSError as exc:
+        return {"ok": False, "cause": "no-omx", "detail": str(exc)}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "cause": "parse-error",
+                "detail": f"omx CLI timed out after {_OMX_CLI_TIMEOUT_S}s"}
+    try:
+        data = json.loads(proc.stdout)
+    except ValueError:
+        return {"ok": False, "cause": "parse-error",
+                "detail": f"omx CLI --json output was not parseable (rc={proc.returncode})"}
+    if not isinstance(data, dict):
+        return {"ok": False, "cause": "parse-error",
+                "detail": "omx CLI --json output was not a JSON object"}
+    return {"ok": True, "data": data}
+
+
 # --- completion_notice (Task 6, run-completion-gate round): one-time opt-in
 # nudge for the run_completion contract. Registered SessionStart matcher
 # "startup|resume" (a SECOND SessionStart entry, alongside compact_breadcrumb's
@@ -523,6 +579,25 @@ def compact_breadcrumb(payload):
 # a per-case runtime signal would be a second, noisier channel for something
 # this file's comments already say plainly. Told apart only by reading this
 # source, never by the hook's own output.
+#
+# Ruling 39: `load_run_completion(cwd)` (an in-process omx_core import) is
+# replaced by `omx close-check --root <cwd> --json` (Rungs above). `--root`
+# is passed EXPLICITLY, never left to close-check's own #13-ladder default --
+# Ruling 27 (see test_uses_cwd_not_the_root_ladder_when_a_workspace_marker_
+# sits_above) requires this handler to read cwd's OWN profile, never a ladder-
+# resolved ancestor's. The three-way distinction this handler depends on
+# (readable-profile-no-key -> inject; no-profile -> silent; unparseable-
+# profile -> silent) collapses in `evaluate_completion` to ONE state,
+# "no-contract", shared by all three causes -- `reason` stays None for all of
+# them. Rather than guess at a fix, this round adds the SMALLEST possible new
+# field to that shared payload: `no_contract_reason` (omx_core/completion.py's
+# `_no_contract()`), set to "no_run_completion_key" at the ONE call site that
+# needs distinguishing (profile parsed fine, key just absent) and left None at
+# the other (profile absent or unparseable -- both already read as
+# "no-contract" upstream and neither needs telling apart from the other for
+# THIS handler's purposes). This is a genuine, if small, addition to a shared
+# verdict schema used by `omx close-check`/`omx_core.completion` at large --
+# called out here, not smuggled in as an incidental refactor detail.
 #
 # ponytail (fix-round-1, task-6-review Finding 1, accepted not fixed):
 # _has_omx_marker ORs across both stores -- .omx/ is-dir, OR any of
@@ -548,14 +623,21 @@ def completion_notice(payload):
         if not _has_omx_marker(cwd):
             return None  # no omx layer here -- nothing to nudge about
 
-        from omx_core.profile import load_run_completion
-
         # cwd itself, not the #13 root ladder (Ruling 27): _has_omx_marker just
         # confirmed the layer sits AT cwd, and it never climbs to a parent --
         # reading a ladder-resolved root here could silently name a DIFFERENT
         # project's profile than the one whose marker was just found.
-        if load_run_completion(cwd) is not None:
-            return None  # already opted in -- nothing to say
+        result = _run_omx_cli_json(["omx", "close-check", "--root", cwd, "--json"])
+        if not result["ok"]:
+            return None  # omx unavailable, or its output untrustworthy -- this
+                         # handler only ever nudges, never blocks, so BOTH
+                         # causes fail toward silence (D9); there is no "deny"
+                         # for a SessionStart nudge the way there is for closure_guard
+        verdict = result["data"]
+        if verdict.get("state") != "no-contract":
+            return None  # already opted in (checked/incomplete/unreadable) -- silent
+        if verdict.get("no_contract_reason") != "no_run_completion_key":
+            return None  # no profile at all, or one that doesn't parse -- silent
         # Task-6-review Finding 2: no "see <verb> --help" pointer -- `omx
         # close-check --help` documents --root/--json/--record and never
         # mentions run_completion or metrics.yaml, so pointing there sent a
@@ -1168,53 +1250,30 @@ _CLOSURE_UNPARSEABLE_REASON = (
     "declaration, proceed with: omx close-defer --reason \"<why>\"."
 )
 
-
-def _closure_resolve_root(payload) -> str:
-    """Resolve the omx root for closure_guard (Ruling 27, fix-round-1).
-
-    The #13 ladder (`resolve_omx_root`) as usual -- but its stage "cwd" means
-    only "no explicit root / OMX_STATE_DIR / .omx-workspace marker / git
-    toplevel found"; the ladder never checks for an omx LAYER (`.omx/` or a
-    `.hq/` layer dir) at all, so "the ladder found no anchor" is NOT the same
-    fact as "there is no omx project here" -- conflating those two was
-    exactly the bug this round shipped once already (a directory with a
-    bootstrapped profile and a real, unevaluated finished run allowed every
-    closure command, because the ladder alone was trusted to say "no
-    project"). A project that opted in (its own store is present) but sits
-    outside git and without a marker is a real omx project and must still be
-    gated: when the ladder lands on stage "cwd", fall back to
-    `_has_omx_marker(cwd)` -- the existing bare-pathlib, zero-subprocess probe
-    that already checks BOTH stores (shared with the route_emit checkpoint
-    gate) -- and gate against `cwd` itself if it finds one. Only when
-    NEITHER the ladder anchors NOR an omx layer is present at cwd does this
-    raise, which the caller treats as allow: an unrelated directory on the
-    machine must never be gated (the Finding-8 regression class).
-
-    A dedicated resolver, deliberately NOT a change to `_resolve_backlog_root`:
-    that one backs the route_emit backlog pre-fetch / campaign-drift check, a
-    different call site with its own already-shipped, tested contract
-    (`test_hook_backlog.py` monkeypatches it by NAME) -- widening its
-    anchoring was not part of this task, and giving closure_guard its own
-    function keeps that contract untouched.
-
-    ponytail: `_has_omx_marker` does not climb toward a parent directory the
-    way the ladder's OWN marker stage does -- a cwd one level below a
-    bootstrapped project's root still falls through to allow here, same as
-    it already does for the existing route_emit checkpoint-gate probe this
-    reuses. Left alone deliberately for consistency with that shared probe's
-    existing meaning; climb (or resolve via OmxPaths' own layer-detection
-    walk) if a real cwd-below-root closure attempt ever turns up."""
-    from omx_core.root import resolve_omx_root
-    cwd = payload.get("cwd")
-    if not isinstance(cwd, str) or not cwd:
-        raise ValueError("hook payload carries no usable cwd")
-    root, stage = resolve_omx_root(cwd=cwd)
-    if stage == "cwd" and not _has_omx_marker(cwd):
-        raise ValueError(f"no omx root anchor or layer found for cwd {cwd!r}")
-    return str(root)
+_CLOSURE_OMX_CLI_FAILURE_REASON = (
+    "omx run-completion gate: `omx close-check --json` could not be trusted this time "
+    "({detail}). Rulings 30/37 treat an incomplete check the same as a failed one -- it "
+    "denies rather than silently allowing when it cannot confirm the tree is clean. Run "
+    "`omx close-check` yourself to see the real verdict, or proceed with: "
+    "omx close-defer --reason \"<why>\"."
+)
 
 
 def closure_guard(payload):
+    """PreToolUse Bash gate (task 5, design doc §4-6; subprocess wiring per
+    Ruling 39, task 14). The cheap, stdlib-only checks run first and exit
+    most calls before anything else happens: tool_name, command shape, the
+    shlex/regex closure-declaration match (`_closure_declares`), then
+    `_has_omx_marker(cwd)` -- a closure declaration is rare by construction
+    (only `hq post --category handoff` / `omx loop-disarm|loop-mark-done
+    --reason done`), and an omx layer at cwd rarer still outside a real omx
+    project, so `omx close-check` is only ever invoked once BOTH are true.
+    `--root cwd` is passed explicitly (never left to close-check's own #13
+    ladder): `_has_omx_marker` just confirmed the layer sits AT cwd and does
+    not climb, so gating against anything the ladder might resolve to
+    instead (an ancestor's OMX_STATE_DIR/.omx-workspace/git-toplevel) would
+    reopen the exact Finding-8 class (a gate that speaks for an unrelated
+    project) Ruling 27 closed for this handler already."""
     try:
         if payload.get("tool_name") != "Bash":
             return None
@@ -1244,38 +1303,55 @@ def closure_guard(payload):
         if not declares:
             return None
 
-        from omx_core.clock import now_iso
-        from omx_core.completion import (active_defer, evaluate_completion,
-                                          read_receipt, receipt_satisfies)
-        from omx_core.omx_paths import OmxPaths
+        cwd = payload.get("cwd")
+        if not _has_omx_marker(cwd):
+            return None  # no omx layer at cwd -- allow (Ruling 27/Finding-8 class)
 
-        root = _closure_resolve_root(payload)  # raises on no anchor AND no omx layer
-        paths = OmxPaths(root=root)
-        now = now_iso()
-
-        if active_defer(paths, now):
-            return None
-        if receipt_satisfies(read_receipt(paths), now, expected_root=paths.root):
-            return None
-
-        verdict = evaluate_completion(paths)
-        state = verdict["state"]
-        if state in ("no-contract", "checked"):
-            return None
+        result = _run_omx_cli_json(["omx", "close-check", "--root", cwd, "--json"])
+        if not result["ok"] and result["cause"] == "no-omx":
+            return None  # requirement 3: no omx installation here -- allow, silently
     except Exception:
         return None  # fail-open (D9): an infra/setup failure BEFORE a verdict exists allows
 
-    # F4 (task-5 fix-round-2): evaluate_completion has ALREADY decided this
-    # command must be denied -- a bug in the TEXT-RENDERING code that turns
-    # that verdict into the reason string must not silently downgrade an
-    # already-made deny into an allow. D9's fail-open is for infrastructure
-    # failures upstream of a verdict (root resolution, defer/receipt reads,
-    # evaluate_completion itself, all still covered by the try/except
-    # above); a formatting bug in code that runs AFTER the decision is a
-    # different failure class and must still deny, minimally.
+    if not result["ok"]:
+        # cause == "parse-error": the subprocess ran but produced something that
+        # cannot be trusted (timeout / non-JSON / wrong shape) -- Rulings 30/37,
+        # this must deny, never silently allow, same class as the shlex failure above.
+        return {"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason":
+                _CLOSURE_OMX_CLI_FAILURE_REASON.format(detail=result["detail"]),
+        }}
+
+    verdict = result["data"]
+    state = verdict.get("state")
+    # `satisfied_by` (an active defer, or a fresh receipt -- design §6) is added
+    # to the --json payload by close-check itself only when the RAW verdict was
+    # already incomplete/unreadable; checking for it here replaces the separate
+    # in-process active_defer()/receipt_satisfies() calls this handler used to
+    # make, since close-check's own decision order already covers both.
+    if "satisfied_by" in verdict or state in ("no-contract", "checked"):
+        return None
+    if state not in ("incomplete", "unreadable"):
+        return {"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": _CLOSURE_OMX_CLI_FAILURE_REASON.format(
+                detail=f"unrecognized state {state!r} in --json output"),
+        }}
+
+    # F4 (task-5 fix-round-2): evaluate_completion (now: close-check) has
+    # ALREADY decided this command must be denied -- a bug in the
+    # TEXT-RENDERING code that turns that verdict into the reason string
+    # must not silently downgrade an already-made deny into an allow. D9's
+    # fail-open above is for infrastructure failures upstream of a verdict
+    # (the omx CLI call itself); a formatting bug in code that runs AFTER
+    # the decision is a different failure class and must still deny,
+    # minimally.
     try:
         reason = (_closure_incomplete_reason(verdict) if state == "incomplete"
-                  else _closure_unreadable_reason(verdict, paths.root))
+                  else _closure_unreadable_reason(verdict, verdict.get("root") or cwd))
     except Exception:
         reason = ("omx run-completion gate: this closure declaration is blocked, but the "
                    "deny-reason renderer itself failed -- run `omx close-check` for the real "

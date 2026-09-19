@@ -7,18 +7,27 @@ declared (state "incomplete"), or when the gate could not tell at all (state
 "unreadable"). Loads hooks/handlers.py directly, same pattern as
 test_report_guard.py / test_hook_backlog.py.
 
-Fixture trees mirror test_close_verbs.py's CONTRACT/_setup/_finish shape, plus
-an `.omx-workspace` marker so the #13 root ladder anchors HERE (stage
-"marker") instead of falling to stage "cwd" -- which `_resolve_backlog_root`
-(reused by closure_guard) treats as "no omx project at all" and raises.
+Fixture trees mirror test_close_verbs.py's CONTRACT/_setup/_finish shape. The
+`.omx-workspace` marker `_setup(anchor=True)` writes at the fixture root is a
+leftover of this file's original #13-ladder design (Ruling 27) and no longer
+does anything for closure_guard itself -- since Ruling 39 (task 14),
+closure_guard shells out to `omx close-check --root <cwd> --json` (never an
+in-process `omx_core` import) and decides whether to do so at all with the
+cheap, stdlib-only `_has_omx_marker(cwd)` probe, which only ever looks at cwd
+itself. It is left in the shared `_setup()` helper because every fixture
+directory already has `.omx/profile/...` too (from `bootstrap_profile`),
+which is what `_has_omx_marker` actually keys on.
 """
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import timedelta
 from pathlib import Path
+
+import pytest
 
 from omx_core.clock import now_iso, parse_iso_utc
 from omx_core.completion import write_defer, write_receipt
@@ -591,20 +600,28 @@ def test_crlf_heredoc_terminator_matches_with_cr_stripped(tmp_path):
 # --- F4 (task-5 fix-round-2): a renderer failure must still deny -----------
 
 def test_renderer_failure_still_denies_with_a_fallback_message(tmp_path, monkeypatch):
-    """Once evaluate_completion has already decided incomplete/unreadable, a
-    bug in the deny-TEXT renderer must not silently downgrade that decision
-    into an allow (the reviewer's own demonstration: a malformed verdict
-    missing the `missing`/`how` keys `_closure_incomplete_reason` needs).
-    Patched on the real omx_core.completion module, since closure_guard's
-    `from omx_core.completion import evaluate_completion` resolves against
-    that same module object on every call."""
-    import omx_core.completion as completion_mod
+    """Once the omx CLI has already decided incomplete/unreadable, a bug in
+    the deny-TEXT renderer must not silently downgrade that decision into an
+    allow (the reviewer's own demonstration: a malformed verdict missing the
+    `missing`/`how` keys `_closure_incomplete_reason` needs).
+
+    Ruling 39 (task 14) moved verdict computation into a SEPARATE `omx`
+    subprocess -- closure_guard no longer imports `omx_core.completion` at
+    all, so there is nothing left to monkeypatch on that module. A real
+    `incomplete` verdict is produced the ordinary way (the genuine `omx
+    close-check` subprocess call, same as every other test in this file); the
+    renderer under test, `_closure_incomplete_reason`, is patched on the
+    LOADED HANDLERS MODULE OBJECT instead -- the one piece of this path that
+    still runs in-process, and the actual function whose failure this test
+    exists to guard against."""
     mod = _load_handlers()
     _setup(tmp_path)
     _finish(tmp_path / "experiments" / "runs" / "alpha")
 
-    bad_verdict = {"state": "incomplete", "missing": [{"run": "runs/alpha"}]}  # no "missing"/"how" per entry
-    monkeypatch.setattr(completion_mod, "evaluate_completion", lambda paths: bad_verdict)
+    def _boom(verdict):
+        raise KeyError("missing")  # a malformed verdict missing a key the renderer needs
+
+    monkeypatch.setattr(mod, "_closure_incomplete_reason", _boom)
 
     out = _run(mod, "omx loop-disarm --reason done", tmp_path)
     assert out is not None
@@ -774,14 +791,89 @@ def test_remote_receipt_rescues_an_unreadable_tree(tmp_path):
     assert _run(mod, "omx loop-disarm --reason done", tmp_path) is None
 
 
-# --- import-safety: a poisoned omx_core still allows -------------------------
+# --- import-safety: an unavailable omx CLI still allows ----------------------
 
-def test_poisoned_omx_core_import_still_allows(tmp_path, monkeypatch):
+def test_omx_cli_not_on_path_still_allows(tmp_path, monkeypatch):
+    """Ruling 39 (task 14) retires the old poisoned-omx_core-import safety net
+    below (closure_guard no longer imports omx_core in-process AT ALL --
+    since it never did on this fixture anyway, given `tmp_path` here carried
+    no omx layer, poisoning sys.modules never exercised anything closure_guard
+    actually needed either) and replaces it with the analogous case for the
+    new design: the `omx` console script itself missing from PATH. That is
+    the same fact "no omx installation here" already reads as (requirement
+    3) -- allow, silently -- even on a directory that IS a real, bootstrapped,
+    genuinely-incomplete omx project, so the only thing standing between
+    this command and a DENY is the missing-omx fallback under test."""
     mod = _load_handlers()
-    for name in ("omx_core", "omx_core.clock", "omx_core.completion", "omx_core.omx_paths"):
-        monkeypatch.setitem(sys.modules, name, None)
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    monkeypatch.setenv("PATH", "")  # `omx` cannot be found or exec'd
     out = mod.closure_guard(_payload("omx loop-disarm --reason done", tmp_path))
     assert out is None
+
+
+# --- Rulings 30/37 extended to the omx CLI subprocess (Ruling 39, task 14) --
+# "no-omx" (above) and "the process ran but produced something untrustworthy"
+# are NOT the same failure class: the first is the same fact "no omx project"
+# already reads as (allow); the second is a check that did not complete, and
+# must never read the same as "checked and clean" (deny). Both simulated by
+# monkeypatching `subprocess.run` ON THE LOADED HANDLERS MODULE -- this
+# exercises closure_guard's own `_run_omx_cli_json` parse-error branch
+# directly, rather than trying to make the real `omx` binary misbehave.
+
+def test_omx_cli_garbage_output_denies(tmp_path, monkeypatch):
+    mod = _load_handlers()
+    _setup(tmp_path)  # a real omx layer -- must reach the subprocess call
+
+    class _FakeProc:
+        returncode = 0
+        stdout = "not json{{{"
+        stderr = ""
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _FakeProc())
+
+    out = mod.closure_guard(_payload("omx loop-disarm --reason done", tmp_path))
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "close-check" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert 'omx close-defer --reason "<why>"' in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_omx_cli_non_object_json_denies(tmp_path, monkeypatch):
+    """A --json payload that parses but isn't an object (e.g. a bare list or
+    number) is just as untrustworthy as non-JSON -- same parse-error class."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+
+    class _FakeProc:
+        returncode = 0
+        stdout = "[1, 2, 3]"
+        stderr = ""
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _FakeProc())
+
+    out = mod.closure_guard(_payload("omx loop-disarm --reason done", tmp_path))
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_omx_cli_timeout_denies(tmp_path, monkeypatch):
+    """A hang here must be caught and turned into a deny BY THIS FUNCTION,
+    well inside run_hook.py's 3s SIGALRM budget -- if the alarm fired first,
+    run_hook.py's outer `except BaseException: return 0` would swallow it as
+    a silent, indistinguishable allow, which is exactly the class of failure
+    Ruling 39 exists to close."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+
+    def _raise_timeout(*a, **k):
+        raise mod.subprocess.TimeoutExpired(cmd="omx", timeout=mod._OMX_CLI_TIMEOUT_S)
+
+    monkeypatch.setattr(mod.subprocess, "run", _raise_timeout)
+
+    out = mod.closure_guard(_payload("omx loop-disarm --reason done", tmp_path))
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 # --- deny reason shape --------------------------------------------------------
@@ -873,6 +965,44 @@ def test_end_to_end_through_runner_allows_non_closure_command(tmp_path):
                        timeout=10, env={**os.environ})
     assert r.returncode == 0
     assert r.stdout.strip() == ""  # allow prints nothing at all
+
+
+def test_end_to_end_denies_under_the_plugin_json_wired_interpreter(tmp_path):
+    """The actual regression this round exists to close (task 13): plugin.json
+    wires every hook as bare "python3" (test_hook_registration.py pins this),
+    resolved via the CALLER's PATH -- not necessarily the interpreter omx_core
+    is importable from. On the machine this was measured on, bare "python3"
+    is Homebrew's 3.14 (neither omx_core nor yaml installed) while omx_core
+    is only pip-installed into 3.12; before Ruling 39, closure_guard's
+    in-process `from omx_core... import` raised ImportError there, D9's
+    fail-open swallowed it, and the gate went silently inert -- confirmed
+    live with an `incomplete` fixture that was never denied.
+
+    Ruling 39 (task 14) fixes this by having closure_guard shell out to the
+    `omx` CONSOLE SCRIPT (shebang-pinned to whatever interpreter it was
+    actually installed into, unaffected by what "python3" resolves to for
+    the CALLER) instead of importing omx_core in-process. This test runs the
+    hook through the literal bare "python3" command plugin.json names -- not
+    `sys.executable` (test_end_to_end_through_runner_denies above uses that
+    for a different reason: proving the LOGIC denies, under whatever
+    interpreter pytest itself runs on) -- and expects a real deny regardless
+    of which Python "python3" happens to resolve to. This is the permanent,
+    automated form of the manual verification in task-13-report.md; it
+    replaces check_hook_interpreter.py as the thing that actually gates this
+    round (see that script's own updated docstring for why it stays an
+    unwired diagnostic instead)."""
+    python3 = shutil.which("python3")
+    if python3 is None:
+        pytest.skip("no 'python3' on PATH to reproduce the plugin.json wiring with")
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    payload = _payload("omx loop-disarm --reason done", tmp_path)
+    r = subprocess.run([python3, str(RUNNER), "closure_guard"],
+                       input=json.dumps(payload), capture_output=True, text=True,
+                       timeout=10, env={**os.environ})
+    assert r.returncode == 0
+    out = json.loads(r.stdout)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def test_plugin_json_registers_closure_guard_on_bash():

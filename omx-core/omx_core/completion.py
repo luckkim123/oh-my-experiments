@@ -51,9 +51,25 @@ from omx_core.profile import load_profile_metrics, validate_run_completion
 _CLOCK_SKEW_TOLERANCE = timedelta(minutes=1)
 
 
-def _no_contract() -> dict:
+def _no_contract(no_contract_reason: str | None = None) -> dict:
+    """`no_contract_reason` (Ruling 39, run-completion-gate round, task 14): a
+    SMALL ADDITION to this shared verdict schema, not a change to `state` or
+    `reason` for any existing caller -- every no-contract verdict still has
+    `reason: None`, and this new key defaults to None too everywhere except
+    the ONE call site (evaluate_completion: profile parses fine, the
+    `run_completion` key itself is simply absent) that a hook consumer
+    (hooks/handlers.py:completion_notice) needs to tell apart from the OTHER
+    no-contract cause (no profile at all, or one that doesn't parse -- both
+    already collapsed into the same `except OmxError` branch above and
+    still indistinguishable from each other, which no consumer needs).
+    completion_notice used to make this distinction with its OWN in-process
+    `omx_core.profile.load_run_completion(cwd)` call (raises for the first
+    cause, returns None for the second); Ruling 39 moves it off any
+    in-process omx_core import entirely, onto `omx close-check --json`, and
+    this field is what lets that JSON payload still carry the distinction."""
     return {"state": "no-contract", "runs": [], "missing": [], "subject_count": None,
-            "output_root": None, "how": None, "reason": None}
+            "output_root": None, "how": None, "reason": None,
+            "no_contract_reason": no_contract_reason}
 
 
 def _unreadable(output_root_repr, how, reason) -> dict:
@@ -89,7 +105,10 @@ def evaluate_completion(root) -> dict:
     """Compute the run-completion verdict for `root` (design §4).
 
     Returns {"state", "runs", "missing", "subject_count", "output_root", "how",
-    "reason"}; state is one of no-contract | checked | incomplete | unreadable.
+    "reason", "no_contract_reason"}; state is one of no-contract | checked |
+    incomplete | unreadable. `no_contract_reason` (Ruling 39) is non-None only
+    for state == "no-contract", and then only for one of its two causes --
+    see `_no_contract`'s docstring.
     """
     paths = root if isinstance(root, OmxPaths) else OmxPaths(root=root)
 
@@ -108,7 +127,7 @@ def evaluate_completion(root) -> dict:
 
     block = metrics.get("run_completion")
     if block is None:
-        return _no_contract()
+        return _no_contract(no_contract_reason="no_run_completion_key")
 
     try:
         contract = validate_run_completion(block)

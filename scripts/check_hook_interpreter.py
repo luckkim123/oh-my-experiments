@@ -5,11 +5,10 @@ omx_core importable (task-13, run-completion-gate round).
 Every hook in `.claude-plugin/plugin.json` is wired as a bare command name
 (currently "python3"), resolved via the *caller's* PATH when Claude Code
 spawns the hook subprocess -- not necessarily the interpreter `omx-core` was
-`pip install -e`'d into. closure_guard (and every other handler that needs
-omx_core: report_guard's ANALYSIS_ID mirror, route_emit, loop_gate,
-capture_flush) wraps its omx_core import in a blanket `except Exception:
-return None` (fail-open, D9) -- so if the resolved interpreter lacks
-omx_core, the hook silently no-ops. No error, no log line, no deny. Ever.
+`pip install -e`'d into. Every handler that imports omx_core in-process
+wraps it in a blanket `except Exception: return None` (fail-open, D9) -- so
+if the resolved interpreter lacks omx_core, the hook silently no-ops. No
+error, no log line, no deny. Ever.
 
 This was measured live on this machine (task-13-report.md): PATH resolves
 "python3" to Homebrew's Python 3.14 (`/opt/homebrew/bin/python3`), which
@@ -20,12 +19,34 @@ was pip-installed into, editable, pointing at this repo). A real headless
 the SAME plugin.json's hook `command` to "python3.12" in a scratch copy
 made the identical command deny correctly, with the identical reason text.
 
-This script is the cheap, no-API-cost regression guard for that gap: it
-resolves each hook command exactly as the OS would (`shutil.which`), then
-runs `<resolved> -c "import omx_core"` and reports pass/fail per command.
-It does not fix anything and is not wired into pytest -- the interpreter
-choice is a deployment decision for a human, not something this script
-should silently paper over.
+Ruling 39 (task 14) closed this gap for `closure_guard` and
+`completion_notice` specifically -- the two handlers this round's gate
+actually depends on -- by having them shell out to the `omx` CONSOLE SCRIPT
+(shebang-pinned to whatever interpreter it was actually `pip install`ed
+into, unaffected by what "python3" resolves to for the caller) instead of
+importing omx_core in-process. Neither one needs THIS script's property
+(bare "python3" importing omx_core) anymore; the permanent, automated proof
+that they still fire under a broken interpreter is now
+`test_end_to_end_denies_under_the_plugin_json_wired_interpreter` in
+test_closure_guard.py, which actually runs bare "python3" against a real
+fixture rather than only checking `import omx_core` succeeds.
+
+`report_guard`'s ANALYSIS_ID mirror, `route_emit`, and `capture_flush`
+already degrade gracefully without omx_core (their own in-code comments say
+so); `loop_gate` still genuinely needs it and does NOT degrade -- an
+exp-loop Stop-gate continuation silently never fires under a bare-python3
+interpreter, same failure class as before this round, just unaddressed by
+it. That is why this script is still worth running (it still finds a REAL,
+unfixed gap) but still NOT wired into pytest as a blocking gate: on THIS
+machine it will keep failing (bare "python3" still lacks omx_core, and
+loop_gate still needs it), and a blanket "every hook command needs omx_core"
+assertion is no longer the right binary signal now that some handlers
+genuinely don't. It resolves each hook command exactly as the OS would
+(`shutil.which`), then runs `<resolved> -c "import omx_core"` and reports
+pass/fail per command. It does not fix anything, and the interpreter choice
+(or fixing loop_gate the same way closure_guard/completion_notice were
+fixed) is a decision for a human, not something this script should silently
+paper over.
 """
 import argparse
 import json
