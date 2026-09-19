@@ -97,7 +97,15 @@ re-implements it.
 | `no-contract` | no profile, a profile that does not parse, or a profile with no `run_completion` key | pass, silently | 0 |
 | `checked` | contract present, `output_root` readable, every finished non-excluded run has every `required` glob | pass | 0 |
 | `incomplete` | same, but at least one finished run is missing a `required` glob | **fail**, listing run → missing globs → `how` | 1 |
-| `unreadable` | contract present, `output_root` absent or unreadable | **fail**, naming the root it could not read | 2 |
+| `unreadable` | contract present, and `output_root` is either **declared absolute and absent from this machine**, or present and unreadable | **fail**, naming the root it could not read | 2 |
+
+A **relative** `output_root` that does not exist is *not* `unreadable` — it is `checked`
+with zero runs and a diagnostic `reason`, because a relative path resolves under the
+project root and its absence means the project has not produced output yet. **Ruling 36
+(2026-09-19) split what Ruling 29 had merged**, after Task 10's implementer ran §5's
+mechanism instead of reading it and found the merged version had turned the ssh case into
+a silent pass. Absolute-and-absent is a deliberate declaration of a location we cannot
+see — "I cannot tell" — while relative-and-absent is "there is nothing there yet".
 
 `unreadable` is the state this design exists to keep separate from `checked`-with-zero-runs.
 A tree that could not be read returns no finished runs, and a naive check would
@@ -185,10 +193,20 @@ from the session's own cwd, so a contract that exists only at the far end of the
 a contract the hook never sees, and the project reads as `no-contract` — allowed,
 silently, which is exactly the hole this gate exists to close. So a project whose
 output tree is remote declares `run_completion` in the profile at **the root the
-session runs in**, with `output_root` pointing at the remote path. The gate then
-resolves that path, fails to read it, and returns `unreadable` — a deny that names the
-check to run over ssh and the ack to run back here. The unreachable `output_root` is
-not a mistake in that setup; it is what makes the state honest.
+session runs in**, with `output_root` pointing at the remote path — which is necessarily
+**absolute**, and that is load-bearing rather than incidental. The gate resolves that
+path, finds a declared absolute location absent from this machine, and returns
+`unreadable` — a deny that names the check to run over ssh and the ack to run back here.
+The unreachable `output_root` is not a mistake in that setup; it is what makes the state
+honest.
+
+That last sentence was briefly untrue. Ruling 29 made *every* missing `output_root` a
+pass, on the reasoning that a missing directory is a definite "nothing to grade" — correct
+for a project that has not run yet, and fatal here, because it silently turned off the
+gate for the one project this section exists for. Ruling 36 restored it by splitting on
+absolute versus relative. Recorded rather than quietly corrected: the mechanism in this
+section depends on a property (the path being absolute) that the section did not state,
+and an unstated dependency is how a design survives a ruling that contradicts it.
 
 ## 6. The gate (D1, D3)
 
