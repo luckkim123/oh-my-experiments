@@ -267,12 +267,22 @@ def _fresh(instant, now, max_age_h: float) -> bool:
     return -_CLOCK_SKEW_TOLERANCE <= age <= timedelta(hours=max_age_h)
 
 
-def write_receipt(paths: OmxPaths, verdict: dict, *, source: str, now_iso: str) -> None:
+def write_receipt(paths: OmxPaths, verdict: dict, *, source: str, now_iso: str,
+                   origin_root: str | None = None) -> None:
     """Record a computed run-completion verdict (design §5). `source` is
     "local" (computed where the hook runs) or "remote" (carried back across
     an ssh boundary by a later task's `omx close-ack`) -- it is the only
     reason this receipt distinguishes the two, and it is what lets
     `receipt_satisfies` know whether `root` is checkable at all.
+
+    `root` always names THIS project's own anchor (`paths.root`), for both
+    sources -- it is never the far side of an ssh boundary. `origin_root`
+    (task 4, close-ack) is the remote check's own root, stored under this
+    separate key so it can never be mistaken for -- or accidentally
+    compared against -- the local identity `receipt_satisfies` checks for a
+    source=="local" receipt (design §5: "keeps that origin root under a
+    key that cannot be mistaken for a local one"). Omitted (None) for a
+    local receipt, where there is no far side to record.
 
     Serialized on `paths.state_lock()`, same coarser-lock discipline every
     other `atomic_path` writer in this repo uses (ledger.py, loop.py) --
@@ -290,6 +300,8 @@ def write_receipt(paths: OmxPaths, verdict: dict, *, source: str, now_iso: str) 
         "omx_version": omx_version,
         "source": source,
     }
+    if origin_root is not None:
+        receipt["origin_root"] = origin_root
 
     def _write() -> None:
         with atomic_path(_completion_dir(paths) / _RECEIPT_NAME) as tmp:
@@ -355,6 +367,14 @@ def write_defer(paths: OmxPaths, reason: str, now_iso: str) -> None:
 
     from omx_core.lock import with_file_lock
     with_file_lock(paths.state_lock(), _write)
+
+
+def read_defer(paths: OmxPaths) -> dict | None:
+    """The stored defer ({"deferred_at", "reason"}), or None if absent or
+    corrupt -- never raises. Mirrors `read_receipt`; `active_defer` alone only
+    answers whether it is still live, task 4's `close-check` also needs the
+    reason and instant for its human/JSON report."""
+    return _read_json(_completion_dir(paths) / _DEFER_NAME)
 
 
 def active_defer(paths: OmxPaths, now_iso: str, ttl_h: float = 12) -> bool:
