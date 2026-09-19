@@ -52,6 +52,10 @@ def _receipt_file(paths):
     return (runtime_dir(paths.root) if has_anchor(paths.root) else paths.omx_dir) / "completion-receipt.json"
 
 
+def _defer_file(paths):
+    return (runtime_dir(paths.root) if has_anchor(paths.root) else paths.omx_dir) / "completion-defer.json"
+
+
 # --- close-check: the four verdict states -----------------------------------
 
 def test_close_check_no_contract_exits_0(tmp_path, capsys):
@@ -146,12 +150,17 @@ def test_close_check_checked_with_unfinished_candidate_has_nonzero_subject_count
 
 
 def test_close_check_human_output_names_subject_count(tmp_path, capsys):
+    """fix-round-1 reviewer finding 2: the original `assert "1" in out` did not
+    discriminate -- pytest's own tmp_path (e.g. .../pytest-201/...) coincidentally
+    contains a '1' regardless of whether the code prints the count at all (confirmed
+    by reverting the print to a literal 'REDACTED' and watching this still pass).
+    Assert the exact composed clause instead, which no incidental digit can satisfy."""
     from omx_core import cli
     _setup(tmp_path)
     (tmp_path / "experiments" / "runs" / "unfinished").mkdir(parents=True)
     cli.main(["close-check", "--root", str(tmp_path)])
     out = capsys.readouterr().out
-    assert "1" in out
+    assert "out of 1 candidate run directory" in out
 
 
 # --- close-check --record ----------------------------------------------------
@@ -224,6 +233,41 @@ def test_close_check_deferred_pass_human_text_names_the_defer(tmp_path, capsys):
     assert rc == 0
     assert "defer" in out.lower()
     assert "waiting on hardware" in out
+
+
+def test_close_check_defer_missing_reason_does_not_crash_and_does_not_satisfy(tmp_path, capsys):
+    """fix-round-1 controller finding A: a defer file that is timestamp-fresh
+    (active_defer -> True) but hand-edited to drop 'reason' entirely must not
+    raise KeyError, and -- ruling -- must not be treated as an active escape
+    either (a defer without a readable reason is not a recorded one). The
+    check falls through to fail on its own merits (rc 1, incomplete)."""
+    from omx_core import cli
+    paths = _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")  # incomplete on its own
+    defer_path = _defer_file(paths)
+    defer_path.parent.mkdir(parents=True, exist_ok=True)
+    defer_path.write_text(json.dumps({"deferred_at": now_iso()}))  # no "reason" key
+
+    rc = cli.main(["close-check", "--root", str(tmp_path), "--json"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1  # did not crash, did not silently pass
+    assert out["state"] == "incomplete"
+    assert "satisfied_by" not in out
+
+
+def test_close_check_defer_empty_reason_does_not_satisfy(tmp_path, capsys):
+    """Same ruling, different malformation: 'reason' present but blank."""
+    from omx_core import cli
+    paths = _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    defer_path = _defer_file(paths)
+    defer_path.parent.mkdir(parents=True, exist_ok=True)
+    defer_path.write_text(json.dumps({"deferred_at": now_iso(), "reason": "   "}))
+
+    rc = cli.main(["close-check", "--root", str(tmp_path), "--json"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert "satisfied_by" not in out
 
 
 # --- close-check rescued by a fresh remote receipt (via close-ack) ----------
@@ -416,6 +460,59 @@ def test_close_ack_never_trusts_an_incoming_source_field(tmp_path, capsys):
     capsys.readouterr()
     assert rc == 0
     assert read_receipt(paths)["source"] == "remote"
+
+
+def test_close_ack_refuses_a_payload_with_no_root_and_stores_nothing(tmp_path, capsys):
+    """fix-round-1 reviewer finding 1: a payload missing 'root' entirely (or
+    holding an empty string) must be refused with a distinct message, not
+    accepted with a receipt whose origin_root key is silently absent -- which
+    would later make close-check print 'satisfied by a remote receipt for
+    None', the exact two-states-one-spelling defect this round exists to
+    close. Checked live and confirmed the fix breaks none of this file's
+    existing payload literals: every one already carries a non-empty 'root'."""
+    from omx_core import cli
+    _setup(tmp_path)
+    payload = {"state": "checked", "runs": ["runs/alpha"], "checked_at": now_iso()}  # no "root"
+    payload_path = tmp_path / "payload.json"
+    payload_path.write_text(json.dumps(payload))
+    rc = cli.main(["close-ack", "--root", str(tmp_path), "--from", str(payload_path)])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "root" in err.lower()
+    assert "not 'checked'" not in err  # distinct from the state-refusal wording
+    assert read_receipt(OmxPaths(root=tmp_path)) is None
+
+
+def test_close_ack_refuses_empty_string_root_too(tmp_path, capsys):
+    from omx_core import cli
+    _setup(tmp_path)
+    payload = {"state": "checked", "runs": [], "root": "", "checked_at": now_iso()}
+    payload_path = tmp_path / "payload.json"
+    payload_path.write_text(json.dumps(payload))
+    rc = cli.main(["close-ack", "--root", str(tmp_path), "--from", str(payload_path)])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "root" in err.lower()
+    assert read_receipt(OmxPaths(root=tmp_path)) is None
+
+
+def test_close_ack_refuses_no_contract_payload_without_calling_it_a_failure(tmp_path, capsys):
+    """fix-round-1 controller finding B: no-contract is an exit-0 PASS on the
+    remote side. Refusing to ack it is still correct (there is nothing to
+    carry back), but the message must not call it a failure -- that wording
+    stays reserved for incomplete/unreadable, where it's accurate."""
+    from omx_core import cli
+    _setup(tmp_path)
+    payload = {"state": "no-contract", "runs": [], "root": "/container/project",
+               "checked_at": now_iso()}
+    payload_path = tmp_path / "payload.json"
+    payload_path.write_text(json.dumps(payload))
+    rc = cli.main(["close-ack", "--root", str(tmp_path), "--from", str(payload_path)])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "no-contract" in err
+    assert "acking a failure" not in err
+    assert read_receipt(OmxPaths(root=tmp_path)) is None
 
 
 # --- close-defer ---------------------------------------------------------------

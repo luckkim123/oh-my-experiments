@@ -1964,11 +1964,30 @@ def _close_check_satisfied_via(paths: OmxPaths, verdict: dict, now: str) -> dict
     if verdict["state"] not in ("incomplete", "unreadable"):
         return None
     if active_defer(paths, now, ttl_h=_CLOSE_MAX_AGE_H):
-        defer = read_defer(paths)
-        expires_at = (clock.parse_iso_utc(defer["deferred_at"], "deferred_at")
-                      + timedelta(hours=_CLOSE_MAX_AGE_H)).isoformat()
-        return {"via": "defer", "reason": defer["reason"], "deferred_at": defer["deferred_at"],
-                "expires_at": expires_at}
+        # active_defer/read_defer are both documented "never raises" for a
+        # missing/corrupt FILE, but a defer file that parses as a dict and is
+        # timestamp-fresh can still be hand-edited to drop `reason` itself
+        # (fix-round-1 finding A). Ruling: a defer whose reason cannot be read
+        # is not a recorded escape -- the reason IS the entire thing that
+        # distinguishes a defer from a silent bypass -- so it must not
+        # satisfy. Fall through to the receipt check rather than crash or
+        # silently treat a blank reason as valid (`.get()` throughout, same
+        # style as the receipt branch below, never `[]`).
+        defer = read_defer(paths) or {}
+        reason = defer.get("reason")
+        deferred_at = defer.get("deferred_at")
+        if isinstance(reason, str) and reason.strip() and deferred_at:
+            try:
+                expires_at = (clock.parse_iso_utc(deferred_at, "deferred_at")
+                              + timedelta(hours=_CLOSE_MAX_AGE_H)).isoformat()
+                return {"via": "defer", "reason": reason, "deferred_at": deferred_at,
+                        "expires_at": expires_at}
+            except OmxError:
+                pass  # deferred_at parsed fresh enough for active_defer's own check
+                       # but not by parse_iso_utc's stricter contract -- still refuse
+        print("WARNING: a defer is on file and timestamp-fresh but missing a readable "
+              "'reason' -- not treated as an active escape (a defer without its reason "
+              "is not a recorded one)", file=sys.stderr)
     receipt = read_receipt(paths)
     if receipt_satisfies(receipt, now, max_age_h=_CLOSE_MAX_AGE_H, expected_root=paths.root):
         # A remote receipt's meaningful root is `origin_root` (write_receipt keeps
@@ -2066,12 +2085,32 @@ def _cmd_close_ack(args) -> int:
         print("refused: --from payload does not look like a `close-check --json` verdict "
               "(need an object with a string 'state' and a list 'runs')", file=sys.stderr)
         return 2
+    if not isinstance(payload.get("root"), str) or not payload["root"]:
+        # A separate, distinctly-worded refusal (fix-round-1 reviewer finding 1) --
+        # a payload missing its origin entirely is a different problem from one
+        # that was never a verdict at all, and letting it through would store a
+        # receipt whose `origin_root` is silently absent: `close-check` would
+        # later print "satisfied by a remote receipt for None", which is exactly
+        # the two-states-one-spelling defect this whole round exists to close.
+        print("refused: --from payload has no origin root (a receipt with unknown "
+              "provenance cannot be audited later)", file=sys.stderr)
+        return 2
 
     state = payload["state"]
     if state != "checked":
-        detail = f" — {payload['reason']}" if payload.get("reason") else ""
-        print(f"refused: remote check state is {state!r}, not 'checked' — acking a failure "
-              f"is the exact bypass this gate exists to prevent{detail}", file=sys.stderr)
+        if state == "no-contract":
+            # fix-round-1 finding B: no-contract is an exit-0 PASS on the remote
+            # side, not a failure -- "acking a failure" is the wrong reason to
+            # give an operator here. There is simply nothing to carry back: the
+            # remote project never declared what grading means for it.
+            print("refused: remote check state is 'no-contract' — the remote project "
+                  "declares no run_completion contract, so there is nothing to carry "
+                  "back (a receipt records that a finished run was graded; that "
+                  "project has not said what grading means)", file=sys.stderr)
+        else:
+            detail = f" — {payload['reason']}" if payload.get("reason") else ""
+            print(f"refused: remote check state is {state!r}, not 'checked' — acking a failure "
+                  f"is the exact bypass this gate exists to prevent{detail}", file=sys.stderr)
         return 2
 
     checked_at = payload.get("checked_at")
