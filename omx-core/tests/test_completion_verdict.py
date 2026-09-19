@@ -49,7 +49,7 @@ def test_no_contract_returns_no_contract_state(tmp_path):
     result = evaluate_completion(tmp_path)
     assert result == {
         "state": "no-contract", "runs": [], "missing": [], "subject_count": None,
-        "output_root": None, "how": None,
+        "output_root": None, "how": None, "reason": None,
     }
 
 
@@ -112,6 +112,7 @@ def test_missing_output_root_is_unreadable_not_checked(tmp_path):
     result = evaluate_completion(tmp_path)
     assert result["state"] == "unreadable"
     assert result["output_root"] == str(tmp_path / "experiments")
+    assert "not a directory" in result["reason"]
 
 
 def test_readable_output_root_zero_run_dirs_is_checked(tmp_path):
@@ -224,12 +225,15 @@ def test_unreadable_checkpoints_subdir_is_unreadable_not_checked(tmp_path):
     run_dir = tmp_path / "experiments" / "runs" / "alpha"
     _finish(run_dir)
     _satisfy_required(run_dir)
-    os.chmod(run_dir / "checkpoints", 0o000)
+    checkpoints_dir = run_dir / "checkpoints"
+    os.chmod(checkpoints_dir, 0o000)
     try:
         result = evaluate_completion(tmp_path)
     finally:
-        os.chmod(run_dir / "checkpoints", 0o755)
+        os.chmod(checkpoints_dir, 0o755)
     assert result["state"] == "unreadable"
+    # reason names the OFFENDING path -- the checkpoints/ subdir, not just output_root
+    assert str(checkpoints_dir) in result["reason"]
 
 
 def test_output_root_broken_symlink_is_unreadable(tmp_path):
@@ -248,10 +252,12 @@ def test_output_root_is_a_file_not_a_directory_is_unreadable(tmp_path):
     assert result["state"] == "unreadable"
 
 
-# --- Finding 7: a profile that opted into the gate (declared run_completion) and
-# then broke itself (output_root removed from metrics.yaml) must resolve to
-# `unreadable`, not raise -- a raise hits the hook's fail-open (D9) and becomes a
-# silent ALLOW, which is the exact hole this round exists to close.
+# --- Finding 7 (+ round-1 addendum item A): a profile that opted into the gate
+# (declared run_completion) and then broke itself -- output_root removed, OR the
+# run_completion block itself now malformed -- must resolve to `unreadable`, not
+# raise. A raise hits the hook's fail-open (D9) and becomes a silent ALLOW, which is
+# the exact hole this round exists to close. `reason` (item B) names which of the
+# two causes fired.
 
 def test_malformed_output_root_is_unreadable_not_raise(tmp_path):
     paths = _setup(tmp_path)
@@ -261,3 +267,16 @@ def test_malformed_output_root_is_unreadable_not_raise(tmp_path):
     metrics_path.write_text(yaml.safe_dump(data, sort_keys=True))
     result = evaluate_completion(tmp_path)  # must not raise
     assert result["state"] == "unreadable"
+    assert "output_root" in result["reason"]
+
+
+def test_malformed_run_completion_block_is_unreadable_not_raise(tmp_path):
+    # load_run_completion (task 1) still raises OmxError for this shape when called
+    # directly -- evaluate_completion is the one caller that must downgrade it,
+    # since a raise here meets the hook's fail-open and becomes a silent ALLOW.
+    bad_contract = dict(CONTRACT)
+    bad_contract["required"] = [42]  # not a list of strings
+    _setup(tmp_path, run_completion=bad_contract)
+    result = evaluate_completion(tmp_path)  # must not raise
+    assert result["state"] == "unreadable"
+    assert "required" in result["reason"]
