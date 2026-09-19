@@ -242,6 +242,15 @@ Whether that shape is one mechanism or four is the ADR's question, not this docu
 ## 10. Non-goals
 
 - Nothing detects a run *finishing*; the gate fires at declaration time.
+- **A session that never declares closure is never gated.** This follows directly from
+  D3: the gate hangs off three named commands, so a session that reports to its operator
+  in prose and stops has crossed no boundary and met no hook. D3's third option — hanging
+  the gate on `Stop`, the moment a session tries to end — had no such gap, and was
+  declined because a false positive there means the operator cannot close the session at
+  all. The exposure is bounded by the fact that the incident this round comes from *did*
+  post a handoff, so the gate would have fired on it; the residual risk is a future
+  session that skips the formal record entirely, and the SessionStart notice in §7 is the
+  only thing that reaches it.
 - No project content — no evaluation command, path, threshold, or plant name — enters
   this repository. `omx-core/tests/test_distribution_axiom.py` is the standing gate for
   that, and everything this round ships lands inside the surface it walks.
