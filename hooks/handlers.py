@@ -504,6 +504,51 @@ def compact_breadcrumb(payload):
         return None  # fail-open (D9)
 
 
+# --- completion_notice (Task 6, run-completion-gate round): one-time opt-in
+# nudge for the run_completion contract. Registered SessionStart matcher
+# "startup|resume" (a SECOND SessionStart entry, alongside compact_breadcrumb's
+# "compact" one -- not a replacement of it). closure_guard blocks a closure
+# command once a project HAS opted in and a finished run is ungraded; a
+# project that never opted in is never blocked by any of it, by design, which
+# means "never blocked" and "the feature does not exist" look identical from
+# outside. This handler is the other half: tell such a project the block
+# exists, once per session start.
+#
+# Four routes all return bare None here -- contract already declared, no omx
+# layer at cwd, an unbootstrapped/unreadable/malformed profile, and any other
+# internal error. Deliberately NOT distinguished at runtime (same "silence
+# over noise" contract as compact_breadcrumb above): a SessionStart hook with
+# a per-case runtime signal would be a second, noisier channel for something
+# this file's comments already say plainly. Told apart only by reading this
+# source, never by the hook's own output.
+def completion_notice(payload):
+    try:
+        if payload.get("source") not in ("startup", "resume"):
+            return None
+        cwd = payload.get("cwd")
+        if not _has_omx_marker(cwd):
+            return None  # no omx layer here -- nothing to nudge about
+
+        from omx_core.profile import load_run_completion
+
+        # cwd itself, not the #13 root ladder (Ruling 27): _has_omx_marker just
+        # confirmed the layer sits AT cwd, and it never climbs to a parent --
+        # reading a ladder-resolved root here could silently name a DIFFERENT
+        # project's profile than the one whose marker was just found.
+        if load_run_completion(cwd) is not None:
+            return None  # already opted in -- nothing to say
+        body = (
+            "omx: this project has no `run_completion` block in profile/metrics.yaml "
+            "-- finished runs are never grade-checked before closure. Add one to opt in "
+            "(see `omx close-check --help`).")
+        return {"hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": body,
+        }}
+    except Exception:
+        return None  # fail-open (D9): no profile yet / malformed metrics.yaml / any error
+
+
 # --- loop_gate (spec 2.4): thin Stop gate for exp-loop persistent mode -------
 # D-R3-1: a dumb gate. It reads {armed, deadline, iteration, hard_cap,
 # adopted_session}, blocks with a FROZEN continuation prompt, and never makes
@@ -1142,6 +1187,7 @@ HANDLERS = {
     "route_emit": route_emit,
     "capture_flush": capture_flush,
     "compact_breadcrumb": compact_breadcrumb,
+    "completion_notice": completion_notice,
     "loop_gate": loop_gate,
     "closure_guard": closure_guard,
 }
