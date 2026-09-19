@@ -350,9 +350,13 @@ def write_receipt(paths: OmxPaths, verdict: dict, *, source: str, now_iso: str,
     `atomic_path`'s fixed '.tmp' name is only crash-safe against a SINGLE
     writer at a time."""
     try:
-        omx_version = importlib.metadata.version("omx-core")
-    except importlib.metadata.PackageNotFoundError:
-        omx_version = "unknown"
+        import omx_core
+        omx_version = omx_core.__version__
+    except (ImportError, AttributeError):
+        try:
+            omx_version = importlib.metadata.version("omx-core")
+        except importlib.metadata.PackageNotFoundError:
+            omx_version = "unknown"
     receipt = {
         "checked_at": now_iso,
         "root": str(paths.root),

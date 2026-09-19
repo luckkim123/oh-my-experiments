@@ -2,9 +2,9 @@
 
 > A self-contained Claude Code harness that **analyzes your ML/RL training runs, diagnoses regressions, and designs the next experiment** — with a semi-autonomous analyze → design → eval loop that never fires a training run without your approval.
 
-![version](https://img.shields.io/badge/version-0.12.0-blue)
+![version](https://img.shields.io/badge/version-0.17.0-blue)
 ![python](https://img.shields.io/badge/python-%3E%3D3.10-blue)
-![tests](https://img.shields.io/badge/tests-950%20passed%20%2F%201%20skipped-brightgreen)
+![tests](https://img.shields.io/badge/tests-1315%20passed%20%2F%202%20skipped-brightgreen)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![harness](https://img.shields.io/badge/omha-tier--1%20lane-8A2BE2)
 
@@ -365,7 +365,7 @@ oh-my-experiments/
 ├── skills/             # exp-init / exp-analyze / exp-design / exp-loop
 ├── agents/             # 4 read-only review agents (report/proposal/campaign/wiki)
 ├── hooks/              # run_hook.py dispatch runner + handlers.py
-├── scripts/            # sync_version.py — plugin.json is the version SSOT, fanned out to pyproject
+├── scripts/            # sync_version.py — plugin.json is the version SSOT, fanned out to pyproject + omx_core/__init__.py
 ├── cards/              # omha tier-1 lane card (placeholder)
 ├── omx-core/           # pure-Python package + pyproject.toml
 │   ├── omx_core/       #   omx_paths · ingest/ · reduce/ · evaluator · decision · loop · ledger
@@ -384,7 +384,7 @@ pip install -e "omx-core/[analyze]"
 cd omx-core && pytest        # 950 passed, 1 skipped (v0.7.4)
 ```
 
-- **Version SSOT:** `.claude-plugin/plugin.json` is the single source of truth; `scripts/sync_version.py` fans the version out to `omx-core/pyproject.toml`, and `test_version_sync.py` fails the suite on any drift.
+- **Version SSOT:** `.claude-plugin/plugin.json` is the single source of truth; `scripts/sync_version.py` fans the version out to `omx-core/pyproject.toml` and `omx_core/__init__.py`'s `__version__`, and `test_version_sync.py` fails the suite on any drift across all three.
 - **Verb contract:** skill docs may only reference verbs the CLI actually registers (`test_skills_reference_real_verbs.py`).
 - **Live acceptance:** hooks can't be pytest-exercised, so run `.superpowers/sdd/live-acceptance.md` after each plugin reinstall.
 - **Design of record:** [`docs/design/2026-05-30-omx-experiment-harness-design.md`](docs/design/2026-05-30-omx-experiment-harness-design.md).

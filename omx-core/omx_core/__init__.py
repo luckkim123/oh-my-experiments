@@ -1,4 +1,6 @@
 """omx_core — OMX (oh-my-experiments) generic core package."""
+__version__ = "0.17.0"
+
 from omx_core.coverage import CoverageResult, check_coverage
 from omx_core.loop import (
     compute_deadline,
@@ -24,6 +26,7 @@ from omx_core.report import Finding, ReportParseError, parse_findings
 from omx_core.wiki import query_wiki
 
 __all__ = [
+    "__version__",
     "OmxPaths", "Profile", "OmxPathError",
     "validate_analysis_id", "validate_proposal_id", "validate_session_id",
     "validate_run_id", "validate_token", "validate_ext",
