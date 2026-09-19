@@ -333,6 +333,43 @@ def _has_omx_marker(cwd) -> bool:
     return any((base / ".hq" / a / b).is_dir() for a, b in _OMX_LAYER_DIRS)
 
 
+def _closure_climb_to_omx_layer(cwd):
+    """Ruling 40 (run-completion-gate round, task 14 fix-round-1): find the
+    NEAREST ancestor of `cwd` (cwd itself checked first) carrying an omx
+    layer, climbing bounded exactly the way `resolve_omx_root`'s own marker
+    stage does (omx_core/root.py) -- stop before `$HOME` (a stray
+    `.omx`/`.hq` layer sitting IN a home directory must never gate every
+    session on the machine) and stop at the filesystem root. Returns the
+    ancestor as a string, or None if none carries a layer within that bound
+    -- closure_guard treats None exactly like the old marker-at-cwd-only
+    check treated False: no omx layer reachable, allow.
+
+    Needs no `omx_core` import -- it is the same zero-dependency
+    `_has_omx_marker` probe this file already uses elsewhere, just walked
+    upward one directory at a time. Ruling 39 removed the #13 ladder from
+    closure_guard's reach entirely (running it in-process needs
+    `omx_core.root`, the exact import Ruling 39 exists to drop), and the
+    marker-at-cwd-ONLY check that replaced it (this task's first cut)
+    regressed the single most ordinary shape there is: a git repo with
+    `.omx`/`.hq` at its toplevel and a session cwd'd one or more
+    directories below it (`analysis/`, `scripts/`, anywhere) -- measured
+    live, `cd proj/analysis && omx loop-disarm ...` silently allowed where
+    the OLD ladder-based code (which climbed via git-toplevel) correctly
+    denied. Climbing the marker directly restores that case without
+    handing root resolution to the `omx` subprocess's OWN ladder (which
+    would reopen the Finding-8 cross-project misfire an `OMX_STATE_DIR`-
+    driven climb could cause) and without any new dependency."""
+    if not (isinstance(cwd, str) and cwd):
+        return None
+    home = Path.home()
+    node = Path(cwd).resolve()
+    while node != node.parent and node != home:
+        if _has_omx_marker(str(node)):
+            return str(node)
+        node = node.parent
+    return None
+
+
 def is_exp_related(prompt, cwd) -> bool:
     """True when the .omx/ marker is present, prompt is missing/not-a-string
     (fail-toward-inject), or any experiment-domain token matches. Never raises
@@ -1261,19 +1298,23 @@ _CLOSURE_OMX_CLI_FAILURE_REASON = (
 
 def closure_guard(payload):
     """PreToolUse Bash gate (task 5, design doc §4-6; subprocess wiring per
-    Ruling 39, task 14). The cheap, stdlib-only checks run first and exit
-    most calls before anything else happens: tool_name, command shape, the
+    Ruling 39, task 14; bounded marker climb per Ruling 40, task 14
+    fix-round-1). The cheap, stdlib-only checks run first and exit most
+    calls before anything else happens: tool_name, command shape, the
     shlex/regex closure-declaration match (`_closure_declares`), then
-    `_has_omx_marker(cwd)` -- a closure declaration is rare by construction
-    (only `hq post --category handoff` / `omx loop-disarm|loop-mark-done
-    --reason done`), and an omx layer at cwd rarer still outside a real omx
+    `_closure_climb_to_omx_layer(cwd)` -- a closure declaration is rare by
+    construction (only `hq post --category handoff` / `omx
+    loop-disarm|loop-mark-done --reason done`), and an omx layer anywhere
+    from cwd up to (not including) `$HOME` rarer still outside a real omx
     project, so `omx close-check` is only ever invoked once BOTH are true.
-    `--root cwd` is passed explicitly (never left to close-check's own #13
-    ladder): `_has_omx_marker` just confirmed the layer sits AT cwd and does
-    not climb, so gating against anything the ladder might resolve to
-    instead (an ancestor's OMX_STATE_DIR/.omx-workspace/git-toplevel) would
-    reopen the exact Finding-8 class (a gate that speaks for an unrelated
-    project) Ruling 27 closed for this handler already."""
+    `--root <climbed root>` is passed explicitly (never left to
+    close-check's own #13 ladder): the climb is bounded at `$HOME`
+    specifically so a stray layer there cannot gate every session on the
+    machine, and letting the SUBPROCESS run its own ladder instead (via an
+    `OMX_STATE_DIR` override, say) could still gate an unrelated directory
+    against a completely different project's root -- the exact Finding-8
+    class Ruling 27 closed for this handler already, which a bounded
+    same-process climb cannot reopen."""
     try:
         if payload.get("tool_name") != "Bash":
             return None
@@ -1303,11 +1344,11 @@ def closure_guard(payload):
         if not declares:
             return None
 
-        cwd = payload.get("cwd")
-        if not _has_omx_marker(cwd):
-            return None  # no omx layer at cwd -- allow (Ruling 27/Finding-8 class)
+        root = _closure_climb_to_omx_layer(payload.get("cwd"))
+        if root is None:
+            return None  # no omx layer within the climb bound -- allow (Finding-8 class)
 
-        result = _run_omx_cli_json(["omx", "close-check", "--root", cwd, "--json"])
+        result = _run_omx_cli_json(["omx", "close-check", "--root", root, "--json"])
         if not result["ok"] and result["cause"] == "no-omx":
             return None  # requirement 3: no omx installation here -- allow, silently
     except Exception:
@@ -1351,7 +1392,7 @@ def closure_guard(payload):
     # minimally.
     try:
         reason = (_closure_incomplete_reason(verdict) if state == "incomplete"
-                  else _closure_unreadable_reason(verdict, verdict.get("root") or cwd))
+                  else _closure_unreadable_reason(verdict, verdict.get("root") or root))
     except Exception:
         reason = ("omx run-completion gate: this closure declaration is blocked, but the "
                    "deny-reason renderer itself failed -- run `omx close-check` for the real "

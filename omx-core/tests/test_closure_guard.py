@@ -711,6 +711,68 @@ def test_unanchored_but_bootstrapped_project_now_denies(tmp_path):
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+# --- Ruling 40 (task 14, fix-round-1): the marker probe climbs, bounded -----
+# Ruling 39's replacement for the old #13-ladder resolver (`_has_omx_marker(cwd)`
+# alone, no climb) regressed the single most ordinary shape there is: a git
+# repo with `.omx`/`.hq` at its toplevel and a session cwd'd one or more
+# directories below it. Measured live (team lead, fix-round-1 dispatch):
+# `cd proj/analysis && omx loop-disarm ...` silently allowed where the OLD
+# ladder-based code (which climbed via git-toplevel) correctly denied.
+# `_closure_climb_to_omx_layer` restores this by climbing the SAME
+# zero-dependency marker probe upward, bounded exactly like
+# `resolve_omx_root`'s own marker stage: stop before `$HOME`.
+
+def test_climb_finds_the_layer_from_a_subdirectory_below_root(tmp_path):
+    """The actual regression: a closure command run from a subdirectory
+    (however deep) below the omx layer must still be gated."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    sub = tmp_path / "analysis" / "deep" / "deeper"
+    sub.mkdir(parents=True)
+    out = _run(mod, "omx loop-disarm --reason done", sub)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_climb_to_layer_with_no_profile_allows_not_denies(tmp_path):
+    """False-positive-direction check (fix-round-1): an ancestor carrying a
+    real omx LAYER but no bootstrapped PROFILE -- the shape a large personal
+    workspace's own `.hq/config/experiments/` can have (a `programs/`
+    subfolder from other harness activity, but no `profile/metrics.yaml`
+    ever written) -- must resolve to that ancestor, get `close-check`'s
+    `no-contract` verdict, and ALLOW, for every subdirectory below it. A
+    climb that gates every session under such a workspace merely because
+    SOME ancestor has a layer, with no regard for whether that layer ever
+    declared a contract, would be strictly worse than Ruling 39 shipped."""
+    mod = _load_handlers()
+    layer_root = tmp_path / "big_workspace"
+    (layer_root / ".hq" / "config" / "experiments" / "programs").mkdir(parents=True)
+    # deliberately no profile/metrics.yaml anywhere under this layer
+    sub = layer_root / "some" / "unrelated" / "project"
+    sub.mkdir(parents=True)
+    out = _run(mod, "omx loop-disarm --reason done", sub)
+    assert out is None
+
+
+def test_climb_stops_before_home_and_never_checks_it(tmp_path, monkeypatch):
+    """Mirrors `resolve_omx_root`'s own marker-stage boundary (root.py) by
+    design (Ruling 40): the climb stops BEFORE `$HOME`, so a layer sitting
+    exactly AT `$HOME` is never found -- not even when cwd IS `$HOME`
+    itself -- and nothing above `$HOME` is ever visited. A stray
+    `.omx`/`.hq` in a home directory must never gate every session on the
+    machine."""
+    mod = _load_handlers()
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    (fake_home / ".omx").mkdir()  # a layer AT $HOME -- must not be found
+    child = fake_home / "project"
+    child.mkdir()
+    monkeypatch.setattr(mod.Path, "home", classmethod(lambda cls: fake_home))
+    assert mod._closure_climb_to_omx_layer(str(child)) is None
+    assert mod._closure_climb_to_omx_layer(str(fake_home)) is None
+
+
 # --- defer / receipt rescue, verified both ways (revert experiment) ---------
 
 def test_without_any_rescue_the_incomplete_tree_denies(tmp_path):
