@@ -2,10 +2,20 @@
 
 route_emit (spec 2.1) asks the assistant to print `STAGE(exp) -> <token> ·
 <reason>` in its own text when a turn is experiment work; this handler reads
-that back off the session transcript at Stop and blocks when a declared token
-is out of the routing vocabulary, or is one of the exp-* stages whose skill
-was never actually opened anywhere in the session. Loads hooks/handlers.py
-directly, same pattern as test_completion_notice.py / test_loop_gate.py."""
+that back off the session transcript at Stop and blocks when the session's
+CURRENT (most recent, assistant-authored) declaration names one of the exp-*
+stages whose skill was never actually opened anywhere in the session. Loads
+hooks/handlers.py directly, same pattern as test_completion_notice.py /
+test_loop_gate.py.
+
+fix-round-1 (task-8-review Finding 1/2, Rulings 33-34): the vocabulary-
+mismatch block was withdrawn (an unparseable or unrecognized token is never a
+violation by itself -- only a cleanly-parsed exp-* token whose skill was
+never opened blocks), the declared side collapsed from a lifetime set to
+"latest declaration only", and the scan now reads assistant-authored content
+only. Tests below cover the real markdown shapes the reviewer measured in
+production transcripts (bold STAGE lines, a bold arrow-only prefix, glued
+punctuation), not just the canonical one."""
 import importlib.util
 import json
 from pathlib import Path
@@ -41,6 +51,12 @@ def _assistant_skill(skill, sidechain=False):
                                     "input": {"skill": skill}}]}}
 
 
+def _user_text(text, sidechain=False):
+    return {"type": "user", "isSidechain": sidechain,
+            "message": {"role": "user",
+                        "content": [{"type": "text", "text": text}]}}
+
+
 def _user_bare_string(text, sidechain=False):
     # measured shape (task-8-transcript-facts.md): 18% of user records carry
     # a bare string `content` instead of a block list -- e.g. slash-command
@@ -63,17 +79,80 @@ def _payload(transcript_path, stop_hook_active=False):
             "session_id": "s1", "cwd": "/tmp/x"}
 
 
-def test_out_of_vocabulary_token_blocks_and_lists_allowed_set(tmp_path):
+# --- canonical + real-shape declarations, skill genuinely opened -> pass ---
+
+def test_declared_and_opened_passes(tmp_path):
+    tp = _write_transcript(tmp_path, [
+        _assistant_text(f"STAGE(exp) {ARROW} exp-analyze {DOT} reason"),
+        _assistant_skill("oh-my-experiments:exp-analyze"),
+    ])
+    assert handlers.stage_check(_payload(tp)) is None
+
+
+def test_bold_whole_line_declaration_still_parses_and_passes(tmp_path):
+    # measured in production: an assistant bolds the STAGE line the same way
+    # it already bolds the ROUTE line above it. The bold markers sit OUTSIDE
+    # "-> exp-analyze", so extraction is unaffected.
+    tp = _write_transcript(tmp_path, [
+        _assistant_text(f"**STAGE(exp) {ARROW} exp-analyze {DOT} reason**"),
+        _assistant_skill("exp-analyze"),
+    ])
+    assert handlers.stage_check(_payload(tp)) is None
+
+
+def test_ascii_arrow_declaration_still_parses_and_passes(tmp_path):
+    tp = _write_transcript(tmp_path, [
+        _assistant_text("STAGE(exp) -> exp-design · reason"),
+        _assistant_skill("exp-design"),
+    ])
+    assert handlers.stage_check(_payload(tp)) is None
+
+
+# --- Ruling 33: an unparseable/unrecognized token is NEVER a violation -----
+# (inverted from fix-round-0's test_out_of_vocabulary_token_blocks_and_lists_
+# allowed_set, which asserted the withdrawn behavior -- see docstring above).
+
+def test_out_of_vocabulary_token_no_longer_blocks(tmp_path):
+    """Fix-round-1, Ruling 33 -- reverses fix-round-0's
+    test_out_of_vocabulary_token_blocks_and_lists_allowed_set, which asserted
+    a `block` here. The vocabulary-mismatch check is withdrawn entirely: it
+    cannot tell "the session invented a stage name" apart from "we failed to
+    parse this line" (both arrive as a string outside _STAGE_SKILL_TOKENS),
+    and guessing wrong traps the operator in a Stop hook with no escape. Same
+    fixture as before, opposite verdict."""
     tp = _write_transcript(tmp_path, [
         _assistant_text(f"STAGE(exp) {ARROW} bogus-stage {DOT} reason"),
     ])
-    out = handlers.stage_check(_payload(tp))
-    assert out["decision"] == "block"
-    assert "bogus-stage" in out["reason"]
-    for tok in ("exp-init", "exp-analyze", "exp-design", "exp-loop",
-                "program", "wiki", "tree", "recipe"):
-        assert tok in out["reason"]
+    assert handlers.stage_check(_payload(tp)) is None
 
+
+def test_bold_arrow_only_prefix_garbage_capture_does_not_block(tmp_path):
+    # the reviewer's Finding-1 reproduction: bolding stops right after the
+    # arrow ("**STAGE(exp) →**"), so extraction captures "**" instead of
+    # "exp-analyze". Skill genuinely never opened -- under the withdrawn
+    # vocabulary check this blocked; under Ruling 33 it must not, because a
+    # mis-extraction and an invented token cannot be told apart.
+    tp = _write_transcript(tmp_path, [
+        _assistant_text(f"> **STAGE(exp) {ARROW}** exp-analyze {DOT} reason"),
+    ])
+    assert handlers.stage_check(_payload(tp)) is None
+
+
+def test_missing_exp_prefix_glued_colon_does_not_block(tmp_path):
+    tp = _write_transcript(tmp_path, [
+        _assistant_text(f"STAGE(exp) {ARROW} analyze: reason"),
+    ])
+    assert handlers.stage_check(_payload(tp)) is None
+
+
+def test_trailing_period_no_bullet_does_not_block(tmp_path):
+    tp = _write_transcript(tmp_path, [
+        _assistant_text(f"STAGE(exp) {ARROW} exp-analyze."),
+    ])
+    assert handlers.stage_check(_payload(tp)) is None
+
+
+# --- Ruling 34: only the LATEST declaration is checked ---------------------
 
 def test_declared_exp_analyze_never_opened_blocks(tmp_path):
     tp = _write_transcript(tmp_path, [
@@ -84,12 +163,66 @@ def test_declared_exp_analyze_never_opened_blocks(tmp_path):
     assert "exp-analyze" in out["reason"]
 
 
-def test_declared_and_opened_passes(tmp_path):
+def test_only_the_latest_declaration_is_named_when_blocking(tmp_path):
     tp = _write_transcript(tmp_path, [
-        _assistant_text(f"STAGE(exp) {ARROW} exp-analyze {DOT} reason"),
-        _assistant_skill("oh-my-experiments:exp-analyze"),
+        _assistant_text(f"STAGE(exp) {ARROW} exp-design {DOT} r1"),
+        _assistant_skill("exp-design"),
+        _assistant_text(f"STAGE(exp) {ARROW} exp-analyze {DOT} r2"),
+    ])
+    out = handlers.stage_check(_payload(tp))
+    assert out["decision"] == "block"
+    assert "exp-analyze" in out["reason"]
+    assert "exp-design" not in out["reason"]
+
+
+def test_a_superseding_correct_declaration_clears_an_earlier_garbage_one(tmp_path):
+    # fix-round-0 regression, confirmed live: a bad early line poisoned a
+    # lifetime set, so a later CORRECT declaration whose skill WAS opened
+    # still blocked. Ruling 34 fixes this structurally -- only the latest
+    # declaration is ever checked, so the garbage line is simply superseded.
+    tp = _write_transcript(tmp_path, [
+        _assistant_text(f"> **STAGE(exp) {ARROW}** exp-analyze {DOT} garbage capture"),
+        _assistant_text(f"STAGE(exp) {ARROW} exp-design {DOT} the real one"),
+        _assistant_skill("exp-design"),
     ])
     assert handlers.stage_check(_payload(tp)) is None
+
+
+def test_a_superseding_declaration_un_declares_an_earlier_unopened_one(tmp_path):
+    # the session declared exp-analyze, never opened it, then legitimately
+    # moved on to exp-design and opened THAT -- the abandoned exp-analyze
+    # declaration must not block forever.
+    tp = _write_transcript(tmp_path, [
+        _assistant_text(f"STAGE(exp) {ARROW} exp-analyze {DOT} r1"),
+        _assistant_text(f"STAGE(exp) {ARROW} exp-design {DOT} r2"),
+        _assistant_skill("exp-design"),
+    ])
+    assert handlers.stage_check(_payload(tp)) is None
+
+
+# --- Finding 2: only assistant-authored content counts ---------------------
+
+def test_user_authored_stage_line_is_never_read_as_a_declaration(tmp_path):
+    # a user pasting a well-formed STAGE line into their OWN message must
+    # never be read as the assistant declaring it -- no assistant declaration
+    # exists here at all, so this must pass regardless of vocabulary/skill.
+    tp = _write_transcript(tmp_path, [
+        _user_text(f"STAGE(exp) {ARROW} exp-analyze {DOT} reason"),
+    ])
+    assert handlers.stage_check(_payload(tp)) is None
+
+
+def test_trailing_user_stage_text_does_not_override_the_real_declaration(tmp_path):
+    # the assistant's real (unopened) declaration is the session's true
+    # current state; a user record after it, even one shaped like a STAGE
+    # line, must not become "latest" and must not change the verdict.
+    tp = _write_transcript(tmp_path, [
+        _assistant_text(f"STAGE(exp) {ARROW} exp-analyze {DOT} r1"),
+        _user_text(f"STAGE(exp) {ARROW} exp-design {DOT} not the assistant"),
+    ])
+    out = handlers.stage_check(_payload(tp))
+    assert out["decision"] == "block"
+    assert "exp-analyze" in out["reason"]
 
 
 def test_user_bare_string_content_does_not_break_scan(tmp_path):
@@ -101,18 +234,19 @@ def test_user_bare_string_content_does_not_break_scan(tmp_path):
     assert handlers.stage_check(_payload(tp)) is None
 
 
-def test_null_content_record_does_not_swallow_a_real_violation(tmp_path):
+# --- structural robustness --------------------------------------------------
+
+def test_null_content_assistant_record_does_not_swallow_a_real_violation(tmp_path):
     # discriminating regression guard: reverting the isinstance(content, list)
     # guard makes `for b in None` raise inside the scan, which stage_check's
     # own try/except then swallows into a silent None -- indistinguishable
     # from "nothing to report" and hiding a real unopened-stage violation.
-    # A record whose `content` is a bare string never triggers this (a
-    # string's characters just fail the inner isinstance(b, dict) check and
-    # get skipped harmlessly) -- only a missing/None content does, so this
-    # is a separate case from test_user_bare_string_content_does_not_break_scan.
+    # Must be on an ASSISTANT record (Finding 2 restricts the scan to
+    # type == "assistant", so a malformed USER record is now filtered out
+    # before content is ever read and can no longer exercise this guard).
     tp = _write_transcript(tmp_path, [
-        {"type": "user", "isSidechain": False,
-         "message": {"role": "user", "content": None}},
+        {"type": "assistant", "isSidechain": False,
+         "message": {"role": "assistant", "content": None}},
         _assistant_text(f"STAGE(exp) {ARROW} exp-analyze {DOT} reason"),
     ])
     out = handlers.stage_check(_payload(tp))
@@ -125,9 +259,11 @@ def test_missing_transcript_returns_none(tmp_path):
     assert out is None
 
 
-def test_stop_hook_active_suppresses_block(tmp_path):
+def test_stop_hook_active_suppresses_a_real_violation(tmp_path):
+    # must suppress a GENUINE would-be block (declared, never opened), not
+    # merely a garbage token that would never block anyway post-Ruling-33.
     tp = _write_transcript(tmp_path, [
-        _assistant_text(f"STAGE(exp) {ARROW} bogus {DOT} reason"),
+        _assistant_text(f"STAGE(exp) {ARROW} exp-analyze {DOT} reason"),
     ])
     assert handlers.stage_check(_payload(tp, stop_hook_active=True)) is None
 
@@ -150,7 +286,7 @@ def test_sidechain_skill_open_does_not_count(tmp_path):
 
 
 def test_non_skill_vocab_token_needs_no_open(tmp_path):
-    # program/wiki/tree/recipe are vocabulary members but not exp-* skills.
+    # program/wiki/tree/recipe are routing-vocabulary words but not skills.
     tp = _write_transcript(tmp_path, [
         _assistant_text(f"STAGE(exp) {ARROW} wiki {DOT} reason"),
     ])
@@ -166,15 +302,3 @@ def test_corrupt_json_line_does_not_abort_scan(tmp_path):
     ]
     tp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     assert handlers.stage_check(_payload(str(tp))) is None
-
-
-def test_only_unopened_stage_named_in_block_reason(tmp_path):
-    tp = _write_transcript(tmp_path, [
-        _assistant_text(f"STAGE(exp) {ARROW} exp-design {DOT} r1"),
-        _assistant_skill("exp-design"),
-        _assistant_text(f"STAGE(exp) {ARROW} exp-analyze {DOT} r2"),
-    ])
-    out = handlers.stage_check(_payload(tp))
-    assert out["decision"] == "block"
-    assert "exp-analyze" in out["reason"]
-    assert "exp-design" not in out["reason"]

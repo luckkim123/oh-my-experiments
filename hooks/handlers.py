@@ -1210,11 +1210,44 @@ def closure_guard(payload):
 # STAGE declaration. route_emit (spec 2.1, above) asks the assistant to print
 # `STAGE(exp) → <token> · <reason>` in its own text when a turn is experiment
 # work; this handler reads that back off the transcript at Stop and blocks
-# when a declared token is either outside the routing vocabulary, or is one of
-# the exp-* stages (exp-init/exp-analyze/exp-design/exp-loop — the ones with a
+# when the session's CURRENT (most recent) declaration names one of the
+# exp-* stages (exp-init/exp-analyze/exp-design/exp-loop — the ones with a
 # real Skill under skills/, per plugin.json) whose skill was never actually
-# opened anywhere in the session. `program`/`wiki`/`tree`/`recipe` are
-# vocabulary members but not skills, so no open-check applies to them.
+# opened anywhere in the session.
+#
+# fix-round-1 (task-8-review Finding 1, Rulings 33-34): the extraction regex
+# cannot tell "the session invented/mistyped a stage name" apart from "we
+# failed to parse this line" — both arrive as a string outside
+# _STAGE_SKILL_TOKENS. Measured against REAL transcripts in this workspace,
+# an assistant bolding the STAGE line the same way it already bolds the ROUTE
+# line above it (`**STAGE(exp) →** exp-analyze`, `> **STAGE(exp) →**
+# exp-analyze`) mis-captures the token. Since the two states cannot be told
+# apart and guessing wrong traps the operator, Ruling 33 withdraws the
+# vocabulary-mismatch block entirely: an unparseable or unrecognized token
+# (out-of-vocabulary vocabulary word, mis-extracted markdown noise, a typo)
+# is NEVER a violation by itself -- only a CLEANLY parsed exp-* token whose
+# skill was never opened blocks. `program`/`wiki`/`tree`/`recipe` are
+# routing-vocabulary words but not skills, so no open-check ever applies to
+# them either way.
+#
+# Ruling 34: only the LATEST declaration is checked, not a lifetime union.
+# The prior design collected every STAGE token seen anywhere in the
+# transcript into one set, so a single early mis-parse (garbage token) could
+# never be un-declared by a later, correct declaration -- confirmed: a bad
+# early line followed by a correct one AND the skill actually opened still
+# blocked. A session's current stage is its latest declaration; earlier ones
+# are superseded. This also makes the block message actionable ("you just
+# declared X and never opened it") instead of naming something from anywhere
+# in the session. Accepted cost: a stage declared, abandoned, then
+# superseded by a different declaration is never caught for the abandoned
+# one -- this is a tripwire against momentum, not an audit.
+#
+# Finding 2: only ASSISTANT-authored content is read. The prior scan walked
+# `user` records identically to `assistant` ones, so a user pasting a STAGE
+# line into their own prompt would misread as the assistant having declared
+# it. Skill tool_use blocks only ever occur in assistant records anyway, so
+# restricting the whole scan to type == "assistant" costs nothing on that
+# side and closes this on the declaration side.
 #
 # stop_hook_active IS honoured here, unlike loop_gate: this gate has nothing
 # to iterate toward (no analyze->design->eval cycle), so one block is the
@@ -1222,23 +1255,29 @@ def closure_guard(payload):
 # only trap the operator with no way to end the turn.
 #
 # Scan is a single linear pass over the whole transcript file (never a byte
-# tail — a fixed-window read misses the turn where the declaration lives),
-# collecting the declared-token set and the opened-skill set across every
-# record, then comparing the two sets once. isSidechain records are skipped:
-# a subagent's own Skill invocation is not this session opening it (verified
-# by reverting the check — a subagent-opened exp-loop then wrongly passes).
-# A single malformed line, a `content` that is missing/None (the actual crash
-# case: `for b in None` raises), or a bare string instead of a block list
-# (measured: 18% of user records in a real transcript) must not abort the
-# whole scan and silently drop every record after it — a scan aborted mid-file
-# is caught by stage_check's own try/except and returns None, which looks
-# identical to "nothing to report" and would silently let a real violation
-# through (verified: reverting the isinstance guard turns a should-block
-# unopened-exp-analyze case into a silent None). So each is handled
-# per-record rather than let any of them raise out of the loop.
+# tail — a fixed-window read misses the turn where the declaration lives).
+# isSidechain records are skipped: a subagent's own Skill invocation is not
+# this session opening it (verified by reverting the check — a
+# subagent-opened exp-loop then wrongly passes). A single malformed line, or
+# a `content` that is missing/None (the actual crash risk: `for b in None`
+# raises) must not abort the whole scan and silently drop every record after
+# it — a scan aborted mid-file is caught by stage_check's own try/except and
+# returns None, indistinguishable from "nothing to report", which would
+# silently let a real violation through (verified: reverting the isinstance
+# guard turns a should-block unopened-exp-analyze case into a silent None).
+# So each is handled per-record rather than let either raise out of the loop.
+#
+# Five conditions all return bare None (D9 "silence over noise", Task 6's
+# convention — not distinguished at runtime, only by reading this source):
+# (1) stop_hook_active already true; (2) no transcript_path in the payload;
+# (3) the transcript is unreadable/absent, or the scan raised for any other
+# reason; (4) no STAGE line was ever declared, OR the session's current
+# declaration is not a cleanly-parsed exp-* skill token (includes: a
+# non-skill vocabulary word, an out-of-vocabulary/mistyped token, and any
+# markdown-mangled extraction — Ruling 33: these cannot be told apart, so
+# none of them block); (5) the current declared stage's skill WAS opened
+# somewhere in the session.
 _STAGE_TOKEN_RE = re.compile(r"STAGE\(exp\)\s*(?:→|->)\s*([^\s·]+)")
-_STAGE_VOCAB = frozenset({"exp-init", "exp-analyze", "exp-design", "exp-loop",
-                          "program", "wiki", "tree", "recipe"})
 _STAGE_SKILL_TOKENS = frozenset({"exp-init", "exp-analyze", "exp-design", "exp-loop"})
 
 
@@ -1253,11 +1292,20 @@ def _stage_opened_skill(skill_name):
 
 
 def _stage_scan_transcript(transcript_path):
-    """One pass over the transcript: return (declared: set[str], opened:
-    set[str]). Raises on a read failure (missing/unreadable file) -- the
-    caller treats that as no verdict. A parse problem on one line/record never
-    raises; it is simply skipped so every record after it still counts."""
-    declared = set()
+    """One pass over the transcript: return (latest_declared: str | None,
+    opened: set[str]). `latest_declared` is overwritten on every new
+    STAGE(exp) match, so it ends up holding only the session's CURRENT stage
+    (Ruling 34) — an earlier mis-parsed or superseded declaration cannot
+    poison a later, correct one. `opened` stays a lifetime union across the
+    whole session: a skill may legitimately be opened well before the
+    checkpoint line that later names it. Only `type == "assistant"` records
+    are read (Finding 2) — a user pasting a STAGE line into their own prompt
+    must never read as the assistant having declared it; Skill tool_use never
+    occurs in a `user` record anyway, so this costs nothing on that side.
+    Raises on a read failure (missing/unreadable file) -- the caller treats
+    that as no verdict. A parse problem on one line/record never raises; it
+    is simply skipped so every record after it still counts."""
+    latest_declared = None
     opened = set()
     with open(transcript_path, "r", encoding="utf-8") as fh:
         for line in fh:
@@ -1272,52 +1320,45 @@ def _stage_scan_transcript(transcript_path):
                 continue
             if record.get("isSidechain"):
                 continue  # a subagent's turns are not this session's
-            if record.get("type") not in ("user", "assistant"):
-                continue
+            if record.get("type") != "assistant":
+                continue  # Finding 2: only the assistant declares or opens
             content = (record.get("message") or {}).get("content")
             blocks = content if isinstance(content, list) else []
             for b in blocks:
                 if not isinstance(b, dict):
                     continue
                 if b.get("type") == "text":
-                    declared.update(_STAGE_TOKEN_RE.findall(b.get("text") or ""))
+                    matches = _STAGE_TOKEN_RE.findall(b.get("text") or "")
+                    if matches:
+                        latest_declared = matches[-1]  # last one WINS (Ruling 34)
                 elif b.get("type") == "tool_use" and b.get("name") == "Skill":
                     tok = _stage_opened_skill((b.get("input") or {}).get("skill"))
                     if tok:
                         opened.add(tok)
-    return declared, opened
+    return latest_declared, opened
 
 
 def stage_check(payload):
     try:
         if payload.get("stop_hook_active"):
-            return None  # one block per session -- never re-trap the operator
+            return None  # (1) one block per session -- never re-trap the operator
         transcript_path = payload.get("transcript_path")
         if not isinstance(transcript_path, str) or not transcript_path:
-            return None
-        declared, opened = _stage_scan_transcript(transcript_path)
+            return None  # (2) no transcript named in the payload
+        latest_declared, opened = _stage_scan_transcript(transcript_path)
     except Exception:
-        return None  # fail-open (D9): unreadable/absent transcript -> None
+        return None  # (3) fail-open (D9): unreadable/absent transcript, or any scan error
 
-    if not declared:
-        return None  # no STAGE line at all -> None
+    if latest_declared not in _STAGE_SKILL_TOKENS:
+        return None  # (4) no STAGE line, or the current one isn't a clean exp-* skill token
 
-    out_of_vocab = sorted(declared - _STAGE_VOCAB)
-    if out_of_vocab:
-        allowed = ", ".join(sorted(_STAGE_VOCAB))
-        return {"decision": "block", "reason": (
-            "omx stage-check: declared STAGE token(s) "
-            f"{', '.join(out_of_vocab)} outside the routing vocabulary -- "
-            f"allowed: {allowed}.")}
+    if latest_declared in opened:
+        return None  # (5) the declared stage's skill WAS opened in this session
 
-    unopened = sorted(t for t in declared & _STAGE_SKILL_TOKENS if t not in opened)
-    if unopened:
-        return {"decision": "block", "reason": (
-            "omx stage-check: declared stage(s) "
-            f"{', '.join(unopened)} were never opened as a skill in this "
-            "session -- open the skill before closing, or correct the STAGE "
-            "declaration.")}
-    return None
+    return {"decision": "block", "reason": (
+        f"omx stage-check: this session's current stage declaration, "
+        f"'{latest_declared}', was never opened as a skill -- open the skill "
+        "before closing, or correct the STAGE declaration.")}
 
 
 HANDLERS = {
