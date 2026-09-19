@@ -101,7 +101,9 @@ _OPEN_STATUSES = ("needs-experiment", "needs-apply-before-retrain")
 
 
 def _resolve_backlog_root(payload) -> str:
-    """Resolve the anchor for the backlog pre-fetch ONLY (omx-2 fix).
+    """Resolve the STRICT omx anchor -- shared by the backlog pre-fetch and by
+    closure_guard (task 5), both of which must treat an unanchored cwd as "no
+    omx project here" rather than silently operating on some fallback root.
     Raises when the payload cwd is missing/empty OR when the #13 ladder never
     anchors (stage == "cwd") — resolve_omx_root itself never raises (root.py:36
     always falls back at least to cwd), so THIS caller treats that weakest
@@ -620,10 +622,202 @@ def loop_gate(payload):
         return None  # fail-open (D9): a broken gate must never trap a session
 
 
+# --- closure_guard (task 5): deny a closure declaration on an ungraded run --
+# PreToolUse, tool_name == "Bash" only (design doc §4-6). Denies `hq post
+# --category handoff`, `omx loop-disarm --reason done`, and `omx
+# loop-mark-done --reason done` when this project's finished training runs are
+# missing the evaluation artifacts its OWN profile declared (state
+# "incomplete"), or when the gate could not tell at all (state "unreadable").
+# Every other case allows (None), silently: not a closure declaration, a
+# non-Bash tool, no omx project at this cwd, no run_completion contract,
+# everything checked, an active human defer, a fresh satisfying receipt, or
+# any internal error. A false deny here locks an operator out of closing
+# their own session, and a gate that speaks in every unrelated repo on the
+# machine is the Finding-8-class regression this task exists to avoid --
+# hence the strict root resolver below, which short-circuits BEFORE touching
+# the filesystem rather than trusting evaluate_completion to classify an
+# unrelated tree correctly.
+_CLOSURE_SEPARATORS = ("&&", "||", ";", "|")
+_CLOSURE_SEP_RE = re.compile(r"(\|\||&&|;|\|)")
+_CLOSURE_REASON_MAX_CHARS = 1200
+
+
+def _closure_split_glued_separators(tokens):
+    """shlex.split tokenizes on whitespace/quoting, not on shell control
+    operators, so a separator with no surrounding whitespace is glued into the
+    adjacent token (measured: 'cd x&&hq' -> ['cd', 'x&&hq', 'post', ...]).
+    Split any token that CONTAINS '&&' '||' ';' or '|' on that substring
+    before segmenting, so a real closure declaration right after a glued
+    separator is never swallowed into the preceding segment.
+
+    ponytail: this also fires inside a token that merely contains one of these
+    substrings as plain text (e.g. a quoted "a;b"), over-splitting it into an
+    extra segment. That is safe in the deny direction only -- an extra segment
+    can match a closure command only if it reads as one verbatim -- ceiling: a
+    hostile quoted argument shaped exactly like the real closure text could in
+    principle create a spurious segment; not defended against here."""
+    flat = []
+    for tok in tokens:
+        flat.extend(p for p in _CLOSURE_SEP_RE.split(tok) if p != "")
+    return flat
+
+
+def _closure_segments(tokens):
+    """Split a token stream into command segments at &&, ||, ; and |."""
+    segments = [[]]
+    for tok in _closure_split_glued_separators(tokens):
+        if tok in _CLOSURE_SEPARATORS:
+            segments.append([])
+        else:
+            segments[-1].append(tok)
+    return segments
+
+
+def _closure_has_adjacent(tokens, a, b) -> bool:
+    return any(tokens[i] == a and tokens[i + 1] == b for i in range(len(tokens) - 1))
+
+
+def _closure_reason_done(tokens) -> bool:
+    return _closure_has_adjacent(tokens, "--reason", "done") or "--reason=done" in tokens
+
+
+def _closure_segment_declares(seg) -> bool:
+    """§6: `hq post ... --category handoff`; `omx loop-disarm`/`loop-mark-done
+    ... --reason done` (or `--reason=done`)."""
+    if len(seg) < 2:
+        return False
+    head = (seg[0], seg[1])
+    if head == ("hq", "post"):
+        return _closure_has_adjacent(seg, "--category", "handoff")
+    if head in (("omx", "loop-disarm"), ("omx", "loop-mark-done")):
+        return _closure_reason_done(seg)
+    return False
+
+
+def _closure_declares(command: str) -> bool:
+    """Whether `command` contains a closure declaration in any `&&`/`||`/`;`/`|`
+    segment. Raises ValueError on unbalanced quotes (shlex) -- the caller
+    treats that as allow, same as every other internal failure (D9)."""
+    import shlex
+    tokens = shlex.split(command)
+    return any(_closure_segment_declares(seg) for seg in _closure_segments(tokens))
+
+
+def _closure_fit_reason(header: str, body: str, footer: str) -> str:
+    """Assemble header/body/footer under the 1200-char permissionDecisionReason
+    budget (Ruling 3). The per-state assembly rules (at most 3 run blocks, a
+    shared `how` printed once) already keep this well under budget in
+    practice; this is a safety net for unusually long paths/globs, and it
+    trims the body ONLY -- the header (why) and the footer (the close-defer
+    escape hatch) must always survive intact."""
+    text = f"{header}\n\n{body}\n\n{footer}" if body else f"{header}\n\n{footer}"
+    if len(text) <= _CLOSURE_REASON_MAX_CHARS:
+        return text
+    budget = _CLOSURE_REASON_MAX_CHARS - len(header) - len(footer) - 4  # 2x "\n\n"
+    if budget <= 0:
+        return (header + "\n\n" + footer)[:_CLOSURE_REASON_MAX_CHARS]
+    return f"{header}\n\n{body[:budget].rstrip()}\n\n{footer}"
+
+
+_CLOSURE_INCOMPLETE_HEADER = (
+    "omx run-completion gate: this closure declaration is blocked because a finished\n"
+    "training run has none of the evaluation artifacts this project's profile declares."
+)
+_CLOSURE_INCOMPLETE_FOOTER = (
+    "The contract is yours, in profile/metrics.yaml under `run_completion`; the harness only\n"
+    "checks that a finished run has what you declared. Produce the artifacts, or record why\n"
+    "you are not: `omx close-defer --reason \"<why>\"`."
+)
+
+
+def _closure_incomplete_reason(verdict: dict) -> str:
+    missing = verdict["missing"]
+    shown = missing[:3]
+    extra = len(missing) - len(shown)
+    hows = {m["how"] for m in shown}
+    same_how = len(hows) == 1
+    lines = []
+    for m in shown:
+        lines.append(f"  {m['run']}   missing: {', '.join(m['missing'])}")
+        if not same_how:
+            lines.append(f"               make it: {m['how']}")
+    if extra > 0:
+        lines.append(f"  (+{extra} more — `omx close-check` lists them all)")
+    if same_how:
+        lines.append("")
+        lines.append(f"  make it: {next(iter(hows))}")
+    return _closure_fit_reason(_CLOSURE_INCOMPLETE_HEADER, "\n".join(lines),
+                               _CLOSURE_INCOMPLETE_FOOTER)
+
+
+_CLOSURE_UNREADABLE_HEADER = (
+    "omx run-completion gate: this closure declaration is blocked because the gate could not\n"
+    "determine whether this project's finished runs are graded."
+)
+_CLOSURE_UNREADABLE_FOOTER = (
+    "If the reason names a profile key instead of a path, fix profile/metrics.yaml. To\n"
+    "proceed without either: omx close-defer --reason \"<why>\"."
+)
+
+
+def _closure_unreadable_reason(verdict: dict, root) -> str:
+    # `reason` is printed verbatim -- it already names the failing path or the
+    # offending profile key, and a paraphrase loses that (task-5-deny-text §2).
+    reason_text = verdict.get("reason") or "(no reason recorded)"
+    body = (
+        f"  reason: {reason_text}\n\n"
+        "This is not \"nothing to grade\" — an unread tree and an empty one are different "
+        "answers,\nand only one of them is a pass. If the output tree lives on another "
+        "machine, run the\ncheck where it lives and bring the receipt back:\n\n"
+        f"  ssh <host> 'omx close-check --root {root} --json'  |  omx close-ack --from -"
+    )
+    return _closure_fit_reason(_CLOSURE_UNREADABLE_HEADER, body, _CLOSURE_UNREADABLE_FOOTER)
+
+
+def closure_guard(payload):
+    try:
+        if payload.get("tool_name") != "Bash":
+            return None
+        command = (payload.get("tool_input") or {}).get("command")
+        if not isinstance(command, str) or not command:
+            return None
+        if not _closure_declares(command):
+            return None
+
+        from omx_core.clock import now_iso
+        from omx_core.completion import (active_defer, evaluate_completion,
+                                          read_receipt, receipt_satisfies)
+        from omx_core.omx_paths import OmxPaths
+
+        root = _resolve_backlog_root(payload)  # raises on an unanchored cwd -- see its docstring
+        paths = OmxPaths(root=root)
+        now = now_iso()
+
+        if active_defer(paths, now):
+            return None
+        if receipt_satisfies(read_receipt(paths), now, expected_root=paths.root):
+            return None
+
+        verdict = evaluate_completion(paths)
+        state = verdict["state"]
+        if state in ("no-contract", "checked"):
+            return None
+        reason = (_closure_incomplete_reason(verdict) if state == "incomplete"
+                  else _closure_unreadable_reason(verdict, paths.root))
+        return {"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }}
+    except Exception:
+        return None  # fail-open (D9): any failure anywhere allows the command through
+
+
 HANDLERS = {
     "report_guard": report_guard,
     "route_emit": route_emit,
     "capture_flush": capture_flush,
     "compact_breadcrumb": compact_breadcrumb,
     "loop_gate": loop_gate,
+    "closure_guard": closure_guard,
 }
