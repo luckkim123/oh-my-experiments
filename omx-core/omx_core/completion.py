@@ -37,6 +37,7 @@ import fnmatch
 import importlib.metadata
 import json
 import os
+import warnings
 from datetime import timedelta
 from pathlib import Path
 
@@ -192,12 +193,21 @@ def _completion_dir(paths: OmxPaths) -> Path:
 
 
 def _read_json(target: Path) -> dict | None:
-    """dict on success; None for anything else (missing, unreadable, not JSON,
-    not an object) -- corrupt on-disk state must read the same as absent state,
-    never raise."""
+    """dict on success; None for anything else (missing, unreadable, undecodable,
+    not JSON, not an object) -- corrupt on-disk state must read the same as
+    absent state, never raise. A genuinely missing file is silent; a file that
+    EXISTS but can't be read as UTF-8 (permission denied, or bytes that aren't
+    valid UTF-8 -- UnicodeDecodeError is a ValueError, not an OSError, so it
+    needs its own arm) is distinguished with a warning, since "could not read"
+    and "not there" are exactly the two states this whole module exists to
+    keep apart -- the caller's contract (None either way, never raise) does
+    not change."""
     try:
         raw = target.read_text(encoding="utf-8")
-    except OSError:
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError) as err:
+        warnings.warn(f"{target}: exists but unreadable: {err}", RuntimeWarning, stacklevel=2)
         return None
     try:
         data = json.loads(raw)
@@ -219,7 +229,13 @@ def write_receipt(paths: OmxPaths, verdict: dict, *, source: str, now_iso: str) 
     """Record a computed run-completion verdict (design §5). `source` is
     "local" (computed where the hook runs) or "remote" (carried back across
     an ssh boundary by a later task's `omx close-ack`) -- it is the only
-    reason this receipt distinguishes the two."""
+    reason this receipt distinguishes the two, and it is what lets
+    `receipt_satisfies` know whether `root` is checkable at all.
+
+    Serialized on `paths.state_lock()`, same coarser-lock discipline every
+    other `atomic_path` writer in this repo uses (ledger.py, loop.py) --
+    `atomic_path`'s fixed '.tmp' name is only crash-safe against a SINGLE
+    writer at a time."""
     try:
         omx_version = importlib.metadata.version("omx-core")
     except importlib.metadata.PackageNotFoundError:
@@ -232,8 +248,13 @@ def write_receipt(paths: OmxPaths, verdict: dict, *, source: str, now_iso: str) 
         "omx_version": omx_version,
         "source": source,
     }
-    with atomic_path(_completion_dir(paths) / _RECEIPT_NAME) as tmp:
-        tmp.write_text(json.dumps(receipt, indent=2, sort_keys=True))
+
+    def _write() -> None:
+        with atomic_path(_completion_dir(paths) / _RECEIPT_NAME) as tmp:
+            tmp.write_text(json.dumps(receipt, indent=2, sort_keys=True))
+
+    from omx_core.lock import with_file_lock
+    with_file_lock(paths.state_lock(), _write)
 
 
 def read_receipt(paths: OmxPaths) -> dict | None:
@@ -241,12 +262,29 @@ def read_receipt(paths: OmxPaths) -> dict | None:
     return _read_json(_completion_dir(paths) / _RECEIPT_NAME)
 
 
-def receipt_satisfies(receipt: dict | None, now_iso: str, max_age_h: float = 12) -> bool:
-    """Whether `receipt` lets the gate pass right now. A non-"checked" state
-    never satisfies at any age -- acking a failure is the exact bypass this
-    mechanism exists to prevent. An unparseable or future-dated checked_at
-    is treated as not satisfying rather than raised."""
+def receipt_satisfies(receipt: dict | None, now_iso: str, max_age_h: float = 12,
+                       *, expected_root) -> bool:
+    """Whether `receipt` lets the gate pass right now.
+
+    A non-"checked" state never satisfies at any age -- acking a failure is the
+    exact bypass this mechanism exists to prevent. An unparseable or
+    future-dated checked_at is treated as not satisfying rather than raised.
+
+    `expected_root` is required, not optional: a `source == "local"` receipt
+    (computed and stored for the SAME project by `close-check --record`) must
+    have `root == str(expected_root)`, or it does not satisfy -- otherwise a
+    receipt file copied from an unrelated project's store would satisfy the
+    gate for this one. A `source == "remote"` receipt legitimately names a
+    different root (the far side of the ssh boundary the design crosses in
+    §5) and is trusted without that check, the same deliberate-human-act trust
+    `close-defer` gets. A missing or unrecognized `source` never satisfies."""
     if not isinstance(receipt, dict) or receipt.get("state") != "checked":
+        return False
+    source = receipt.get("source")
+    if source == "local":
+        if receipt.get("root") != str(expected_root):
+            return False
+    elif source != "remote":
         return False
     try:
         checked_at = parse_iso_utc(receipt.get("checked_at"), "receipt checked_at")
@@ -259,12 +297,19 @@ def receipt_satisfies(receipt: dict | None, now_iso: str, max_age_h: float = 12)
 def write_defer(paths: OmxPaths, reason: str, now_iso: str) -> None:
     """Record a human's decision to close despite an incomplete/unreadable
     verdict. An empty or whitespace-only reason is refused -- the reason is
-    the entire difference between a recorded escape and a silent one."""
+    the entire difference between a recorded escape and a silent one.
+
+    Serialized on `paths.state_lock()` -- see `write_receipt`'s docstring."""
     if not isinstance(reason, str) or not reason.strip():
         raise OmxError("close-defer requires a non-empty reason")
     defer = {"deferred_at": now_iso, "reason": reason}
-    with atomic_path(_completion_dir(paths) / _DEFER_NAME) as tmp:
-        tmp.write_text(json.dumps(defer, indent=2, sort_keys=True))
+
+    def _write() -> None:
+        with atomic_path(_completion_dir(paths) / _DEFER_NAME) as tmp:
+            tmp.write_text(json.dumps(defer, indent=2, sort_keys=True))
+
+    from omx_core.lock import with_file_lock
+    with_file_lock(paths.state_lock(), _write)
 
 
 def active_defer(paths: OmxPaths, now_iso: str, ttl_h: float = 12) -> bool:

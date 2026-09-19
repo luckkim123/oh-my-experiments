@@ -2,8 +2,10 @@
 a computed verdict, and a defer recording a human's decision to close anyway.
 Both cross the ssh boundary a later task wires up -- these tests only cover
 the storage layer. Fixture trees under tmp_path; no network, no ssh."""
+import os
 from datetime import timedelta
 
+import pytest
 from omx_core.clock import now_iso, parse_iso_utc
 from omx_core.completion import (
     active_defer,
@@ -13,6 +15,11 @@ from omx_core.completion import (
     write_receipt,
 )
 from omx_core.omx_paths import OmxError, OmxPaths
+
+_SKIP_UNLESS_POSIX_NONROOT = pytest.mark.skipif(
+    os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="requires POSIX permission enforcement as a non-root user",
+)
 
 CHECKED_VERDICT = {"state": "checked", "runs": ["runs/alpha", "runs/beta"]}
 INCOMPLETE_VERDICT = {"state": "incomplete", "runs": ["runs/alpha"]}
@@ -58,35 +65,122 @@ def test_corrupt_receipt_file_returns_none_without_raising(tmp_path):
     assert read_receipt(paths) is None
 
 
+def test_corrupt_non_utf8_receipt_file_returns_none_without_raising(tmp_path):
+    """UnicodeDecodeError is a ValueError, not an OSError -- a bare
+    `except OSError` around read_text() lets it through uncaught (finding 1).
+    A receipt that crossed an ssh boundary is exactly where a mangled-encoding
+    payload would land."""
+    paths = OmxPaths(root=tmp_path)
+    target = tmp_path / ".omx" / "completion-receipt.json"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"\xff\xfe\x00\x01not valid utf-8")
+    with pytest.warns(RuntimeWarning):
+        assert read_receipt(paths) is None
+
+
+def test_corrupt_non_utf8_defer_file_returns_not_active_without_raising(tmp_path):
+    """Same defect, reached through active_defer's shared _read_json path."""
+    paths = OmxPaths(root=tmp_path)
+    target = tmp_path / ".omx" / "completion-defer.json"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"\xff\xfe\x00\x01not valid utf-8")
+    with pytest.warns(RuntimeWarning):
+        assert active_defer(paths, now_iso(), ttl_h=12) is False
+
+
+@_SKIP_UNLESS_POSIX_NONROOT
+def test_unreadable_existing_receipt_file_is_distinguished_from_missing(tmp_path):
+    """finding 4: a PermissionError on a file that EXISTS must not read as
+    silently as a genuinely absent one -- it still returns None (the contract
+    never raises), but it is surfaced rather than swallowed identically."""
+    paths = OmxPaths(root=tmp_path)
+    target = tmp_path / ".omx" / "completion-receipt.json"
+    target.parent.mkdir(parents=True)
+    target.write_text('{"state": "checked"}', encoding="utf-8")
+    target.chmod(0o000)
+    try:
+        with pytest.warns(RuntimeWarning):
+            assert read_receipt(paths) is None
+    finally:
+        target.chmod(0o644)
+
+
+def test_write_receipt_uses_the_state_lock(tmp_path):
+    """finding 3: atomic_path's fixed '.tmp' name needs a coarser lock around
+    it (same discipline as ledger.py/loop.py) -- confirms the write actually
+    goes through paths.state_lock() rather than just matching by coincidence."""
+    paths = OmxPaths(root=tmp_path)
+    write_receipt(paths, CHECKED_VERDICT, source="local", now_iso=now_iso())
+    assert paths.state_lock().exists()
+
+
 def test_fresh_checked_receipt_satisfies():
     t0 = now_iso()
-    receipt = {"checked_at": t0, "state": "checked"}
-    assert receipt_satisfies(receipt, t0, max_age_h=12) is True
+    receipt = {"checked_at": t0, "state": "checked", "source": "remote"}
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root="unused-for-remote") is True
 
 
 def test_checked_receipt_aged_past_max_age_does_not_satisfy():
     t0 = now_iso()
-    receipt = {"checked_at": t0, "state": "checked"}
+    receipt = {"checked_at": t0, "state": "checked", "source": "remote"}
     later = _shift(t0, hours=13)
-    assert receipt_satisfies(receipt, later, max_age_h=12) is False
+    assert receipt_satisfies(receipt, later, max_age_h=12, expected_root="unused-for-remote") is False
 
 
 def test_incomplete_receipt_never_satisfies_at_any_age():
     t0 = now_iso()
     receipt = {"checked_at": t0, "state": "incomplete"}
-    assert receipt_satisfies(receipt, t0, max_age_h=10_000) is False
+    assert receipt_satisfies(receipt, t0, max_age_h=10_000, expected_root="unused") is False
 
 
 def test_unparseable_checked_at_does_not_satisfy_and_does_not_raise():
-    receipt = {"checked_at": "not-a-timestamp", "state": "checked"}
-    assert receipt_satisfies(receipt, now_iso(), max_age_h=12) is False
+    receipt = {"checked_at": "not-a-timestamp", "state": "checked", "source": "remote"}
+    assert receipt_satisfies(receipt, now_iso(), max_age_h=12, expected_root="unused-for-remote") is False
 
 
 def test_receipt_from_the_future_beyond_clock_skew_does_not_satisfy():
     t0 = now_iso()
     future = _shift(t0, minutes=5)
-    receipt = {"checked_at": future, "state": "checked"}
-    assert receipt_satisfies(receipt, t0, max_age_h=12) is False
+    receipt = {"checked_at": future, "state": "checked", "source": "remote"}
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root="unused-for-remote") is False
+
+
+def test_local_receipt_with_matching_root_satisfies(tmp_path):
+    paths = OmxPaths(root=tmp_path)
+    t0 = now_iso()
+    write_receipt(paths, CHECKED_VERDICT, source="local", now_iso=t0)
+    receipt = read_receipt(paths)
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is True
+
+
+def test_local_receipt_with_foreign_root_does_not_satisfy(tmp_path):
+    """The review's reproduction: a receipt file copied in from a different
+    project's store -- same content, wrong root."""
+    t0 = now_iso()
+    receipt = {"checked_at": t0, "root": "/some/other/project", "state": "checked",
+               "runs_checked": 2, "omx_version": "0.5.0", "source": "local"}
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is False
+
+
+def test_remote_receipt_with_foreign_root_still_satisfies(tmp_path):
+    """A remote receipt's root legitimately differs -- the far side of the ssh
+    boundary design §5 crosses -- so root is not checked for source=="remote"."""
+    t0 = now_iso()
+    receipt = {"checked_at": t0, "root": "/container/output", "state": "checked",
+               "runs_checked": 2, "omx_version": "0.5.0", "source": "remote"}
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is True
+
+
+def test_receipt_with_missing_source_does_not_satisfy(tmp_path):
+    t0 = now_iso()
+    receipt = {"checked_at": t0, "root": str(tmp_path), "state": "checked"}
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is False
+
+
+def test_receipt_with_unknown_source_does_not_satisfy(tmp_path):
+    t0 = now_iso()
+    receipt = {"checked_at": t0, "root": str(tmp_path), "state": "checked", "source": "bogus"}
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is False
 
 
 def test_write_defer_then_active_defer_true(tmp_path):
