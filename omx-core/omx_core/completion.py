@@ -216,6 +216,21 @@ def _read_json(target: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def _same_root(a, b) -> bool:
+    """True when `a` and `b` resolve to the same filesystem path -- tolerant of
+    a trailing separator, a redundant './' segment, a relative path, or a
+    symlink to the same tree (finding 5), and tolerant of a hostile receipt's
+    `root` being the wrong TYPE entirely (a number, a list, absent -- `!=`
+    absorbed that for free; `Path()` does not, so it is caught here explicitly
+    rather than silently disappearing). `Path.resolve()` does not require the
+    path to exist (strict=False is the default) -- a receipt legitimately
+    outlives the tree it was written for."""
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except TypeError:
+        return False
+
+
 def _fresh(instant, now, max_age_h: float) -> bool:
     """True when `instant` is no more than `max_age_h` hours older than `now`,
     and not more than _CLOCK_SKEW_TOLERANCE in `now`'s future -- a receipt/defer
@@ -272,17 +287,20 @@ def receipt_satisfies(receipt: dict | None, now_iso: str, max_age_h: float = 12,
 
     `expected_root` is required, not optional: a `source == "local"` receipt
     (computed and stored for the SAME project by `close-check --record`) must
-    have `root == str(expected_root)`, or it does not satisfy -- otherwise a
-    receipt file copied from an unrelated project's store would satisfy the
-    gate for this one. A `source == "remote"` receipt legitimately names a
-    different root (the far side of the ssh boundary the design crosses in
-    §5) and is trusted without that check, the same deliberate-human-act trust
-    `close-defer` gets. A missing or unrecognized `source` never satisfies."""
+    resolve to the same path as `expected_root` (compared via `Path.resolve()`,
+    not string equality -- a trailing separator, a `./` segment, a relative
+    path, or a symlink to the same tree must all still match), or it does not
+    satisfy -- otherwise a receipt file copied from an unrelated project's
+    store would satisfy the gate for this one. A `source == "remote"` receipt
+    legitimately names a different root (the far side of the ssh boundary the
+    design crosses in §5) and is trusted without that check, the same
+    deliberate-human-act trust `close-defer` gets. A missing or unrecognized
+    `source` never satisfies."""
     if not isinstance(receipt, dict) or receipt.get("state") != "checked":
         return False
     source = receipt.get("source")
     if source == "local":
-        if receipt.get("root") != str(expected_root):
+        if not _same_root(receipt.get("root"), expected_root):
             return False
     elif source != "remote":
         return False

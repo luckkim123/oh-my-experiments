@@ -183,6 +183,65 @@ def test_receipt_with_unknown_source_does_not_satisfy(tmp_path):
     assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is False
 
 
+def _local_receipt(root, t0):
+    return {"checked_at": t0, "root": str(root), "state": "checked",
+            "runs_checked": 2, "omx_version": "0.5.0", "source": "local"}
+
+
+def test_local_receipt_root_with_trailing_separator_still_satisfies(tmp_path):
+    t0 = now_iso()
+    receipt = _local_receipt(str(tmp_path) + os.sep, t0)
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is True
+
+
+def test_local_receipt_root_with_redundant_dot_segment_still_satisfies(tmp_path):
+    t0 = now_iso()
+    receipt = _local_receipt(f"{tmp_path}{os.sep}.{os.sep}", t0)
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is True
+
+
+def test_local_receipt_root_as_symlink_to_same_tree_still_satisfies(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    t0 = now_iso()
+    receipt = _local_receipt(link, t0)
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=real) is True
+
+
+def test_local_receipt_root_as_relative_path_to_same_tree_still_satisfies(tmp_path):
+    t0 = now_iso()
+    rel = os.path.relpath(tmp_path)
+    receipt = _local_receipt(rel, t0)
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is True
+
+
+def test_local_receipt_root_a_number_does_not_satisfy_and_does_not_raise(tmp_path):
+    """A hostile receipt's `root` field need not even be a string -- `Path()`
+    raises TypeError on a non-path-like value where `!=` would not have."""
+    t0 = now_iso()
+    receipt = {"checked_at": t0, "root": 42, "state": "checked", "source": "local"}
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is False
+
+
+def test_local_receipt_root_absent_does_not_satisfy_and_does_not_raise(tmp_path):
+    t0 = now_iso()
+    receipt = {"checked_at": t0, "state": "checked", "source": "local"}
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is False
+
+
+def test_local_receipt_survives_its_tree_being_deleted(tmp_path):
+    """A receipt legitimately outlives the tree it was written for -- Path.resolve()
+    must not raise just because the path no longer exists (strict=False)."""
+    gone = tmp_path / "will-be-deleted"
+    gone.mkdir()
+    t0 = now_iso()
+    receipt = _local_receipt(gone, t0)
+    gone.rmdir()
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=gone) is True
+
+
 def test_write_defer_then_active_defer_true(tmp_path):
     paths = OmxPaths(root=tmp_path)
     t0 = now_iso()
