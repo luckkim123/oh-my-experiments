@@ -109,8 +109,9 @@ A readable `output_root` with genuinely zero finished runs **does** pass, and sa
 
 ## 5. Crossing the ssh boundary
 
-The hard problem stated in the prompt: albc's omx root and output tree are inside a
-container across ssh, and hooks run on the Mac. Measured on this machine 2026-09-19:
+The hard problem stated in the prompt: on the project that motivated this round, the
+omx root and output tree sit inside a container across ssh while hooks run on the
+workstation. Measured on this machine 2026-09-19:
 `/Users/kimseungmin/workspace/.hq/config/experiments` exists (so `_has_omx_marker`
 fires and `route_emit` injects every turn) but holds only `programs/` — **there is no
 profile at the Mac root**, and no run tree.
@@ -132,6 +133,16 @@ satisfy the gate.
 
 For a local tree, `omx close-check --record` writes the same receipt directly and
 step 2 is unnecessary.
+
+**Where the contract has to be declared for this to bind.** The hook resolves the root
+from the session's own cwd, so a contract that exists only at the far end of the ssh is
+a contract the hook never sees, and the project reads as `no-contract` — allowed,
+silently, which is exactly the hole this gate exists to close. So a project whose
+output tree is remote declares `run_completion` in the profile at **the root the
+session runs in**, with `output_root` pointing at the remote path. The gate then
+resolves that path, fails to read it, and returns `unreadable` — a deny that names the
+check to run over ssh and the ack to run back here. The unreachable `output_root` is
+not a mistake in that setup; it is what makes the state honest.
 
 ## 6. The gate (D1, D3)
 
@@ -191,7 +202,8 @@ Two defects were observed, and only the second one is the incident:
 1. `STAGE(exp) → analyze` — a stage name outside the allowed vocabulary — passed
    unchallenged.
 2. The session printed the STAGE line **as a label** and never opened that stage's
-   skill. This is what actually happened for the whole p6 night.
+   skill. This is what actually happened for the whole of the overnight run that
+   motivated this round.
 
 `stage_check`, a `Stop` handler, reads the session transcript and checks both,
 **session-scoped rather than turn-scoped**: a stage legitimately spans several turns
@@ -231,8 +243,8 @@ Whether that shape is one mechanism or four is the ADR's question, not this docu
 
 - Nothing detects a run *finishing*; the gate fires at declaration time.
 - No project content — no evaluation command, path, threshold, or plant name — enters
-  this repository. The words p6, albc and IsaacLab appear nowhere in it, and a test
-  enforces that.
+  this repository. `omx-core/tests/test_distribution_axiom.py` is the standing gate for
+  that, and everything this round ships lands inside the surface it walks.
 - `closure_guard` does not look inside `ssh <host> '<cmd>'`. A closure declared only
   on the far side of an ssh is out of scope for this round and is recorded here so the
   omission is a decision rather than a blank.
@@ -244,5 +256,6 @@ Whether that shape is one mechanism or four is the ADR's question, not this docu
    message names the missing artifacts and the command that makes them.
 2. Put the artifacts in the same tree → it passes.
 3. A project with no completion contract is never blocked — and SessionStart says so once.
-4. No `p6` / `albc` / `IsaacLab` anywhere in the omx repository.
+4. No workspace identifier in the shipped surface — enforced by the existing D12 gate,
+   `test_distribution_axiom.py`, which this round's new files fall under.
 5. Every existing omx test passes, plus the new ones.

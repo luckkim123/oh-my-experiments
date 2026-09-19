@@ -197,12 +197,21 @@ missing transcript → `None`; already-blocked (`stop_hook_active: true`) → `N
 
 ---
 
-## Task 9 — repository hygiene test
+## Task 9 — repository hygiene (existing gate, no new test)
 
-**Files**: `omx-core/tests/test_no_project_content.py`
+**Files**: none new. Verification only, against `omx-core/tests/test_distribution_axiom.py`.
 
-Walk the repository (excluding `.git`) and assert none of `p6`, `albc`, `IsaacLab`,
-`Isaac Lab` appears, case-insensitively, in any tracked text file. Success criterion 4.
+That test already mechanizes success criterion 4 (the D12 gate): it walks the **shipped
+surface** — `omx_core/**.py`, `hooks/**.py`, `skills/**.md`, `agents/*.md` — for
+workspace identifiers. Every file this round ships falls inside it.
+
+- Confirm the gate is green after Tasks 1-8 and 10.
+- Do **not** widen its scope to `docs/` or `CHANGELOG.md`: the repository excluded
+  those on purpose and the committed history carries workspace paths.
+- Do **not** add `p6` to `FORBIDDEN`: `omx_paths.py:13` uses "P6/P7" as a
+  store-unification wave name, an unrelated meaning the token would break.
+- Do **not** add `isaaclab`: the test's own docstring records it as an allowed public
+  software name, and the shipped reference profile is named for it.
 
 ---
 
@@ -254,14 +263,17 @@ run one of the three closure commands and confirm the deny reaches the session. 
 
 ## Out-of-repo follow-ups (separate commits, separate repositories)
 
-- **F1** — albc profile gains a `run_completion` block (in the container, that
-  repository's own commit). Nothing about it comes back into omx.
+- **F1** — the motivating project's profile gains a `run_completion` block, committed
+  in that project's own repository inside its container. Nothing about it comes back
+  into omx.
 - **F2** — `agentic-cockpit`: ADR proposing the cross-harness shape (§9). Design only.
   Bound by cockpit M4 (ask, do not choose), M6 (no vendor calls unless opened), M9
   (ADR), M10 (verbatim §0 record), M7 (no `om*` names), S10 (docs on `main`).
-- **F3** — auto-memory `feedback_sleep_means_launch_first` claims enforcement by
-  `~/claudebase/runtime/hooks/sleep-launch-guard.py`. **Verified absent 2026-09-19**
-  (not in that directory, not in any settings file; the only string match in the whole
-  tree is the memory file itself). Correct the body *and* its `MEMORY.md` index line in
-  the same edit.
+- **F3** — CLOSED, no change needed. The source prompt doubted that the enforcement
+  hook named in auto-memory `feedback_sleep_means_launch_first` exists, having looked
+  in `~/claudebase/runtime/hooks/`. **The memory never named that tree.** Verified
+  2026-09-19: the guard is at the workspace's own `.claude/scripts/sleep-launch-guard.py`
+  (installed 2026-09-12, executable), wired in that workspace's `settings.json` as a
+  `UserPromptSubmit` hook that walks up from `$PWD` to find it. Memory body and
+  frontmatter are both accurate; the prompt searched the wrong tree.
 - **F4** — move the source prompt out of `91_Inbox`.
