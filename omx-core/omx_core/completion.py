@@ -241,16 +241,20 @@ def _same_root(receipt_root, expected_root) -> bool:
     Also tolerant of `receipt_root`/`expected_root` being the wrong TYPE
     entirely (a number, a list, absent -- plain `!=` absorbed that for free;
     `Path()` does not, so it is caught here explicitly rather than silently
-    disappearing)."""
+    disappearing), and of a `receipt_root` that IS string-like but not a
+    legal path: a `TypeError` from `Path()` (finding 6) is only one member of
+    the exception family this can raise -- an embedded NUL byte is a
+    `ValueError` raised by `.resolve()` itself, not by construction (finding
+    7; measured: `Path("/tmp/\\x00bad")` builds fine, `.resolve()` is what
+    raises `lstat: embedded null character in path`), and `.resolve()` can
+    also raise `OSError` on some platforms for a path past the OS length
+    limit. One `try` around the whole comparison, catching all three, rather
+    than a narrower catch re-justified against whatever the tests happened to
+    exercise."""
     try:
         receipt_path = Path(receipt_root)
-    except TypeError:
-        return False
-    if not receipt_path.is_absolute():
-        return False
-    try:
-        return receipt_path.resolve() == Path(expected_root).resolve()
-    except TypeError:
+        return receipt_path.is_absolute() and receipt_path.resolve() == Path(expected_root).resolve()
+    except (TypeError, ValueError, OSError):
         return False
 
 

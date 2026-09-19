@@ -272,6 +272,16 @@ def test_local_receipt_root_a_number_does_not_satisfy_and_does_not_raise(tmp_pat
     assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is False
 
 
+def test_local_receipt_root_with_embedded_nul_byte_does_not_satisfy_and_does_not_raise(tmp_path):
+    """finding 7: Path() accepts a string with an embedded NUL byte -- it is
+    `.resolve()` that raises `ValueError` (measured: 'lstat: embedded null
+    character in path'), a different exception family than the `TypeError`
+    `Path(42)`/`Path(None)` raise at construction. Both must return False."""
+    t0 = now_iso()
+    receipt = _local_receipt("/tmp/\x00bad", t0)
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is False
+
+
 def test_local_receipt_root_absent_does_not_satisfy_and_does_not_raise(tmp_path):
     t0 = now_iso()
     receipt = {"checked_at": t0, "state": "checked", "source": "local"}
