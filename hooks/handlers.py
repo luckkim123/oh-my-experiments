@@ -8,6 +8,7 @@ a gate-passing write. Closes the 0.1.14 hand-Edit incident at edit time; the
 intentional friction on one-character fixes is accepted (that WAS the incident).
 Fail-open: unparseable input or an unavailable omx_core -> allow (None).
 """
+import json
 import re
 from pathlib import Path, PurePosixPath
 
@@ -1205,6 +1206,120 @@ def closure_guard(payload):
     }}
 
 
+# --- stage_check (task 8, run-completion-gate round): Stop gate on a false
+# STAGE declaration. route_emit (spec 2.1, above) asks the assistant to print
+# `STAGE(exp) → <token> · <reason>` in its own text when a turn is experiment
+# work; this handler reads that back off the transcript at Stop and blocks
+# when a declared token is either outside the routing vocabulary, or is one of
+# the exp-* stages (exp-init/exp-analyze/exp-design/exp-loop — the ones with a
+# real Skill under skills/, per plugin.json) whose skill was never actually
+# opened anywhere in the session. `program`/`wiki`/`tree`/`recipe` are
+# vocabulary members but not skills, so no open-check applies to them.
+#
+# stop_hook_active IS honoured here, unlike loop_gate: this gate has nothing
+# to iterate toward (no analyze->design->eval cycle), so one block is the
+# whole contract — re-blocking a session that already got the message would
+# only trap the operator with no way to end the turn.
+#
+# Scan is a single linear pass over the whole transcript file (never a byte
+# tail — a fixed-window read misses the turn where the declaration lives),
+# collecting the declared-token set and the opened-skill set across every
+# record, then comparing the two sets once. isSidechain records are skipped:
+# a subagent's own Skill invocation is not this session opening it (verified
+# by reverting the check — a subagent-opened exp-loop then wrongly passes).
+# A single malformed line, a `content` that is missing/None (the actual crash
+# case: `for b in None` raises), or a bare string instead of a block list
+# (measured: 18% of user records in a real transcript) must not abort the
+# whole scan and silently drop every record after it — a scan aborted mid-file
+# is caught by stage_check's own try/except and returns None, which looks
+# identical to "nothing to report" and would silently let a real violation
+# through (verified: reverting the isinstance guard turns a should-block
+# unopened-exp-analyze case into a silent None). So each is handled
+# per-record rather than let any of them raise out of the loop.
+_STAGE_TOKEN_RE = re.compile(r"STAGE\(exp\)\s*(?:→|->)\s*([^\s·]+)")
+_STAGE_VOCAB = frozenset({"exp-init", "exp-analyze", "exp-design", "exp-loop",
+                          "program", "wiki", "tree", "recipe"})
+_STAGE_SKILL_TOKENS = frozenset({"exp-init", "exp-analyze", "exp-design", "exp-loop"})
+
+
+def _stage_opened_skill(skill_name):
+    """A Skill tool_use's `skill` input names an exp-* stage skill when its
+    final ':'-segment matches one of _STAGE_SKILL_TOKENS -- handles both the
+    bare form ('exp-init') and the namespaced form ('oh-my-experiments:exp-init')."""
+    if not isinstance(skill_name, str):
+        return None
+    tail = skill_name.rsplit(":", 1)[-1].strip()
+    return tail if tail in _STAGE_SKILL_TOKENS else None
+
+
+def _stage_scan_transcript(transcript_path):
+    """One pass over the transcript: return (declared: set[str], opened:
+    set[str]). Raises on a read failure (missing/unreadable file) -- the
+    caller treats that as no verdict. A parse problem on one line/record never
+    raises; it is simply skipped so every record after it still counts."""
+    declared = set()
+    opened = set()
+    with open(transcript_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue  # one corrupt line must not sink the rest of the scan
+            if not isinstance(record, dict):
+                continue
+            if record.get("isSidechain"):
+                continue  # a subagent's turns are not this session's
+            if record.get("type") not in ("user", "assistant"):
+                continue
+            content = (record.get("message") or {}).get("content")
+            blocks = content if isinstance(content, list) else []
+            for b in blocks:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "text":
+                    declared.update(_STAGE_TOKEN_RE.findall(b.get("text") or ""))
+                elif b.get("type") == "tool_use" and b.get("name") == "Skill":
+                    tok = _stage_opened_skill((b.get("input") or {}).get("skill"))
+                    if tok:
+                        opened.add(tok)
+    return declared, opened
+
+
+def stage_check(payload):
+    try:
+        if payload.get("stop_hook_active"):
+            return None  # one block per session -- never re-trap the operator
+        transcript_path = payload.get("transcript_path")
+        if not isinstance(transcript_path, str) or not transcript_path:
+            return None
+        declared, opened = _stage_scan_transcript(transcript_path)
+    except Exception:
+        return None  # fail-open (D9): unreadable/absent transcript -> None
+
+    if not declared:
+        return None  # no STAGE line at all -> None
+
+    out_of_vocab = sorted(declared - _STAGE_VOCAB)
+    if out_of_vocab:
+        allowed = ", ".join(sorted(_STAGE_VOCAB))
+        return {"decision": "block", "reason": (
+            "omx stage-check: declared STAGE token(s) "
+            f"{', '.join(out_of_vocab)} outside the routing vocabulary -- "
+            f"allowed: {allowed}.")}
+
+    unopened = sorted(t for t in declared & _STAGE_SKILL_TOKENS if t not in opened)
+    if unopened:
+        return {"decision": "block", "reason": (
+            "omx stage-check: declared stage(s) "
+            f"{', '.join(unopened)} were never opened as a skill in this "
+            "session -- open the skill before closing, or correct the STAGE "
+            "declaration.")}
+    return None
+
+
 HANDLERS = {
     "report_guard": report_guard,
     "route_emit": route_emit,
@@ -1213,4 +1328,5 @@ HANDLERS = {
     "completion_notice": completion_notice,
     "loop_gate": loop_gate,
     "closure_guard": closure_guard,
+    "stage_check": stage_check,
 }
