@@ -234,22 +234,42 @@ def test_local_receipt_with_relative_root_does_not_satisfy(tmp_path):
     assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is False
 
 
-def test_local_receipt_with_empty_root_does_not_satisfy(tmp_path):
+def test_local_receipt_with_empty_root_does_not_satisfy(tmp_path, monkeypatch):
+    """chdir's INTO the fixture tree so the cwd IS the root being evaluated --
+    without that, tmp_path is never the test process's cwd and this passes
+    for the wrong reason regardless of whether the is_absolute() gate exists
+    (finding 8). With the gate, "" is rejected before resolving; reverting the
+    gate makes Path("").resolve() return the cwd, which is now the same tree,
+    and the assertion would flip to True."""
+    monkeypatch.chdir(tmp_path)
     t0 = now_iso()
     receipt = _local_receipt("", t0)
     assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is False
 
 
-def test_local_receipt_with_dot_root_does_not_satisfy(tmp_path):
+def test_local_receipt_with_dot_root_does_not_satisfy(tmp_path, monkeypatch):
+    """Same discrimination as the empty-root test above, for "."."""
+    monkeypatch.chdir(tmp_path)
     t0 = now_iso()
     receipt = _local_receipt(".", t0)
     assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is False
 
 
-def test_local_receipt_with_whitespace_only_root_does_not_satisfy(tmp_path):
+def test_local_receipt_with_whitespace_only_root_does_not_satisfy(tmp_path, monkeypatch):
+    """"   " is NOT a cwd-reference the way "" and "." are -- pathlib treats it
+    as a literal one-component relative path, so chdir'ing into tmp_path alone
+    does not make Path("   ").resolve() collide with tmp_path itself (measured:
+    it resolves to tmp_path/"   ", a subdirectory, not tmp_path). To construct
+    a setup where the is_absolute() gate is what prevents a real coincidental
+    match, expected_root here is that exact subdirectory (need not exist --
+    resolve() doesn't require it): with the gate, "   " is rejected before
+    resolving; reverting the gate makes it resolve to expected_root exactly,
+    and the assertion would flip to True."""
+    monkeypatch.chdir(tmp_path)
+    weird_expected = tmp_path / "   "
     t0 = now_iso()
     receipt = _local_receipt("   ", t0)
-    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=tmp_path) is False
+    assert receipt_satisfies(receipt, t0, max_age_h=12, expected_root=weird_expected) is False
 
 
 def test_empty_or_dot_root_never_manufactures_a_match_against_the_cwd(tmp_path, monkeypatch):
