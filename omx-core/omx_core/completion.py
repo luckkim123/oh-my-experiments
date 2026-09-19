@@ -34,11 +34,20 @@ actions.
 from __future__ import annotations
 
 import fnmatch
+import importlib.metadata
+import json
 import os
+from datetime import timedelta
 from pathlib import Path
 
-from omx_core.omx_paths import OmxError, OmxPaths
+from omx_core.atomic import atomic_path
+from omx_core.clock import parse_iso_utc
+from omx_core.omx_paths import OmxError, OmxPaths, has_anchor, runtime_dir
 from omx_core.profile import load_profile_metrics, validate_run_completion
+
+# design §5: clock skew tolerance for a receipt/defer instant reported as
+# slightly in the future -- anything beyond this is treated as bogus, not aged.
+_CLOCK_SKEW_TOLERANCE = timedelta(minutes=1)
 
 
 def _no_contract() -> dict:
@@ -162,3 +171,111 @@ def evaluate_completion(root) -> dict:
         "how": how,
         "reason": None,
     }
+
+
+# --- completion-gate memory (design §5) -------------------------------------
+#
+# Two separate files under the runtime layer, not one: a receipt (a computed
+# verdict) and a defer (a human's recorded decision to close anyway) answer
+# different questions, and a defer must survive a new receipt being written.
+#
+# Path resolution mirrors hooks/handlers.py:compact_breadcrumb exactly --
+# anchor-gated, never a per-file fallback: an anchored project resolves under
+# `.hq/runtime/experiments/`, a legacy one under `.omx/`.
+
+_RECEIPT_NAME = "completion-receipt.json"
+_DEFER_NAME = "completion-defer.json"
+
+
+def _completion_dir(paths: OmxPaths) -> Path:
+    return runtime_dir(paths.root) if has_anchor(paths.root) else paths.omx_dir
+
+
+def _read_json(target: Path) -> dict | None:
+    """dict on success; None for anything else (missing, unreadable, not JSON,
+    not an object) -- corrupt on-disk state must read the same as absent state,
+    never raise."""
+    try:
+        raw = target.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _fresh(instant, now, max_age_h: float) -> bool:
+    """True when `instant` is no more than `max_age_h` hours older than `now`,
+    and not more than _CLOCK_SKEW_TOLERANCE in `now`'s future -- a receipt/defer
+    reported to be hours or days ahead of now is bogus, not merely young, and
+    must not satisfy just because a naive age check would compute it negative."""
+    age = now - instant
+    return -_CLOCK_SKEW_TOLERANCE <= age <= timedelta(hours=max_age_h)
+
+
+def write_receipt(paths: OmxPaths, verdict: dict, *, source: str, now_iso: str) -> None:
+    """Record a computed run-completion verdict (design §5). `source` is
+    "local" (computed where the hook runs) or "remote" (carried back across
+    an ssh boundary by a later task's `omx close-ack`) -- it is the only
+    reason this receipt distinguishes the two."""
+    try:
+        omx_version = importlib.metadata.version("omx-core")
+    except importlib.metadata.PackageNotFoundError:
+        omx_version = "unknown"
+    receipt = {
+        "checked_at": now_iso,
+        "root": str(paths.root),
+        "state": verdict["state"],
+        "runs_checked": len(verdict["runs"]),
+        "omx_version": omx_version,
+        "source": source,
+    }
+    with atomic_path(_completion_dir(paths) / _RECEIPT_NAME) as tmp:
+        tmp.write_text(json.dumps(receipt, indent=2, sort_keys=True))
+
+
+def read_receipt(paths: OmxPaths) -> dict | None:
+    """The stored receipt, or None if absent or corrupt -- never raises."""
+    return _read_json(_completion_dir(paths) / _RECEIPT_NAME)
+
+
+def receipt_satisfies(receipt: dict | None, now_iso: str, max_age_h: float = 12) -> bool:
+    """Whether `receipt` lets the gate pass right now. A non-"checked" state
+    never satisfies at any age -- acking a failure is the exact bypass this
+    mechanism exists to prevent. An unparseable or future-dated checked_at
+    is treated as not satisfying rather than raised."""
+    if not isinstance(receipt, dict) or receipt.get("state") != "checked":
+        return False
+    try:
+        checked_at = parse_iso_utc(receipt.get("checked_at"), "receipt checked_at")
+        now = parse_iso_utc(now_iso, "now")
+    except OmxError:
+        return False
+    return _fresh(checked_at, now, max_age_h)
+
+
+def write_defer(paths: OmxPaths, reason: str, now_iso: str) -> None:
+    """Record a human's decision to close despite an incomplete/unreadable
+    verdict. An empty or whitespace-only reason is refused -- the reason is
+    the entire difference between a recorded escape and a silent one."""
+    if not isinstance(reason, str) or not reason.strip():
+        raise OmxError("close-defer requires a non-empty reason")
+    defer = {"deferred_at": now_iso, "reason": reason}
+    with atomic_path(_completion_dir(paths) / _DEFER_NAME) as tmp:
+        tmp.write_text(json.dumps(defer, indent=2, sort_keys=True))
+
+
+def active_defer(paths: OmxPaths, now_iso: str, ttl_h: float = 12) -> bool:
+    """Whether a still-live defer exists for `paths`. Missing, corrupt, or
+    expired all read as False -- never raises."""
+    data = _read_json(_completion_dir(paths) / _DEFER_NAME)
+    if data is None:
+        return False
+    try:
+        deferred_at = parse_iso_utc(data.get("deferred_at"), "defer deferred_at")
+        now = parse_iso_utc(now_iso, "now")
+    except OmxError:
+        return False
+    return _fresh(deferred_at, now, ttl_h)
