@@ -736,14 +736,33 @@ def _closure_read_heredoc_word(command, i, n):
     return command[start:j], j
 
 
+def _closure_heredoc_terminator_exists(command, start, delim, strip_tabs) -> bool:
+    """Ruling 30 (task-5 fix-round-5): whether SOME line in `command[start:]`
+    exactly equals `delim` (leading tabs stripped first when `strip_tabs`).
+    The pre-commitment check every candidate heredoc opener must pass BEFORE
+    the scan starts treating anything as body -- see `_closure_mark_line_breaks`."""
+    for line in command[start:].split("\n"):
+        candidate = line.lstrip("\t") if strip_tabs else line
+        if candidate == delim:
+            return True
+    return False
+
+
+#: A `#` only starts a comment when it is the first character of a word
+#: (bash's own rule) -- `echo a#b` and `url#frag` are NOT comments. Checked
+#: against the raw character immediately preceding the `#`.
+_CLOSURE_WORD_START_PRECEDERS = (" ", "\t", "\n", "\r", ";", "|", "&")
+
+
 def _closure_mark_line_breaks(command: str) -> str:
-    """Replace every line break (`\\n`, `\\r`) OUTSIDE quotes and OUTSIDE a
-    heredoc body with `;` before tokenizing (F1, task-5 fix-round-2), while
-    an unquoted backslash immediately before one is a line CONTINUATION and
-    vanishes instead (N1, fix-round-4): bash joins `verb \\<newline>  flag`
-    into one logical line, so marking that newline as a separator was
-    putting the closure verb and its own flag into two different segments
-    -- exactly the shape this scan exists to keep together, done backwards.
+    """Replace every line break (`\\n`, `\\r`) OUTSIDE quotes, OUTSIDE a
+    `#` comment, and OUTSIDE a validated heredoc body with `;` before
+    tokenizing (F1, fix-round-2), while an unquoted backslash immediately
+    before one is a line CONTINUATION and vanishes instead (N1, fix-round-4):
+    bash joins `verb \\<newline>  flag` into one logical line, so marking
+    that newline as a separator was putting the closure verb and its own
+    flag into two different segments -- exactly the shape this scan exists
+    to keep together, done backwards.
 
     `shlex.split` treats a literal newline exactly like a space -- it is
     absorbed into inter-token whitespace and produces no token of its own --
@@ -751,7 +770,7 @@ def _closure_mark_line_breaks(command: str) -> str:
     not an adversarial one) never gets split into segments on its own, and
     the closure verb silently walks through whenever it isn't literally the
     first line. By the time you have tokens this information is already
-    destroyed, so both marks have to happen on the RAW string, before
+    destroyed, so every mark below has to happen on the RAW string, before
     `shlex.split` ever runs. Once marked, the existing `;`-handling in
     `_closure_split_glued_separators` / `_closure_segments` does the rest for
     the separator case -- no other change needed there.
@@ -771,14 +790,45 @@ def _closure_mark_line_breaks(command: str) -> str:
     newline ending the FINAL terminator line (once no heredoc remains
     pending) is marked as a real separator, same as any other line break.
 
+    Ruling 30 (fix-round-5): this scan is, at this point, a hand-rolled
+    shell lexer (quotes, continuations, comments, heredocs), and a
+    hand-rolled shell lexer WILL be wrong on some input -- a mis-extracted
+    delimiter (a stray backslash inside it), a `<<` that was never really a
+    heredoc opener at all (inside a `#` comment this scan didn't yet know
+    about, or a here-string `<<<`), or a heredoc that is genuinely never
+    closed. Before fix-round-5, any of those committed the scan into
+    "consuming heredoc body" with NO way back out, so the entire remainder
+    of the command silently became inert data -- the exact failure this
+    round exists to eliminate, reproduced inside the mechanism meant to
+    enforce it. The fix is a pre-commitment CHECK, not a bigger parser: a
+    candidate heredoc is only entered once `_closure_heredoc_terminator_exists`
+    confirms its terminator line actually appears somewhere later in the
+    command; if it doesn't, this was never a heredoc opener this scan
+    understood, and the newline is marked exactly as if no heredoc had been
+    declared -- the scan degrades to treating the rest of the command as
+    ORDINARY TEXT to keep scanning, never to silently ignoring it. That is
+    the property that makes the accumulated complexity here acceptable: not
+    that this lexer is correct, but that being wrong about it never turns
+    into being blind for everything after.
+
+    A `#` starting a word begins a comment running to the end of the line
+    (bash's own rule -- `echo a#b` and `url#frag` are NOT comments, only a
+    `#` immediately after whitespace or a separator is); nothing inside a
+    comment is a heredoc opener, closing the "`<<` inside a `#` comment"
+    false-negative directly rather than relying on the Ruling-30 backstop
+    alone. `<<<` is a here-string (single-line, no body region), not a
+    heredoc -- all three characters are consumed together so the scan never
+    even attempts to parse a delimiter word for it.
+
     A minimal quote-aware scan otherwise, not full shell grammar -- just
     enough that a newline genuinely embedded in a quoted ARGUMENT (data,
     e.g. a multi-line `--summary`) is never mistaken for a command
     separator either. Single quotes: fully literal, nothing escapes
     (matches POSIX). Double quotes: a backslash escapes the next character,
-    so an escaped `"` doesn't prematurely end the quoted span. Quote
-    tracking and the continuation rule apply OUTSIDE heredoc bodies only --
-    inside one, everything is copied verbatim until the terminator line."""
+    so an escaped `"` doesn't prematurely end the quoted span. Quote,
+    comment, and continuation handling apply OUTSIDE heredoc bodies only --
+    inside a validated one, everything is copied verbatim until the
+    terminator line."""
     out = []
     quote = None  # None | "'" | '"' -- meaningful only outside a heredoc body
     pending_heredocs = []   # [(delim, strip_tabs)] declared on the CURRENT command line
@@ -833,6 +883,13 @@ def _closure_mark_line_breaks(command: str) -> str:
             out.append(c)
             i += 1
             continue
+        if c == "#" and (i == 0 or command[i - 1] in _CLOSURE_WORD_START_PRECEDERS):
+            # a comment runs to end of line -- nothing inside it (an
+            # embedded "<<EOF", a quote, a continuation) is special.
+            while i < n and command[i] not in ("\n", "\r"):
+                out.append(command[i])
+                i += 1
+            continue
         if c == "\\" and i + 1 < n and command[i + 1] in ("\n", "\r"):
             # N1: unquoted line continuation -- the backslash AND the
             # newline (CRLF counted as one) vanish, joining the two lines.
@@ -842,15 +899,17 @@ def _closure_mark_line_breaks(command: str) -> str:
             i = j
             continue
         if c == "<" and i + 1 < n and command[i + 1] == "<":
+            if i + 2 < n and command[i + 2] == "<":
+                # <<< here-string, not a heredoc -- consume all three chars
+                # together so this never falls into delimiter parsing below.
+                out.append(command[i:i + 3])
+                i += 3
+                continue
             j = i + 2
             strip_tabs = False
             if j < n and command[j] == "-":
                 strip_tabs = True
                 j += 1
-            if j < n and command[j] == "<":
-                out.append(c)  # <<< here-string, not a heredoc -- leave alone
-                i += 1
-                continue
             k = j
             while k < n and command[k] in (" ", "\t"):
                 k += 1
@@ -865,9 +924,18 @@ def _closure_mark_line_breaks(command: str) -> str:
             continue
         if c in ("\n", "\r"):
             if pending_heredocs:
-                active_heredocs.extend(pending_heredocs)
-                pending_heredocs = []
-                out.append(c)  # into the heredoc body -- unmarked
+                # Ruling 30: only commit to heredoc mode once every pending
+                # delimiter's terminator is confirmed to exist later in the
+                # command -- an opener that can never close was not a
+                # heredoc opener this scan should act on.
+                if all(_closure_heredoc_terminator_exists(command, i + 1, d, st)
+                       for d, st in pending_heredocs):
+                    active_heredocs.extend(pending_heredocs)
+                    pending_heredocs = []
+                    out.append(c)  # into the heredoc body -- unmarked
+                else:
+                    pending_heredocs = []
+                    out.append(";")  # not a real heredoc -- normal separator
             else:
                 out.append(";")
             i += 1

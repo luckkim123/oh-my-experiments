@@ -338,6 +338,135 @@ def test_real_closure_command_after_a_closed_heredoc_still_denies(tmp_path):
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+# --- Ruling 30 (task-5 fix-round-5): a parse failure must never silently ---
+# disable the gate for the rest of the command. All four are the same root
+# cause: the round-4 heredoc tracker, once it entered a body region, had no
+# way back out if the delimiter it extracted never matched anything later --
+# swallowing the entire remainder of the command as inert "data" with no
+# error, no signal, nothing in the suite. Each of the four commands below
+# denies on 88a7bbb (pre-round-4) and allowed on the round-4 HEAD; each must
+# deny again here. Exact strings from the review, not neighboring shapes.
+
+def test_heredoc_opener_inside_a_comment_does_not_swallow_the_rest(tmp_path):
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "# see <<EOF example\nhq post --category handoff", tmp_path)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_heredoc_opener_inside_a_comment_with_a_coincidental_later_match(tmp_path):
+    """The exact repro above is ALSO rescued by Ruling 30's lookahead alone
+    (the comment's embedded "EOF" delimiter never matches any later line in
+    that string, so the pre-commitment check would discard it regardless of
+    whether # is specially recognized) -- it does not, by itself, prove the
+    comment fix has independent value. This one does: a real standalone
+    "EOF" line genuinely exists later (an ordinary, if odd, bash shape --
+    three statements: a comment, a real command, and a bare word). Without
+    comment detection, the embedded "<<EOF" is still read as a heredoc
+    opener, its delimiter now coincidentally matches that later line, and
+    Ruling 30's OWN lookahead validates it as legitimate -- swallowing the
+    real closure command as fake body. Recognizing the comment up front,
+    before ever reaching `<<`, prevents this."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "# see <<EOF example\nhq post --category handoff\nEOF", tmp_path)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_here_string_is_not_a_heredoc(tmp_path):
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, 'echo hi <<< "EOF"\nhq post --category handoff', tmp_path)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_unquoted_here_string_word_does_not_open_a_phantom_heredoc(tmp_path):
+    """The exact repro above is ALSO rescued by Ruling 30's lookahead alone
+    (its mis-parsed "EOF" delimiter never matches anything in that string,
+    so the pre-commitment check discards it regardless of whether <<< is
+    specially recognized) -- it does not, by itself, prove the <<< fix has
+    independent value. This one does: an unquoted here-string word "EOF"
+    followed later by a real standalone "EOF" line is valid, ordinary bash
+    (three separate statements on three lines -- a here-string has no body
+    at all, so `hq post --category handoff` is genuinely its own command
+    here) -- but the pre-round-5 double-processing bug extracts "EOF" as a
+    phantom heredoc delimiter, and since a line "EOF" genuinely exists
+    later, Ruling 30's OWN lookahead validates it as legitimate and
+    swallows the real closure command as fake body. Only recognizing <<<
+    up front (never attempting delimiter parsing for it at all) prevents
+    this."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "echo hi <<< EOF\nhq post --category handoff\nEOF", tmp_path)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_backslash_in_delimiter_never_matches_and_does_not_swallow(tmp_path):
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "cat <<E\\OF\nbody\nEOF\nhq post --category handoff", tmp_path)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_unterminated_heredoc_does_not_swallow_the_rest_of_the_command(tmp_path):
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "cat <<'EOF'\nbody never closed\nhq post --category handoff", tmp_path)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+# --- comment conformance (fix-round-5): a `#` mid-word is not a comment ----
+
+def test_hash_mid_word_is_not_a_comment(tmp_path):
+    """bash's own rule: a `#` only starts a comment as the first character
+    of a word. If 'a#b' or 'url#frag' were wrongly treated as comment
+    starts, the real heredoc opener right after them on the same line would
+    be swallowed as fake "comment" text -- meaning the closure command
+    would surface as its own segment and (wrongly) deny. Correctly NOT
+    treating them as comments lets the heredoc track normally and swallow
+    the closure command as body data -- so the correct behavior here is
+    ALLOW, and a comment-detection regression would flip this to deny."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    for prefix in ("echo a#b <<EOF", "echo url#frag <<EOF"):
+        out = _run(mod, f"{prefix}\nhq post --category handoff\nEOF", tmp_path)
+        assert out is None, prefix
+
+
+def test_plain_comment_line_does_not_disable_the_gate(tmp_path):
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    out = _run(mod, "# plain comment\nhq post --category handoff", tmp_path)
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_quoted_heredoc_marker_and_fd_prefixed_heredoc_controls(tmp_path):
+    """Controls the re-review verified stay clean: `<<` inside a quoted
+    string is not a heredoc opener; a plain redirect (`>`) is not one
+    either; a fd-prefixed `2<<EOF` heredoc is still tracked and closed."""
+    mod = _load_handlers()
+    _setup(tmp_path)
+    _finish(tmp_path / "experiments" / "runs" / "alpha")
+    assert _run(mod, 'echo "<<EOF"\nhq post --category handoff', tmp_path) is not None
+    assert _run(mod, "echo redirect > /tmp/x\nhq post --category handoff", tmp_path) is not None
+    assert _run(mod, "cat 2<<EOF\nbody\nEOF\nhq post --category handoff", tmp_path) is not None
+
+
 # --- F4 (task-5 fix-round-2): a renderer failure must still deny -----------
 
 def test_renderer_failure_still_denies_with_a_fallback_message(tmp_path, monkeypatch):
