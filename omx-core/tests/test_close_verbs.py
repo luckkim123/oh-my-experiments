@@ -111,7 +111,12 @@ def test_close_check_unreadable_exits_2(tmp_path, capsys):
 def test_close_check_missing_output_root_exits_0(tmp_path, capsys):
     """Ruling 29 (task-5 fix-round-2): the never-created case is now a PASS
     (there is nothing there yet, a definite answer), with a reason a human
-    can still see -- distinct from the genuinely-unreadable FILE case above."""
+    can still see -- distinct from the genuinely-unreadable FILE case above.
+
+    NARROWED by Ruling 36 (task-10 fix-round-1): "never-created" here is a
+    RELATIVE output_root, which stays exactly this -- a pass. See
+    test_close_check_absolute_missing_output_root_exits_2 below for the
+    ABSOLUTE case, which denies."""
     from omx_core import cli
     _setup(tmp_path, output_root="never-created")
     rc = cli.main(["close-check", "--root", str(tmp_path), "--json"])
@@ -120,6 +125,49 @@ def test_close_check_missing_output_root_exits_0(tmp_path, capsys):
     assert out["state"] == "checked"
     assert out["subject_count"] == 0
     assert "does not exist" in out["reason"]
+
+
+def test_close_check_absolute_missing_output_root_exits_2(tmp_path, capsys):
+    """Ruling 36 (task-10 fix-round-1): the case the sibling test above does
+    NOT cover -- an ABSOLUTE, container-shaped output_root ("/workspace/albc/
+    experiments", the exact repro the team lead used) that does not exist on
+    THIS machine. This is design §5's ssh-crossing shape, and before this
+    fix it silently passed at rc 0 just like the relative case -- the gate
+    was off for exactly the project this round was built for. Verified
+    through the real CLI entry point (cli.main), not evaluate_completion
+    directly, since rc is what an operator/hook actually sees."""
+    from omx_core import cli
+    _setup(tmp_path, output_root="/workspace/albc/experiments")
+    rc = cli.main(["close-check", "--root", str(tmp_path), "--json"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 2
+    assert out["state"] == "unreadable"
+    assert "absolute" in out["reason"]
+    assert "not present on this machine" in out["reason"]
+
+
+def test_close_check_human_output_distinguishes_relative_from_absolute_missing(tmp_path, capsys):
+    """Ruling 36 (task-10 fix-round-1), same discipline as Ruling 29's
+    round-3 fix (test_close_check_checked_human_output_distinguishes_missing_from_empty
+    below): the human-readable line -- what an operator actually reads, not
+    --json -- must differ between the two missing-output_root shapes, not
+    just carry the distinction in the JSON payload."""
+    from omx_core import cli
+    relative_root = tmp_path / "rel-case"
+    relative_root.mkdir()
+    _setup(relative_root, output_root="never-created")
+    cli.main(["close-check", "--root", str(relative_root)])
+    relative_out = capsys.readouterr().out
+
+    absolute_root = tmp_path / "abs-case"
+    absolute_root.mkdir()
+    _setup(absolute_root, output_root="/workspace/albc/experiments")
+    cli.main(["close-check", "--root", str(absolute_root)])
+    absolute_out = capsys.readouterr().out
+
+    assert relative_out != absolute_out
+    assert relative_out.startswith("PASS")
+    assert absolute_out.startswith("FAIL")
 
 
 # --- close-check human output ------------------------------------------------

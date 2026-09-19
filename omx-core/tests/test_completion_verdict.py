@@ -115,7 +115,13 @@ def test_missing_output_root_is_checked_not_unreadable(tmp_path):
     tree, still `unreadable` -- see test_output_root_broken_symlink_is_unreadable
     and test_output_root_is_a_file_not_a_directory_is_unreadable below,
     unchanged). Same shape as test_readable_output_root_zero_run_dirs_is_checked
-    (a pass), distinguished only by a non-None `reason` a human can see."""
+    (a pass), distinguished only by a non-None `reason` a human can see.
+
+    NARROWED by Ruling 36 (task-10 fix-round-1) to the case this fixture has
+    always actually been: `_setup`'s default `output_root="experiments"` is
+    RELATIVE. Ruling 36 split what this test used to claim for "any missing
+    output_root" -- see test_absolute_missing_output_root_is_unreadable_not_checked
+    below for the ABSOLUTE case, which now denies instead."""
     _setup(tmp_path)
     # "experiments" is never created
     result = evaluate_completion(tmp_path)
@@ -125,6 +131,29 @@ def test_missing_output_root_is_checked_not_unreadable(tmp_path):
     assert result["subject_count"] == 0
     assert result["output_root"] == str(tmp_path / "experiments")
     assert "does not exist" in result["reason"]
+
+
+def test_absolute_missing_output_root_is_unreadable_not_checked(tmp_path):
+    """Ruling 36 (task-10 fix-round-1): the case Ruling 29 above did NOT
+    cover and the design's own ssh crossing (design §5) depends on -- a
+    project whose output tree sits behind ssh declares `output_root` as the
+    ABSOLUTE remote path (a container-shaped example: "/workspace/albc/
+    experiments", not a generic /tmp path), and if THIS machine cannot see
+    it, that is "I cannot tell", not "nothing to grade yet". Before this
+    fix, an absolute-and-missing output_root read identically to a
+    relative-and-missing one (`checked`) -- the exact defect this whole
+    round exists to remove, reproduced live by the team lead against this
+    branch's own Ruling-29 code and confirmed here."""
+    output_root = "/workspace/albc/experiments"  # absolute; deliberately does not exist on this machine
+    _setup(tmp_path, output_root=output_root)
+    result = evaluate_completion(tmp_path)
+    assert result["state"] == "unreadable"
+    assert result["runs"] == []
+    assert result["missing"] == []
+    assert result["subject_count"] is None
+    assert result["output_root"] == output_root
+    assert "absolute" in result["reason"]
+    assert "not present on this machine" in result["reason"]
 
 
 def test_readable_output_root_zero_run_dirs_is_checked(tmp_path):

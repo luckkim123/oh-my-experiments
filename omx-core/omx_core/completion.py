@@ -129,8 +129,9 @@ def evaluate_completion(root) -> dict:
         return _unreadable(
             None, how,
             reason=f"metrics.yaml: output_root must be a non-empty string, got {output_root_raw!r}")
+    output_root_declared_absolute = Path(output_root_raw).is_absolute()
     output_root = Path(output_root_raw)
-    if not output_root.is_absolute():
+    if not output_root_declared_absolute:
         output_root = paths.root / output_root  # output_root is caller-supplied, never derived (omx_paths.py:601-607)
 
     try:
@@ -153,6 +154,25 @@ def evaluate_completion(root) -> dict:
             # is now broken, a different fact than "never created"), or a
             # present-but-unreadable one (EACCES, below) is unchanged --
             # "I cannot tell" stays `unreadable` for all three.
+            #
+            # Ruling 36 (task-10 fix-round-1) splits this on whether the
+            # DECLARED output_root (output_root_raw, before the relative
+            # join above) was absolute. A relative path resolves under this
+            # project's own root -- Ruling 29's case, unchanged: "not there"
+            # genuinely means "hasn't run yet". An absolute path is a
+            # deliberate declaration of a location, and design §5's ssh
+            # crossing depends on exactly this: a project whose output tree
+            # sits behind ssh declares `output_root` as the absolute remote
+            # path, and if THIS machine cannot see it, that is "I cannot
+            # tell" -- the same fact as a permission-denied or broken-
+            # symlink tree, not "nothing to grade". Ruling 29 merged the two
+            # because it only ever measured the relative shape; Ruling 36
+            # reproduced the absolute one live and found the gate silently
+            # off for exactly the project this round exists for.
+            if output_root_declared_absolute:
+                return _unreadable(
+                    str(output_root), how,
+                    reason=f"output_root is an absolute path not present on this machine: {output_root}")
             return {"state": "checked", "runs": [], "missing": [], "subject_count": 0,
                     "output_root": str(output_root), "how": how,
                     "reason": f"output_root does not exist yet: {output_root}"}
