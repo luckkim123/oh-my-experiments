@@ -162,6 +162,15 @@ crossing. A locally written receipt cannot be confused with another project's, b
 is stored under its own root's runtime layer and read back from there. The one exposed
 surface is `close-ack`, which ingests a receipt produced anywhere and stores it here.
 
+That is true of a **remote** receipt. It is not true of a local one, and assuming it was
+is a mistake this document made until a reviewer reproduced it: copy a `checked` receipt
+file from one project's store into another's and it satisfies, with its own `root` field
+still naming the first. The distinction the receipt already carries is `source`. A
+`source: "local"` receipt was written here by `close-check --record`, so its `root` must
+equal the root being evaluated and is refused otherwise — free, and it closes that
+reproduction. Only `source: "remote"` is exempt, because only there is the mismatch
+structural. A receipt with a missing or unrecognised `source` satisfies nothing.
+
 So `close-ack` is trusted the way `close-defer` is trusted — it is a deliberate human
 act, and the design makes it visible rather than pretending to verify it. Three
 consequences follow, and they are requirements: the ack **prints** the receipt's origin
