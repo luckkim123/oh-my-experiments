@@ -243,11 +243,60 @@ disarm the gate FIRST so the Stop hook lets the session rest:
 
     omx loop-disarm --reason done --root <root>
 
+(If this project declared a `run_completion` contract, this command can be
+DENIED — see "Close-out: the run-completion gate" below before disarming.)
+
 Deadline expiry needs no action — the gate self-disarms on the next stop.
 
 Use the reason that matches WHY you stopped: `done` (work complete), `cancel`
 (user asked), `plateau` / `fault_circuit` (a `loop-health` trip) — the reason is
 recorded in the completion marker and the campaign forensics.
+
+## Close-out: the run-completion gate
+
+`hq post --category handoff`, `omx loop-disarm`, and `omx loop-mark-done` are the
+three commands the harness treats as "this session is declaring the work done." A
+`PreToolUse` hook (`closure_guard`) denies any of them when this project declared a
+`run_completion` contract (exp-init's "Completion contract" section — the four
+required keys) and a finished run under `output_root` is missing one of the
+artifacts that contract names. A project that never declared one is never gated.
+
+Check it yourself before disarming, rather than finding out from a denied tool call:
+
+    omx close-check --root <root>
+
+- `PASS` (`no-contract` or `checked`) — disarm as usual, above.
+- `FAIL — incomplete` — it names the run(s), the missing artifact glob(s), and the
+  exact `how` command that produces them (frequently exp-analyze's own eval/plot
+  outputs). Produce them and re-check.
+- `FAIL — unreadable` — the declared `output_root` itself could not be read (a
+  wrong path, a permission problem, or a broken symlink).
+
+If the run is genuinely done but an artifact truly cannot be produced (a discarded
+run, an aborted probe), that is a human decision, not yours to make silently:
+surface the `FAIL` to the user and, only on their explicit approval, record it —
+never invent or paraphrase their reason:
+
+    omx close-defer --root <root> --reason "<the user's own stated reason, verbatim>"
+
+### When `output_root` lives behind ssh (a container/remote tree)
+
+`closure_guard` and a local `omx close-check` both run on THIS machine and can only
+read what this machine can read. Measured against this round's own code: a
+declared `output_root` that simply does not exist here (the ordinary shape of "the
+tree is on the far side of an ssh hop") reads as a **pass** with a `reason` line
+naming the missing path — never a blind deny — so a local check alone does not
+gate a remote tree by itself. The way to actually gate one is the receipt path
+(design §5): run the check where the tree lives, then bring the verdict back —
+
+    ssh <host> 'omx close-check --root <remote_root> --json' | omx close-ack --root <root> --from -
+
+`close-ack` prints what it is about to trust (origin root, state, timestamp, run
+count) BEFORE storing it, and refuses a payload that is not `checked` or is
+already stale (default max age 12h) — acking a failure would be exactly the
+silent wave-through this gate exists to prevent. `omx close-check --root <root>`
+afterward reports `PASS — satisfied by a remote receipt for <root>, checked at
+<time>` rather than a bare pass, so the audit trail survives the crossing.
 
 ## Hard constraints (never violate)
 
@@ -259,6 +308,8 @@ recorded in the completion marker and the campaign forensics.
   CLI verbs, which resolve paths via the core (path-SSOT).
 - NEVER invent a verdict. The pass/score decision comes ONLY from `omx eval`'s
   JSON (the evaluator contract), and the keep/discard from its `decision` block.
+- NEVER run `omx close-defer` with a fabricated or paraphrased reason. A defer is
+  a recorded human decision (design §6); its reason must be the user's own words.
 - The deadline ceiling gates ONLY analyze/design/eval — it is NEVER a launch
   trigger.
 - NEVER auto-fix, edit, or delete a wiki page from a lint result. lint is

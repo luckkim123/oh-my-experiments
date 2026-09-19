@@ -88,6 +88,9 @@ def test_contract_absent_names_run_completion_and_its_file(tmp_path):
     # user there sent them on a trip that doesn't answer the question. No
     # dead-end pointer until a real doc/skill target exists (Task 10).
     assert "close-check" not in ctx
+    # Task 10: the dead pointer is replaced, not left absent -- exp-init's
+    # SKILL.md now carries the real "Completion contract" section.
+    assert "exp-init" in ctx
 
 
 def test_contract_absent_also_fires_on_resume(tmp_path):

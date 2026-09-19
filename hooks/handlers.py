@@ -560,11 +560,15 @@ def completion_notice(payload):
         # close-check --help` documents --root/--json/--record and never
         # mentions run_completion or metrics.yaml, so pointing there sent a
         # user on a trip that doesn't answer the question this line raised.
-        # Name the two concrete things instead (the key, the file) and stop
-        # there until a real doc/skill target exists (Task 10).
+        # Task 10 built the real target (skills/exp-init/SKILL.md's
+        # "Completion contract" section, the four keys + a worked example) and
+        # named it here -- exp-init is the one skill that already writes
+        # metrics.yaml, so it is a real, discoverable next step rather than a
+        # second dead end. +24 chars over the pointer-free line (147 -> 171).
         body = (
             "omx: this project has no `run_completion` block in profile/metrics.yaml "
-            "-- finished runs are never grade-checked before closure. Add one to opt in.")
+            "-- finished runs are never grade-checked before closure. "
+            "exp-init's interview can add one (opt-in).")
         return {"hookSpecificOutput": {
             "hookEventName": "SessionStart",
             "additionalContext": body,
@@ -1363,11 +1367,22 @@ _STAGE_CLI_VERBS = {
                                "wiki gc-apply", "wiki promote-recipe"}),
     "exp-design": frozenset({"campaign-plan-add", "probe-novelty", "program-status",
                               "proposal-lint"}),
-    "exp-loop": frozenset({"campaign-init", "campaign-log", "loop-arm", "loop-disarm",
-                            "loop-health", "loop-status", "queue-launch", "revert-config",
-                            "run-record", "run-seed", "tree-alias", "tree-scaffold",
-                            "wiki lint"}),
+    "exp-loop": frozenset({"campaign-init", "campaign-log", "close-ack", "close-defer",
+                            "loop-arm", "loop-health", "loop-status", "queue-launch",
+                            "revert-config", "run-record", "run-seed", "tree-alias",
+                            "tree-scaffold", "wiki lint"}),
 }
+# Task 10 recompute (2026-09-19): exp-loop's new "Close-out" section names
+# `close-ack`/`close-defer` (newly distinctive -- mentioned nowhere else) and
+# also names `loop-disarm`/`loop-mark-done` in prose alongside `hq post
+# --category handoff`; exp-init's new "Completion contract" section names
+# the same two verbs (and `close-check`) while explaining what triggers the
+# gate. That makes `loop-disarm`/`loop-mark-done`/`close-check` non-
+# distinctive (shared across 2+ stage docs now) -- `loop-disarm` drops out of
+# this dict entirely (it was exp-loop-only before), `loop-mark-done` was
+# never in it (already shared), and `close-check` never enters it either.
+# Recomputed via `omx-core/tests/test_stage_cli_verbs_match_source.py`'s own
+# method, not invented.
 _STAGE_CLI_VERB_RE = {
     stage: re.compile(r"\bomx (?:" + "|".join(re.escape(v) for v in verbs) + r")\b")
     for stage, verbs in _STAGE_CLI_VERBS.items()

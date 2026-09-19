@@ -706,5 +706,14 @@ never curates (slug append-merge absorbs the duplicate when you DO curate).
 - Tree hygiene (report-only): `omx tree-audit --root <root>` — surface violations
   to the user; never auto-fix the tree.
 
+**A complete report does not, by itself, clear a project's run-completion gate.**
+If this project declared a `run_completion` contract (see exp-init's "Completion
+contract" section), what satisfies it is the finished run's own `required`
+artifacts on disk — typically the eval outputs and promoted plots this skill or
+`omx eval` just produced, not `report.md`'s prose. `omx close-check --root <root>`
+reports the verdict (missing artifacts + the exact command that makes them, if
+any are missing); a project with no contract gets `no-contract` and nothing is
+gated. Producing exactly what that command names is what clears it.
+
 Then STOP.
 Do not propose or launch a next experiment — that is exp-design's job (#5).

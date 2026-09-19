@@ -107,6 +107,56 @@ to ground the score-formula question — using ONLY the Claude-free core verbs (
 This is read-only grounding; it writes nothing. If no data exists yet, proceed with the
 interview on the user's stated intent alone.
 
+## One more question after the gate clears: the completion contract (optional)
+
+Before assembling the profile, ask ONE more question — outside the ambiguity gate, it
+never blocks profile-write. A project that answers "no" here is a legitimate, fully
+supported state (design doc §3/§4, success criterion 3), not an incomplete interview:
+
+```
+One more thing (optional) — when a training run finishes, should this project require
+its own evaluation artifacts to exist before a session can close it (via `hq post
+--category handoff`, `omx loop-disarm`, or `omx loop-mark-done`)?
+
+  [1] Yes — set it up now (4 short questions)
+  [2] No — skip; closures stay ungated (can be added by hand, or by re-running exp-init, later)
+```
+
+On [2] (or a free-text decline), write no `run_completion` key at all and move on.
+
+On [1], elicit the FOUR REQUIRED keys of the `run_completion` block (validated by
+`omx_core.profile.validate_run_completion` — every glob is relative to `output_root`
+and may not be absolute or contain a `..` segment):
+
+| Key | Meaning | Example |
+|:--|:--|:--|
+| `runs` | Glob under `output_root` — each match is one run directory. | `"runs/*"` |
+| `finished` | Glob under a run directory — a match means that run FINISHED. `rc`/exit status is never consulted (a crashed teardown can exit non-zero on a genuinely finished run, and a `SystemExit` inside a training script can exit 0 on one that never trained). | `"checkpoints/*.pt"` |
+| `required` | Non-empty list of globs (relative to the run directory) — each must match at least once for a finished run to pass. | `["eval/*.json", "plots/*.png"]` |
+| `how` | The command that produces `required`. Opaque to omx — it is only ever printed, never run, so a local command or an `ssh host '...'` line both work; `{run}` is substituted with the run directory's path. | `"python analysis/eval.py static --run {run}"` |
+
+And the one OPTIONAL key:
+
+| Key | Meaning | Example |
+|:--|:--|:--|
+| `exclude` | Globs (relative to `output_root`, matched against run directories) to keep out of the subject set — smoke/probe runs that should never demand a full evaluation. | `["runs/smoke-*"]` |
+
+Fold the answers straight into the assembled metrics dict as `run_completion: {...}`
+(step 1 below) — there is no separate write step, and `omx init`'s bootstrap validator
+does **not** check this block (it is validated separately, on-demand, by
+`omx close-check`/`closure_guard`). Build the four keys correctly during the interview:
+a malformed block is written as-is at rc 0 and only surfaces later, as `omx close-check`
+reporting `FAIL — unreadable: run_completion: missing required key '...'` — which then
+blocks every closure declaration in this project until it is fixed (measured
+2026-09-19 against this exact core).
+
+If the project's output tree lives behind ssh (a training container the session
+doesn't have a shell in), `output_root` still names that path — declared here, at the
+root the session runs in. `omx close-check` on this machine then either reads it
+directly (if mounted) or reports a diagnosable state (see exp-loop's "Close-out: the
+run-completion gate" section for the receipt workflow that actually gates a tree it
+cannot read).
+
 ## When the gate clears (`ambiguity ≤ 0.2` or early exit): build the profile
 
 Do NOT write profile files yourself. Assemble the interview result into a `metrics.yaml`
@@ -123,13 +173,23 @@ dict and shell the Claude-free core verb, which validates and atomic-writes it:
      "sources": ["eval_summary"],
      "run_id_regex": null,
      "keep_policy": "<pass_only | score_improvement — from the Criteria dimension>",
-     "score_formula": null
+     "score_formula": null,
+     "run_completion": {
+       "runs": "runs/*",
+       "finished": "checkpoints/*.pt",
+       "required": ["eval/*.json"],
+       "how": "python analysis/eval.py static --run {run}"
+     }
    }
    ```
    `score_formula` rule: under `pass_only` it MUST be JSON `null` (the literal null,
    not the string `"null"`). Under `score_improvement` it MUST be a real non-empty
    string — the formula you elicited in the interview (e.g. `mean(ss_error) + 0.5*cv(ss_error)`);
    the core loud-fails if it is null/empty under score_improvement (B5).
+
+   `run_completion` rule: omit the key entirely (or leave it `null`) when the user
+   answered [2] above — both read as "no contract" (design §3). Only include it, with
+   all four required sub-keys filled from the interview, on [1].
 
    Every list entry must be a lowercase token (`[a-z0-9_]`, no `__`); the core will loud-fail
    otherwise (and you should re-ask rather than mangle the user's word).
@@ -165,6 +225,7 @@ any analysis, design, eval, or training:
 Profile bootstrapped (pending approval) at <anchor>/.hq/config/experiments/profile/ (legacy <anchor>/.omx/profile/):
   - evaluator.sh   — seeded from the <profile-name> reference (edit the STUB block for your eval)
   - metrics.yaml   — <one-line summary: output_root, N metrics, keep_policy>
+                     run_completion: <declared, N required artifact(s) | not declared>
   - rules.md       — your analysis discipline (fill in Always/Never)
   - launch.sh      — your training command template (exp-init never runs it)
 
