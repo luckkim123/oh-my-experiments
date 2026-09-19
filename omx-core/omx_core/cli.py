@@ -2024,6 +2024,14 @@ def _print_close_check_human(verdict: dict, satisfied: dict | None) -> None:
     if state == "checked":
         print(f"PASS — checked: {finished_n} finished run(s) complete, out of {subj_n} "
               f"candidate run director{plural} under {verdict['output_root']}.")
+        if verdict.get("reason"):
+            # Ruling 29 (task-5 fix-round-3): a missing output_root is
+            # `checked` (a pass) but carries a distinct `reason` -- printing
+            # it is the ONE thing that keeps this line from reading
+            # identically to a genuinely empty, existing tree. The reason
+            # was already in the --json payload; only the human line was
+            # dropping it.
+            print(f"  {verdict['reason']}")
         return
     if state == "incomplete":
         print(f"FAIL — incomplete: {len(verdict['missing'])} of {finished_n} finished run(s) missing "

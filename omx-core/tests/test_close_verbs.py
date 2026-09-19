@@ -148,6 +148,33 @@ def test_close_check_unreadable_human_output_names_reason(tmp_path, capsys):
     assert "not-a-dir" in out
 
 
+def test_close_check_checked_human_output_distinguishes_missing_from_empty(tmp_path, capsys):
+    """Ruling 29 (task-5 fix-round-3): the JSON payload already carried a
+    distinct `reason` for a missing output_root, but `_print_close_check_human`
+    was dropping it, so the human-readable line -- the one an operator
+    actually reads, not --json -- was byte-identical for "never ran" and
+    "genuinely empty tree". Assert the two outputs literally DIFFER, not
+    just that one contains "does not exist": that weaker assertion would
+    still pass if the empty-tree case ever grew the same text by accident."""
+    from omx_core import cli
+    _setup(tmp_path)
+    rc_missing = cli.main(["close-check", "--root", str(tmp_path)])
+    out_missing = capsys.readouterr().out
+
+    (tmp_path / "experiments").mkdir()  # now make the SAME path exist, empty
+    rc_empty = cli.main(["close-check", "--root", str(tmp_path)])
+    out_empty = capsys.readouterr().out
+
+    assert rc_missing == 0 and rc_empty == 0
+    assert out_missing != out_empty
+    assert "does not exist" in out_missing
+    assert "does not exist" not in out_empty
+    # the first line (the PASS summary) is unchanged in both -- only a
+    # SECOND line is added for the missing case, per the controller's
+    # instruction to keep the no-reason line untouched.
+    assert out_missing.splitlines()[0] == out_empty.splitlines()[0]
+
+
 def test_close_check_unreadable_from_malformed_contract_block_has_no_none_prefix(tmp_path, capsys):
     """A malformed run_completion block fails before output_root is ever read,
     so evaluate_completion returns output_root=None -- the human line must not
