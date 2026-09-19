@@ -9,7 +9,7 @@ test count recorded — a later green with fewer tests is not a pass
 
 ---
 
-## T1 — `run_completion` contract: parse + validate
+## Task 1 — `run_completion` contract: parse + validate
 
 **Files**: `omx-core/omx_core/profile.py`, `omx-core/tests/test_run_completion_contract.py`
 
@@ -30,7 +30,7 @@ the offending key named; absent block → `None`; absolute and `..` globs reject
 
 ---
 
-## T2 — the verdict engine
+## Task 2 — the verdict engine
 
 **Files**: `omx-core/omx_core/completion.py` (new), `omx-core/tests/test_completion_verdict.py`
 
@@ -66,7 +66,7 @@ Algorithm:
 
 ---
 
-## T3 — receipt + defer store
+## Task 3 — receipt + defer store
 
 **Files**: `omx-core/omx_core/completion.py`, `omx-core/tests/test_completion_receipt.py`
 
@@ -88,7 +88,7 @@ no raise; defer expires; empty-reason defer refused.
 
 ---
 
-## T4 — CLI verbs
+## Task 4 — CLI verbs
 
 **Files**: `omx-core/omx_core/cli.py`, `omx-core/tests/test_close_verbs.py`
 
@@ -113,7 +113,7 @@ payload; `close-ack -` reads stdin; a malformed payload exits 2 rather than rais
 
 ---
 
-## T5 — `closure_guard` hook handler
+## Task 5 — `closure_guard` hook handler
 
 **Files**: `oh-my-experiments/hooks/handlers.py`, `omx-core/tests/test_closure_guard.py`
 
@@ -145,7 +145,7 @@ trigger; non-Bash tools pass; `unreadable` denies; `no-contract` allows; a poiso
 
 ---
 
-## T6 — `completion_notice` SessionStart handler
+## Task 6 — `completion_notice` SessionStart handler
 
 **Files**: `hooks/handlers.py`, `omx-core/tests/test_completion_notice.py`
 
@@ -158,7 +158,7 @@ present → `None`; no omx layer → `None`; internal error → `None`.
 
 ---
 
-## T7 — hook registration
+## Task 7 — hook registration
 
 **Files**: `.claude-plugin/plugin.json`, `omx-core/tests/test_hook_registration.py`
 
@@ -171,7 +171,7 @@ this is the registration-drift check, and it must fail if either side is edited 
 
 ---
 
-## T8 — `stage_check` Stop handler
+## Task 8 — `stage_check` Stop handler
 
 **Files**: `hooks/handlers.py`, `omx-core/tests/test_stage_check.py`
 
@@ -197,7 +197,7 @@ missing transcript → `None`; already-blocked (`stop_hook_active: true`) → `N
 
 ---
 
-## T9 — repository hygiene test
+## Task 9 — repository hygiene test
 
 **Files**: `omx-core/tests/test_no_project_content.py`
 
@@ -206,7 +206,7 @@ Walk the repository (excluding `.git`) and assert none of `p6`, `albc`, `IsaacLa
 
 ---
 
-## T10 — skills and docs
+## Task 10 — skills and docs
 
 **Files**: `skills/exp-init/SKILL.md`, `skills/exp-analyze/SKILL.md`, `skills/exp-loop/SKILL.md`, `README.md`
 
@@ -221,7 +221,7 @@ Walk the repository (excluding `.git`) and assert none of `p6`, `albc`, `IsaacLa
 
 ---
 
-## T11 — cross-model attack on the hook
+## Task 11 — cross-model attack on the hook
 
 Hand `hooks/handlers.py` (the new handlers only) and their tests to a **different
 model family** — `codeagent-wrapper --agent oracle --backend agy` — with the brief:
@@ -232,7 +232,7 @@ recorded as not reproduced, not fixed.
 
 ---
 
-## T12 — version bump, CHANGELOG, PR
+## Task 12 — version bump, CHANGELOG, PR
 
 - `.claude-plugin/plugin.json` → `0.17.0`; `scripts/sync_version.py` / `test_version_sync.py`
   decide whether anything else moves.
@@ -243,7 +243,7 @@ recorded as not reproduced, not fixed.
 
 ---
 
-## T13 — real-session firing check
+## Task 13 — real-session firing check
 
 A string test is not the consumer. In an actual Claude Code session with the plugin
 installed from this working copy, on a fixture project with an `incomplete` contract,
