@@ -378,10 +378,23 @@ def read_defer(paths: OmxPaths) -> dict | None:
 
 
 def active_defer(paths: OmxPaths, now_iso: str, ttl_h: float = 12) -> bool:
-    """Whether a still-live defer exists for `paths`. Missing, corrupt, or
-    expired all read as False -- never raises."""
+    """Whether a still-live defer exists for `paths`: timestamp-fresh AND
+    carrying a readable, non-empty string `reason` (Ruling 26). That
+    conjunction is what "active" means -- `write_defer` already refuses to
+    create a defer without one, so a stored file missing/blank/non-string
+    `reason` did not come from this module's own writer; it is corruption
+    (hand-edited, or a future writer that drops the field), and a defer
+    whose reason cannot be read is not a recorded escape -- the reason is
+    the entire thing that distinguishes a defer from a silent bypass. This
+    predicate is the one place every caller (task 4's `close-check`, task
+    5's `closure_guard` hook) gets that check for free, rather than each
+    re-deriving it at its own call site. Missing, corrupt, expired, or
+    reason-less all read as False -- never raises."""
     data = _read_json(_completion_dir(paths) / _DEFER_NAME)
     if data is None:
+        return False
+    reason = data.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
         return False
     try:
         deferred_at = parse_iso_utc(data.get("deferred_at"), "defer deferred_at")

@@ -2,6 +2,7 @@
 a computed verdict, and a defer recording a human's decision to close anyway.
 Both cross the ssh boundary a later task wires up -- these tests only cover
 the storage layer. Fixture trees under tmp_path; no network, no ssh."""
+import json
 import os
 from datetime import timedelta
 
@@ -337,6 +338,51 @@ def test_defer_expires_after_ttl(tmp_path):
 def test_no_defer_file_means_not_active(tmp_path):
     paths = OmxPaths(root=tmp_path)
     assert active_defer(paths, now_iso(), ttl_h=12) is False
+
+
+# --- Ruling 26 (fix-round-2): active_defer folds reason-readability into
+# "active" itself, so every caller (task 4's close-check, task 5's
+# closure_guard hook) gets it for free rather than re-deriving it. Pins the
+# exact three shapes the controller's live probe found returning True before
+# this round -- a defer file that is timestamp-fresh but was never actually
+# produced by write_defer (which refuses an empty/whitespace reason at write
+# time), so a stored `reason` this broken is necessarily hand-edited or from
+# a future writer that drops the field.
+
+def test_active_defer_false_when_reason_key_missing(tmp_path):
+    paths = OmxPaths(root=tmp_path)
+    target = tmp_path / ".omx" / "completion-defer.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps({"deferred_at": now_iso()}))
+    assert active_defer(paths, now_iso(), ttl_h=12) is False
+
+
+def test_active_defer_false_when_reason_is_blank(tmp_path):
+    paths = OmxPaths(root=tmp_path)
+    target = tmp_path / ".omx" / "completion-defer.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps({"deferred_at": now_iso(), "reason": "   "}))
+    assert active_defer(paths, now_iso(), ttl_h=12) is False
+
+
+def test_active_defer_false_when_reason_is_not_a_string(tmp_path):
+    paths = OmxPaths(root=tmp_path)
+    target = tmp_path / ".omx" / "completion-defer.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps({"deferred_at": now_iso(), "reason": 42}))
+    assert active_defer(paths, now_iso(), ttl_h=12) is False
+
+
+def test_active_defer_true_for_a_well_formed_hand_written_defer(tmp_path):
+    """The positive control for the three tests above -- confirms the new
+    reason check doesn't reject a legitimately-shaped defer that merely
+    wasn't produced via write_defer (e.g. carried in from a schema-compatible
+    external writer), only a genuinely unreadable reason."""
+    paths = OmxPaths(root=tmp_path)
+    target = tmp_path / ".omx" / "completion-defer.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps({"deferred_at": now_iso(), "reason": "waiting on hardware"}))
+    assert active_defer(paths, now_iso(), ttl_h=12) is True
 
 
 def test_empty_reason_defer_refused(tmp_path):

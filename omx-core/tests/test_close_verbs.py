@@ -83,10 +83,14 @@ def test_close_check_incomplete_exits_1(tmp_path, capsys):
     _setup(tmp_path)
     _finish(tmp_path / "experiments" / "runs" / "alpha")
     rc = cli.main(["close-check", "--root", str(tmp_path), "--json"])
-    out = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
     assert rc == 1
     assert out["state"] == "incomplete"
     assert out["missing"][0]["run"] == "runs/alpha"
+    # fix-round-2 negative control: no defer file at all is the common,
+    # unremarkable case -- must not trigger _warn_if_defer_present_but_unreadable.
+    assert captured.err == ""
 
 
 def test_close_check_unreadable_exits_2(tmp_path, capsys):
@@ -249,8 +253,10 @@ def test_close_check_defer_missing_reason_does_not_crash_and_does_not_satisfy(tm
     defer_path.write_text(json.dumps({"deferred_at": now_iso()}))  # no "reason" key
 
     rc = cli.main(["close-check", "--root", str(tmp_path), "--json"])
-    out = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
     assert rc == 1  # did not crash, did not silently pass
+    assert "reason" in captured.err.lower()  # fix-round-2: warning still fires (Ruling 26)
     assert out["state"] == "incomplete"
     assert "satisfied_by" not in out
 

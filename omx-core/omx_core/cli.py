@@ -1957,6 +1957,24 @@ def _close_check_verdict_payload(paths: OmxPaths, verdict: dict, now: str) -> di
     return payload
 
 
+def _warn_if_defer_present_but_unreadable(paths: OmxPaths) -> None:
+    """fix-round-2 (Ruling 26): `active_defer` now folds reason-readability
+    into "active" itself, so False can mean no file, an expired defer, OR a
+    present defer with a missing/blank/non-string `reason` -- three different
+    operator situations collapsed onto one bool. Surface the one that is
+    silent corruption (fix-round-1 finding A's original shape) rather than a
+    normal non-active state; `read_defer` (never raises) is what lets this
+    tell "no defer at all" from "one that's there but unreadable"."""
+    defer = read_defer(paths)
+    if defer is None:
+        return  # no file, or unparseable JSON -- nothing to warn about here
+    reason = defer.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        print("WARNING: a defer is on file but missing a readable 'reason' -- not "
+              "treated as an active escape (a defer without its reason is not a "
+              "recorded one)", file=sys.stderr)
+
+
 def _close_check_satisfied_via(paths: OmxPaths, verdict: dict, now: str) -> dict | None:
     """None unless the RAW verdict already failed (incomplete/unreadable) --
     a defer/receipt shortcut is a rescue, never consulted when the tree is
@@ -1964,30 +1982,17 @@ def _close_check_satisfied_via(paths: OmxPaths, verdict: dict, now: str) -> dict
     if verdict["state"] not in ("incomplete", "unreadable"):
         return None
     if active_defer(paths, now, ttl_h=_CLOSE_MAX_AGE_H):
-        # active_defer/read_defer are both documented "never raises" for a
-        # missing/corrupt FILE, but a defer file that parses as a dict and is
-        # timestamp-fresh can still be hand-edited to drop `reason` itself
-        # (fix-round-1 finding A). Ruling: a defer whose reason cannot be read
-        # is not a recorded escape -- the reason IS the entire thing that
-        # distinguishes a defer from a silent bypass -- so it must not
-        # satisfy. Fall through to the receipt check rather than crash or
-        # silently treat a blank reason as valid (`.get()` throughout, same
-        # style as the receipt branch below, never `[]`).
-        defer = read_defer(paths) or {}
-        reason = defer.get("reason")
-        deferred_at = defer.get("deferred_at")
-        if isinstance(reason, str) and reason.strip() and deferred_at:
-            try:
-                expires_at = (clock.parse_iso_utc(deferred_at, "deferred_at")
-                              + timedelta(hours=_CLOSE_MAX_AGE_H)).isoformat()
-                return {"via": "defer", "reason": reason, "deferred_at": deferred_at,
-                        "expires_at": expires_at}
-            except OmxError:
-                pass  # deferred_at parsed fresh enough for active_defer's own check
-                       # but not by parse_iso_utc's stricter contract -- still refuse
-        print("WARNING: a defer is on file and timestamp-fresh but missing a readable "
-              "'reason' -- not treated as an active escape (a defer without its reason "
-              "is not a recorded one)", file=sys.stderr)
+        # active_defer (completion.py, Ruling 26) is now the one place that
+        # decides what "active" means -- it already requires a timestamp-fresh
+        # instant AND a readable, non-empty string `reason` before returning
+        # True, so both fields are guaranteed present and valid here; this
+        # call site no longer re-derives that check.
+        defer = read_defer(paths)
+        expires_at = (clock.parse_iso_utc(defer["deferred_at"], "deferred_at")
+                      + timedelta(hours=_CLOSE_MAX_AGE_H)).isoformat()
+        return {"via": "defer", "reason": defer["reason"], "deferred_at": defer["deferred_at"],
+                "expires_at": expires_at}
+    _warn_if_defer_present_but_unreadable(paths)
     receipt = read_receipt(paths)
     if receipt_satisfies(receipt, now, max_age_h=_CLOSE_MAX_AGE_H, expected_root=paths.root):
         # A remote receipt's meaningful root is `origin_root` (write_receipt keeps
