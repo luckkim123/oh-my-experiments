@@ -130,10 +130,10 @@ to a human who runs it.
 
 The hard problem stated in the prompt: on the project that motivated this round, the
 omx root and output tree sit inside a container across ssh while hooks run on the
-workstation. Measured on this machine 2026-09-19:
-`/Users/kimseungmin/workspace/.hq/config/experiments` exists (so `_has_omx_marker`
-fires and `route_emit` injects every turn) but holds only `programs/` — **there is no
-profile at the Mac root**, and no run tree.
+workstation. Measured 2026-09-19 on that project's workstation: its
+`.hq/config/experiments` layer exists (so `_has_omx_marker` fires and `route_emit`
+injects every turn) but holds only `programs/` — **there is no profile at the
+workstation root**, and no run tree.
 
 The answer is not to teach the hook to ssh. It is to put the check where the tree is
 and make the hook demand its receipt:
