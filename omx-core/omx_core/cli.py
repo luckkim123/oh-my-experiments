@@ -9,11 +9,20 @@ import json
 import math
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from omx_core import clock
 from omx_core import integrity as _integrity
+from omx_core.completion import (
+    active_defer,
+    evaluate_completion,
+    read_defer,
+    read_receipt,
+    receipt_satisfies,
+    write_defer,
+    write_receipt,
+)
 from omx_core.coverage import check_coverage, check_cross_run_refs
 from omx_core.decision import decide_outcome, parse_keep_policy, seed_stats
 
@@ -1919,6 +1928,249 @@ def _cmd_campaign_drift(args) -> int:
     return 0
 
 
+# --- run-completion gate: close-check / close-ack / close-defer (task 4) ----
+#
+# design §4: close-check is the one place the verdict is computed; the hook
+# (a later task) never re-implements it. design §6's decision order (active
+# defer -> fresh receipt -> compute) is mirrored HERE too, not just in the
+# hook: a human running close-check on an incomplete/unreadable tree needs to
+# see exactly what closure_guard would decide, and "the tree is genuinely
+# clean" must never read the same as "a defer/receipt is covering for it"
+# (task-4 audit finding: these are the two states most likely to collapse
+# onto one spelling if the shortcut short-circuits BEFORE computing the real
+# verdict). So the real verdict is always computed and always what --json
+# reports and --record stores; the defer/receipt shortcut only overrides the
+# exit code and adds a `satisfied_by` explanation -- it can never launder an
+# `incomplete`/`unreadable` payload into a `checked` one that close-ack could
+# later be fed (close-ack independently re-validates state == "checked").
+
+_CLOSE_MAX_AGE_H = 12  # mirrors completion.active_defer/receipt_satisfies's own default
+
+
+def _close_check_verdict_payload(paths: OmxPaths, verdict: dict, now: str) -> dict:
+    """The --json contract: the raw verdict dict PLUS enough for a downstream
+    `close-ack --from -` to build a receipt (`root` = this anchor, `checked_at`
+    = when this was computed) -- `evaluate_completion` itself carries neither."""
+    payload = dict(verdict)
+    payload["root"] = str(paths.root)
+    payload["checked_at"] = now
+    return payload
+
+
+def _warn_if_defer_present_but_unreadable(paths: OmxPaths) -> None:
+    """fix-round-2 (Ruling 26): `active_defer` now folds reason-readability
+    into "active" itself, so False can mean no file, an expired defer, OR a
+    present defer with a missing/blank/non-string `reason` -- three different
+    operator situations collapsed onto one bool. Surface the one that is
+    silent corruption (fix-round-1 finding A's original shape) rather than a
+    normal non-active state; `read_defer` (never raises) is what lets this
+    tell "no defer at all" from "one that's there but unreadable"."""
+    defer = read_defer(paths)
+    if defer is None:
+        return  # no file, or unparseable JSON -- nothing to warn about here
+    reason = defer.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        print("WARNING: a defer is on file but missing a readable 'reason' -- not "
+              "treated as an active escape (a defer without its reason is not a "
+              "recorded one)", file=sys.stderr)
+
+
+def _close_check_satisfied_via(paths: OmxPaths, verdict: dict, now: str) -> dict | None:
+    """None unless the RAW verdict already failed (incomplete/unreadable) --
+    a defer/receipt shortcut is a rescue, never consulted when the tree is
+    already clean or there is nothing to check."""
+    if verdict["state"] not in ("incomplete", "unreadable"):
+        return None
+    if active_defer(paths, now, ttl_h=_CLOSE_MAX_AGE_H):
+        # active_defer (completion.py, Ruling 26) is now the one place that
+        # decides what "active" means -- it already requires a timestamp-fresh
+        # instant AND a readable, non-empty string `reason` before returning
+        # True, so both fields are guaranteed present and valid here; this
+        # call site no longer re-derives that check.
+        defer = read_defer(paths)
+        expires_at = (clock.parse_iso_utc(defer["deferred_at"], "deferred_at")
+                      + timedelta(hours=_CLOSE_MAX_AGE_H)).isoformat()
+        return {"via": "defer", "reason": defer["reason"], "deferred_at": defer["deferred_at"],
+                "expires_at": expires_at}
+    _warn_if_defer_present_but_unreadable(paths)
+    receipt = read_receipt(paths)
+    if receipt_satisfies(receipt, now, max_age_h=_CLOSE_MAX_AGE_H, expected_root=paths.root):
+        # A remote receipt's meaningful root is `origin_root` (write_receipt keeps
+        # "root" as THIS project's own anchor for every source, task 4 requirement
+        # 5) -- showing "root" here for a remote receipt would print the wrong path.
+        shown_root = receipt.get("origin_root") if receipt.get("source") == "remote" else receipt.get("root")
+        return {"via": "receipt", "source": receipt.get("source"),
+                "root": shown_root, "checked_at": receipt.get("checked_at")}
+    return None
+
+
+def _print_close_check_human(verdict: dict, satisfied: dict | None) -> None:
+    state = verdict["state"]
+    if satisfied is not None:
+        if satisfied["via"] == "defer":
+            print(f"PASS — satisfied by a defer: {satisfied['reason']} "
+                  f"(deferred at {satisfied['deferred_at']}, expires {satisfied['expires_at']})")
+        else:
+            print(f"PASS — satisfied by a {satisfied['source']} receipt for {satisfied['root']}, "
+                  f"checked at {satisfied['checked_at']}")
+        print(f"  (the tree check on its own: {state} — run without an active defer/receipt to see the detail)")
+        return
+    if state == "no-contract":
+        print("no-contract: no run_completion block declared; nothing to check (pass).")
+        return
+    finished_n = len(verdict["runs"])
+    subj_n = verdict["subject_count"]
+    plural = "y" if subj_n == 1 else "ies"
+    if state == "checked":
+        print(f"PASS — checked: {finished_n} finished run(s) complete, out of {subj_n} "
+              f"candidate run director{plural} under {verdict['output_root']}.")
+        if verdict.get("reason"):
+            # Ruling 29 (task-5 fix-round-3): a missing output_root is
+            # `checked` (a pass) but carries a distinct `reason` -- printing
+            # it is the ONE thing that keeps this line from reading
+            # identically to a genuinely empty, existing tree. The reason
+            # was already in the --json payload; only the human line was
+            # dropping it.
+            print(f"  {verdict['reason']}")
+        return
+    if state == "incomplete":
+        print(f"FAIL — incomplete: {len(verdict['missing'])} of {finished_n} finished run(s) missing "
+              f"required artifacts ({subj_n} candidate run director{plural} under {verdict['output_root']}).")
+        for m in verdict["missing"]:
+            print(f"  {m['run']}")
+            print(f"    missing: {', '.join(m['missing'])}")
+            print(f"    how: {m['how']}")
+        return
+    # unreadable — requirement 2: `reason` verbatim, never paraphrased. output_root
+    # is None when the failure is in the run_completion block itself (contract
+    # broken before output_root is even read) -- omit the "None: " prefix then.
+    where = f"{verdict['output_root']}: " if verdict["output_root"] else ""
+    print(f"FAIL — unreadable: {where}{verdict['reason']}")
+
+
+def _cmd_close_check(args) -> int:
+    paths = OmxPaths(root=_resolved_root(args))
+    now = clock.now_iso()
+    verdict = evaluate_completion(paths)
+
+    if args.record:
+        # Unconditional audit trail (task 3's write_receipt already accepts
+        # any state) — --record is "what did the check say", not "did it pass".
+        write_receipt(paths, verdict, source="local", now_iso=now)
+
+    satisfied = _close_check_satisfied_via(paths, verdict, now)
+
+    if args.json:
+        payload = _close_check_verdict_payload(paths, verdict, now)
+        if satisfied is not None:
+            payload["satisfied_by"] = satisfied
+        print(json.dumps(payload))
+    else:
+        _print_close_check_human(verdict, satisfied)
+
+    if satisfied is not None or verdict["state"] in ("no-contract", "checked"):
+        return 0
+    return 1 if verdict["state"] == "incomplete" else 2
+
+
+def _cmd_close_ack(args) -> int:
+    """design §5: ingest a `close-check --json` payload computed anywhere and
+    store it as a receipt stamped source: "remote" -- the near-side half of
+    crossing the ssh boundary. Three separately-worded refusals (never
+    collapsed into one generic message, per the task-4 audit): the remote
+    check itself failed; it succeeded but is already stale at ack time; or
+    the payload could not even be parsed as a verdict. All three exit 2."""
+    paths = OmxPaths(root=_resolved_root(args))
+    now = clock.now_iso()
+
+    try:
+        raw = sys.stdin.read() if args.from_ == "-" else Path(args.from_).read_text(encoding="utf-8")
+    except OSError as e:
+        print(f"refused: cannot read --from {args.from_!r}: {e}", file=sys.stderr)
+        return 2
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"refused: --from payload is not valid JSON: {e}", file=sys.stderr)
+        return 2
+    if (not isinstance(payload, dict) or not isinstance(payload.get("state"), str)
+            or not isinstance(payload.get("runs"), list)):
+        print("refused: --from payload does not look like a `close-check --json` verdict "
+              "(need an object with a string 'state' and a list 'runs')", file=sys.stderr)
+        return 2
+    if not isinstance(payload.get("root"), str) or not payload["root"]:
+        # A separate, distinctly-worded refusal (fix-round-1 reviewer finding 1) --
+        # a payload missing its origin entirely is a different problem from one
+        # that was never a verdict at all, and letting it through would store a
+        # receipt whose `origin_root` is silently absent: `close-check` would
+        # later print "satisfied by a remote receipt for None", which is exactly
+        # the two-states-one-spelling defect this whole round exists to close.
+        print("refused: --from payload has no origin root (a receipt with unknown "
+              "provenance cannot be audited later)", file=sys.stderr)
+        return 2
+
+    state = payload["state"]
+    if state != "checked":
+        if state == "no-contract":
+            # fix-round-1 finding B: no-contract is an exit-0 PASS on the remote
+            # side, not a failure -- "acking a failure" is the wrong reason to
+            # give an operator here. There is simply nothing to carry back: the
+            # remote project never declared what grading means for it.
+            print("refused: remote check state is 'no-contract' — the remote project "
+                  "declares no run_completion contract, so there is nothing to carry "
+                  "back (a receipt records that a finished run was graded; that "
+                  "project has not said what grading means)", file=sys.stderr)
+        else:
+            detail = f" — {payload['reason']}" if payload.get("reason") else ""
+            print(f"refused: remote check state is {state!r}, not 'checked' — acking a failure "
+                  f"is the exact bypass this gate exists to prevent{detail}", file=sys.stderr)
+        return 2
+
+    checked_at = payload.get("checked_at")
+    # Reuses receipt_satisfies for the freshness math (clock-skew tolerance
+    # included) rather than re-deriving it; source is forced "remote" here
+    # regardless of anything the payload itself claims (requirement 5).
+    if not receipt_satisfies({"state": "checked", "source": "remote", "checked_at": checked_at},
+                              now, max_age_h=_CLOSE_MAX_AGE_H, expected_root=paths.root):
+        print(f"refused: remote check is stale or its checked_at is unusable "
+              f"(checked_at={checked_at!r}, ack time={now})", file=sys.stderr)
+        return 2
+
+    origin_root = payload.get("root")
+    runs_checked = len(payload["runs"])
+    # N2 (task-5 fix-round-4): a `checked` receipt is not always "nothing to
+    # say" -- Ruling 29 makes a missing output_root a genuine `checked` PASS
+    # that still carries a distinct `reason`, and dropping that one field
+    # here defeated requirement 6 (print what is about to be trusted BEFORE
+    # storing it) in the exact verb written to satisfy it: an operator
+    # cannot judge a pass they cannot interpret. The refusal branch above
+    # already prints `reason` when present; this mirrors that.
+    reason_part = f" reason={payload['reason']!r}" if payload.get("reason") else ""
+    # requirement 6: print what is about to be trusted BEFORE storing it — a
+    # receipt's root cannot be verified across an ssh boundary, so this is a
+    # deliberate human act made visible, the same trust close-defer gets.
+    print(f"accepting: origin_root={origin_root} state={state} checked_at={checked_at} "
+          f"runs_checked={runs_checked}{reason_part}")
+    write_receipt(paths, payload, source="remote", now_iso=checked_at, origin_root=origin_root)
+    return 0
+
+
+def _cmd_close_defer(args) -> int:
+    """The escape closure_guard's deny message names (design §6): a dated,
+    reasoned decision to close despite an incomplete/unreadable verdict.
+    write_defer already refuses an empty/whitespace reason (OmxError); that
+    propagates through the standing `raise SystemExit(str(e))` -> rc 2
+    convention every other verb in this file uses."""
+    paths = OmxPaths(root=_resolved_root(args))
+    now = clock.now_iso()
+    try:
+        write_defer(paths, args.reason, now)
+    except OmxError as e:
+        raise SystemExit(str(e))
+    print(json.dumps(read_defer(paths)))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="omx", description="OMX experiment-analysis core")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -2460,6 +2712,31 @@ def build_parser() -> argparse.ArgumentParser:
     pps.add_argument("--id", default=None)
     pps.add_argument("--root", default=None)
     pps.set_defaults(func=_cmd_program_status)
+
+    pcchk = sub.add_parser("close-check",
+                           help="design §4/§6: run-completion verdict for --root "
+                                "(0 no-contract/checked, 1 incomplete, 2 unreadable)")
+    pcchk.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    pcchk.add_argument("--json", action="store_true",
+                       help="print the verdict as JSON (suitable for `close-ack --from -` on another machine)")
+    pcchk.add_argument("--record", action="store_true",
+                       help="write the computed verdict as a local receipt (source: local)")
+    pcchk.set_defaults(func=_cmd_close_check)
+
+    pcack = sub.add_parser("close-ack",
+                           help="ingest a `close-check --json` payload computed elsewhere "
+                                "(design §5) and store it as a receipt (source: remote)")
+    pcack.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    pcack.add_argument("--from", required=True, dest="from_", metavar="PATH",
+                       help="path to a close-check --json payload, or - for stdin")
+    pcack.set_defaults(func=_cmd_close_ack)
+
+    pcdef = sub.add_parser("close-defer",
+                           help="record a dated, reasoned decision to close despite an "
+                                "incomplete/unreadable run-completion verdict (the closure_guard escape)")
+    pcdef.add_argument("--root", default=None, help="optional .omx anchor; default: #13 ladder")
+    pcdef.add_argument("--reason", required=True, help="non-empty; recorded verbatim for audit")
+    pcdef.set_defaults(func=_cmd_close_defer)
 
     return p
 

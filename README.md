@@ -2,9 +2,9 @@
 
 > A self-contained Claude Code harness that **analyzes your ML/RL training runs, diagnoses regressions, and designs the next experiment** — with a semi-autonomous analyze → design → eval loop that never fires a training run without your approval.
 
-![version](https://img.shields.io/badge/version-0.12.0-blue)
+![version](https://img.shields.io/badge/version-0.17.0-blue)
 ![python](https://img.shields.io/badge/python-%3E%3D3.10-blue)
-![tests](https://img.shields.io/badge/tests-950%20passed%20%2F%201%20skipped-brightgreen)
+![tests](https://img.shields.io/badge/tests-1315%20passed%20%2F%202%20skipped-brightgreen)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![harness](https://img.shields.io/badge/omha-tier--1%20lane-8A2BE2)
 
@@ -138,6 +138,21 @@ OMX reads a small set of environment variables. All are optional.
 | `OMX_SESSION_ID=<id>` | Overrides the session id (the run-lease ownership key). |
 | `OMX_NO_ROOT_LADDER=1` | Disables the parent-directory ascent when locating the project's OMX root (`.hq/` if anchored, else legacy `.omx/`). |
 
+**A half-migrated store can look present while resolving empty.** Presence and
+resolution are two different checks and can disagree: a hook's "is omx here at
+all" probe (`_has_omx_marker`) ORs across both stores — `.omx/` as a directory, OR
+any of `.hq/{config,work,runtime}/experiments` as one — while path resolution
+(`OmxPaths`) picks exactly ONE side, gated on whether a parseable `.hq` anchor
+file exists. A tree that migrated only part of its state — a real
+`.hq/config/experiments/` directory next to an `.omx/profile/metrics.yaml` that
+was never moved, with a parseable anchor already in place — reads as "an omx
+layer is here" to every hook, while every profile-reading verb (`close-check`,
+`doctor`, the `SessionStart` nudge) resolves to the `.hq/` side, where no profile
+exists, and reports `no-contract`/"no profile" rather than an error. Symptom: the
+project clearly has a `metrics.yaml` somewhere, yet nothing that reads the
+profile can find it. Fix: finish the migration — move the remaining `.omx/*`
+files to their `.hq/` equivalents — rather than leaving the two stores straddled.
+
 Some gates read optional override keys from `metrics.yaml` at the call boundary:
 
 | Key | Default | Read by |
@@ -195,6 +210,17 @@ users only need the four skills above.
 | `omx run-seed ... --baseline-commit <sha> --keep-policy <p>` | Seed the run ledger with the baseline anchor (once — loud-fail if it exists). |
 | `omx run-record ... --iteration <n> --decision <d>` | Record one loop iteration; asserts the run-lease by session id and runs the git-ancestry staleness check. |
 | `omx revert-config --cwd <repo> --run-id <id> [--to baseline\|last-kept\|<sha>] [--i-approve-revert]` | Two-phase config revert; dry-run by default, mutates only with `--i-approve-revert`. Never reachable from a hook. |
+
+</details>
+
+<details>
+<summary><b>Run-completion gate</b></summary>
+
+| Verb | Role |
+|:--|:--|
+| `omx close-check [--root <dir>] [--json] [--record]` | Compute the run-completion verdict for the project's finished runs against its optional `run_completion` contract (`profile/metrics.yaml`, see exp-init). rc 0 = `no-contract`/`checked`, rc 1 = `incomplete` (names the missing artifacts + the command that makes them), rc 2 = `unreadable` (the declared `output_root` could not be read). `--record` writes the verdict as a local receipt. |
+| `omx close-ack --from <path\|-> [--root <dir>]` | Ingest a `close-check --json` payload computed elsewhere (e.g. over ssh, for an output tree this machine cannot read) and store it as a remote receipt. Prints the payload's origin before trusting it; refuses a non-`checked` or already-stale one. |
+| `omx close-defer --reason "<text>" [--root <dir>]` | Record a dated, reasoned human decision to close despite an incomplete/unreadable verdict — `closure_guard`'s escape hatch. Non-empty reason required. |
 
 </details>
 
@@ -287,15 +313,17 @@ land 2% away from it. The lint reports four findings on that document.
 
 ## Hooks & review agents
 
-Five registrations in `.claude-plugin/plugin.json`, all dispatched through the single
+Seven registrations in `.claude-plugin/plugin.json`, all dispatched through the single
 `hooks/run_hook.py` runner:
 
 | Event | Matcher | Handler | Role |
 |:--|:--|:--|:--|
 | `PreToolUse` | `Edit\|Write` | `report_guard` | Blocks hand-editing a gated `report.md`/`report.ko.md` — edits go through the skill's RE-analysis path so the format/evidence gates always run. |
+| `PreToolUse` | `Bash` | `closure_guard` | Denies `hq post --category handoff` / `omx loop-disarm` / `omx loop-mark-done` when the project declared a `run_completion` contract and a finished run is missing a required artifact (see the "Run-completion gate" CLI section and exp-init/exp-loop). |
 | `UserPromptSubmit` | — | `route_emit` | Injects the `<omx-routing>` STAGE checkpoint on every prompt. |
 | `SessionEnd` | — | `capture_flush` (async) | Rescues any report produced but never explicitly captured into the wiki. |
 | `SessionStart` | `compact` | `compact_breadcrumb` | Carries a durable-state pointer into the first post-compaction prompt. |
+| `SessionStart` | `startup\|resume` | `completion_notice` | Once per session: if an omx layer is present with no `run_completion` block, names the key and the file to opt in. Silent once a contract exists. |
 | `Stop` | — | `loop_gate` | Thin gate for an armed exp-loop — blocks a turn from ending until disarmed or self-expired. |
 
 **Hooks never hard-block on their own error.** Any exception, timeout, or malformed input
@@ -304,6 +332,14 @@ hooks, `OMX_SKIP_HOOKS=<name>,...` disables named handlers only. Every guarantee
 enforces is also a loud-fail CLI verb, so a disabled hook degrades to "not yet caught,"
 never "not enforced." `loop_gate`'s continuation prompt never instructs a training launch,
 regardless of how the loop is armed.
+
+**The `STAGE(exp)` line `route_emit` asks for is a routing signal a human reads, not
+something the harness verifies.** A `Stop` handler (`stage_check`) that checks a
+session's declared stage against what was actually opened exists in
+`hooks/handlers.py` and is fully tested, but ships **disarmed** — measured against
+17 real STAGE-declaring transcripts, it blocked genuine multi-hour analysis work on
+8 of them (up to 100% of a session's turns), so it is deliberately absent from both
+`HANDLERS` and `plugin.json` (see the DISARMED comment above it in the source).
 
 Because pytest cannot exercise real platform hook firing, `.superpowers/sdd/live-acceptance.md`
 is the checklist a human runs after a plugin reinstall to confirm each registration fires
@@ -329,7 +365,7 @@ oh-my-experiments/
 ├── skills/             # exp-init / exp-analyze / exp-design / exp-loop
 ├── agents/             # 4 read-only review agents (report/proposal/campaign/wiki)
 ├── hooks/              # run_hook.py dispatch runner + handlers.py
-├── scripts/            # sync_version.py — plugin.json is the version SSOT, fanned out to pyproject
+├── scripts/            # sync_version.py — plugin.json is the version SSOT, fanned out to pyproject + omx_core/__init__.py
 ├── cards/              # omha tier-1 lane card (placeholder)
 ├── omx-core/           # pure-Python package + pyproject.toml
 │   ├── omx_core/       #   omx_paths · ingest/ · reduce/ · evaluator · decision · loop · ledger
@@ -348,7 +384,7 @@ pip install -e "omx-core/[analyze]"
 cd omx-core && pytest        # 950 passed, 1 skipped (v0.7.4)
 ```
 
-- **Version SSOT:** `.claude-plugin/plugin.json` is the single source of truth; `scripts/sync_version.py` fans the version out to `omx-core/pyproject.toml`, and `test_version_sync.py` fails the suite on any drift.
+- **Version SSOT:** `.claude-plugin/plugin.json` is the single source of truth; `scripts/sync_version.py` fans the version out to `omx-core/pyproject.toml` and `omx_core/__init__.py`'s `__version__`, and `test_version_sync.py` fails the suite on any drift across all three.
 - **Verb contract:** skill docs may only reference verbs the CLI actually registers (`test_skills_reference_real_verbs.py`).
 - **Live acceptance:** hooks can't be pytest-exercised, so run `.superpowers/sdd/live-acceptance.md` after each plugin reinstall.
 - **Design of record:** [`docs/design/2026-05-30-omx-experiment-harness-design.md`](docs/design/2026-05-30-omx-experiment-harness-design.md).

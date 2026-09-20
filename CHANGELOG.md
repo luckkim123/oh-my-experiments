@@ -4,6 +4,147 @@ All notable changes to oh-my-experiments are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the
 project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.json`).
 
+## [0.17.0] - 2026-09-19 — a closure gate that has to bind without anyone reading it, and didn't fire until the second-to-last task checked
+
+### Added
+- **`omx close-check` / `close-ack` / `close-defer`, and `closure_guard` — a `PreToolUse`
+  hook that denies a closure-declaring `Bash` command when a project's finished runs
+  aren't graded.** The trigger: two teacher training runs finished overnight and the
+  session that owned them declared itself done without ever running this repository's
+  standard evaluation. Rules, memories and onboarding docs had all said to run it, and
+  none of them bound anything — a document is read only if someone reads it. The premise
+  this round ships on is that the one layer that binds without being read is a hook at
+  the tool-call boundary, and it has to work in any project, not just the one that
+  motivated it.
+
+  A project opts in with an optional `run_completion` block in `profile/metrics.yaml` —
+  what counts as a finished run, what artifact its evaluation must produce. A new verdict
+  engine (`omx_core/completion.py`) reads it and returns one of four states —
+  `checked`, `incomplete`, `unreadable`, `no-contract` — never silently reading "could not
+  determine" as "nothing to grade, pass": an output tree unreadable at *any* depth below
+  its top level, not just the top level itself, is `unreadable`, not a quiet `checked` with
+  zero runs. `no-contract` is the deliberately permissive state — no profile, an
+  unparseable one, or a parseable one with no `run_completion` key are all "this project
+  never opted in," which must hold for every unrelated project on the machine, or the gate
+  denies `hq post --category handoff` everywhere and gets disabled within a day.
+
+  A receipt/defer store lets a check recorded elsewhere satisfy the gate: `close-ack`
+  ingests a `checked` verdict computed across an ssh boundary, `close-defer` records a
+  human's deliberate escape with a mandatory reason. A `source: "local"` receipt must
+  match the project's own root exactly (`Path.resolve()`, with an absoluteness check
+  first so an empty or relative *stored* root can never resolve to a wildcard match on
+  the evaluating session's own cwd); a `source: "remote"` receipt is exempt from that
+  check because its root is the far side of the boundary, and a receipt or defer with no
+  usable timestamp, malformed shape, or future-dated instant never satisfies anything.
+
+  `completion_notice`, a one-line `SessionStart` nudge, tells a project with a readable
+  profile but no `run_completion` key that the feature exists, and stays silent
+  everywhere else — measured silent on a bare tmpdir, `~/workspace`, `/tmp`, and any tree
+  with a contract already present.
+
+### Fixed
+- **The gate did not fire in production until the second-to-last task, and eleven tasks
+  of review never caught it.** `plugin.json` wires every hook to bare `python3`; on the
+  machine this round shipped from that resolves to Python 3.14, which has neither
+  `omx_core` nor `yaml` installed, so `closure_guard`'s in-process import raised
+  `ModuleNotFoundError` and the hook's own fail-open swallowed it — no error, no log, no
+  signal, permission decision simply absent. 1306 passing tests and two rounds of Claude
+  review had exercised the *logic*; nothing had exercised the *deployment*, because the
+  test suite runs under `python3.12` and the hook runs under whatever `python3` resolves
+  to on the machine reading it. Found by running a real `claude -p` session against the
+  working copy rather than a test process (task 13), and it is why task 13 was moved
+  ahead of this release task rather than after it — a release note is the wrong place to
+  first discover the gate doesn't fire.
+
+  Fixed by no longer trusting an in-process import at all: `closure_guard` and
+  `completion_notice` now get their verdict from `omx close-check --json` run as a
+  subprocess through the `omx` console script, whose shebang is written by the installer
+  and therefore always names the interpreter `omx_core` was actually installed into,
+  regardless of what `python3` resolves to. The marker probe that decides whether a
+  directory is an omx project at all now climbs to the nearest ancestor carrying an omx
+  layer (bounded at `$HOME`), closing a regression the first version of this fix
+  introduced — a git repo with `.omx` at its toplevel and a session sitting in a
+  subdirectory had stopped being gated. A companion script,
+  `scripts/check_hook_interpreter.py`, resolves each `plugin.json` hook command through
+  `PATH` and checks `omx_core` imports there; left deliberately unwired from pytest,
+  because failing on this exact machine is what it exists to report.
+
+- **Six defects an adversarial cross-model pass found in four minutes, in code two Claude
+  reviewers had already approved.** The worst: an apostrophe in an ordinary bash comment
+  (`# don't stop`) made `shlex.split` raise, the handler's fail-open swallowed it, and the
+  gate went off for that command with no error anywhere — the same silent-allow shape as
+  the interpreter bug, one layer up, in code that had already been through five review
+  rounds. Also fixed: `&`-backgrounded commands (`sleep 1 & hq post ...`) weren't
+  recognized as a separate command; an escaped heredoc delimiter (`<<\EOF`) and a
+  CRLF-terminated one (`<<EOF\r\n...\r\n`) both aborted the heredoc scan and read the
+  closure declaration inside them as live. This ran on one vendor family (`agy`), not
+  two — `codex` is broken on this machine (a half-finished npm install), and the user
+  chose to proceed with one axis of adversarial verification rather than have this
+  session repair a vendor CLI mid-round.
+
+- **A run-completion receipt's version field was stamping `0.5.0` against a `plugin.json`
+  of `0.16.1`.** `write_receipt` read `importlib.metadata.version("omx-core")`, and this
+  package is developed as an editable install, whose dist-info is written once at
+  install time and never tracks a later `pyproject.toml` edit — not drift, an environment
+  artifact, but a wrong fact in a receipt whose whole purpose is provenance. `omx_core`
+  now carries its own `__version__`, `scripts/sync_version.py` fans the plugin version out
+  to it alongside `pyproject.toml`, `write_receipt` reads it first and falls back to
+  `importlib.metadata` only if the import fails, and `test_version_sync.py` — whose
+  docstring already called itself a "3-way drift guard" while its test compared exactly
+  two sources — now genuinely compares three: `plugin.json`, `pyproject.toml`, and
+  `omx_core.__version__`, deliberately never `importlib.metadata`, which would fail on
+  every developer machine using an editable install.
+- **The tag-drift guard itself had been dead since 2026-08-29.** Every Tag Guard run on
+  `main` from `4795444` onward — the round base `71e4289` included — failed with
+  `ModuleNotFoundError: No module named 'omx_core'` ten times over, all of them
+  collection errors, so the file never reached a single assertion.
+  `.github/workflows/tag-guard.yml` installed only `pytest`, while `tests/conftest.py`
+  carries an autouse fixture importing `omx_core.wiki.hq_backend`. It passes on a
+  developer machine either way, because `omx_core` is already on the path there — the
+  same local-green/CI-red split as the deployment defect above, one layer out.
+  **This is why 0.16.1 reached `main` with its tag never pushed:** the guard written to
+  catch exactly that had been red for three weeks and nobody read it. Fixed by
+  installing the package in that workflow; `v0.16.1` was backfilled onto `f541ad0`
+  during this release.
+- **`wandb>=0.18` is now `wandb>=0.18,<0.30`, and "wandb not installed" no longer names
+  the wrong cause.** The offline ingester imports `wandb.proto.wandb_internal_pb2` and
+  `wandb.sdk.internal.datastore` — both wandb-private — so an installed-but-moved wandb
+  raised the same sentence as an absent one. wandb 0.30.0 moved them, and CI failed four
+  tests with "wandb not installed" on a runner whose log says
+  `Downloading wandb-0.30.0`. The message now carries the underlying `ImportError`.
+  Unrelated to this round's work and pre-existing on `main`; found because the release
+  PR's checks were read instead of assumed. Lifting the bound means porting the reader.
+
+### Not shipped, on purpose
+- **`stage_check` — a `Stop` handler that would block a session declaring an `exp-*`
+  stage it never opened — ships built, tested, and unregistered.** Measured against the
+  17 real STAGE-declaring transcripts on this machine: it blocked 8 of them, one at
+  100% of its turns, on a session doing hours of genuine analysis with tooling that
+  leaves no omx-shaped trace. The structural reason isn't fixable by parsing more
+  carefully: "did the work with local tools" and "declared and did nothing" are the same
+  string once the evidence a declaration promises doesn't exist for a real share of real
+  work. The code, its tests, and a module-level comment carrying the numbers stay in the
+  tree for a future redesign; a test pins that it is *not* registered, so re-registering
+  it is a deliberate act by someone who read the comment, not a "tidy up this orphan
+  handler" PR.
+- **`route_emit` still asks a session to print `STAGE(exp) → <token> · <reason>` on
+  experiment turns, and nothing verifies that declaration any more.** Deliberate — the
+  declaration still earns its place as a routing signal a human reads — but "the harness
+  asks for X and nothing checks X" is the exact shape this round exists to name rather
+  than leave implicit.
+- **Named, not fixed:** `closure_guard`'s command-scan still treats `env FOO=1 hq post
+  ...`, `sudo hq post ...`, `command hq post ...`, and `x=$(hq post ...)` as ordinary
+  commands rather than closure declarations — each requires deliberately dressing up the
+  command to evade an advisory, fail-open gate, and `omx close-defer` is always the
+  honest escape instead. Heredoc parsing does not handle mixed or partial quoting or
+  escaped characters inside the delimiter word (degrades to scanning the region as text,
+  never to a silent allow). A symlinked `.omx`/`.hq` pointing into a different project's
+  store is trusted as-is by the marker check. And the marker check (`_has_omx_marker`,
+  ORs both stores) and the path resolver (`OmxPaths._resolve`, anchor-gated to exactly
+  one store) can disagree on a half-migrated project, making its profile invisible to
+  every omx consumer, not only this gate — the shared root a future fix belongs at, not
+  patched per caller.
+
 ## [0.16.1] - 2026-09-01 — an unreadable store exited 0 and printed `pages: []`
 
 ### Fixed

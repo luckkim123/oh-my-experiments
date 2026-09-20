@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omx-core"
-version = "0.16.1"
+version = "0.17.0"
 description = "OMX (oh-my-experiments) core: path single-source-of-truth and analysis primitives."
 requires-python = ">=3.10"
 dependencies = [
@@ -15,7 +15,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-analyze = ["wandb>=0.18", "tensorboard>=2.14"]
+# wandb upper bound: the offline reader needs wandb.sdk.internal.datastore and
+# wandb.proto.wandb_internal_pb2, both wandb-PRIVATE modules. 0.28.0 has them
+# (local, full suite green); 0.30.0 does not, and CI went red the first time a
+# runner resolved it. Lifting the bound means porting the reader, not relaxing it.
+analyze = ["wandb>=0.18,<0.30", "tensorboard>=2.14"]
 
 [project.scripts]
 omx = "omx_core.cli:main"

@@ -8,7 +8,9 @@ a gate-passing write. Closes the 0.1.14 hand-Edit incident at edit time; the
 intentional friction on one-character fixes is accepted (that WAS the incident).
 Fail-open: unparseable input or an unavailable omx_core -> allow (None).
 """
+import json
 import re
+import subprocess
 from pathlib import Path, PurePosixPath
 
 _GATED_NAMES = frozenset({"report.md", "report.ko.md", "manifest.json"})
@@ -101,7 +103,12 @@ _OPEN_STATUSES = ("needs-experiment", "needs-apply-before-retrain")
 
 
 def _resolve_backlog_root(payload) -> str:
-    """Resolve the anchor for the backlog pre-fetch ONLY (omx-2 fix).
+    """Resolve the anchor for the backlog pre-fetch / campaign-drift check
+    ONLY (omx-2 fix). NOT used by closure_guard (task 5, fix-round-1,
+    Ruling 27) -- that gate needs a ladder "no anchor" result to fall back to
+    an omx-LAYER check (`_has_omx_marker`) before giving up, which this
+    function deliberately does not do; see `_closure_resolve_root`'s
+    docstring for why that lives separately instead of being folded in here.
     Raises when the payload cwd is missing/empty OR when the #13 ladder never
     anchors (stage == "cwd") — resolve_omx_root itself never raises (root.py:36
     always falls back at least to cwd), so THIS caller treats that weakest
@@ -306,13 +313,61 @@ def _has_omx_marker(cwd) -> bool:
     checked .omx/ would silently stop firing the checkpoint gate there —
     a live hole, not a style question, caught after this file was first
     excluded from the re-entry lint (the exclusion itself stands; it hid
-    this line from a human's eye, which is the thing worth noting)."""
+    this line from a human's eye, which is the thing worth noting).
+
+    ponytail (F2, task-5 fix-round-2, accepted not fixed): `.is_dir()`
+    transparently follows a symlink, so a layer that is ITSELF a symlink
+    into a different tree's real `.omx`/`.hq` is trusted as-is -- combined
+    with closure_guard's Ruling-27 fallback, this gates cwd against an
+    unrelated project's runs. Requires a filesystem shape (a symlinked state
+    directory) that nothing in the bootstrap/CLI paths ever creates; a
+    relative cwd, a bare non-experiments `.hq/` (a different harness), and a
+    git worktree were all checked and do NOT false-positive. Add a
+    filesystem-identity check here only if a more ordinary trigger for the
+    same shape ever turns up -- see task-5-review.md Finding F2."""
     if not (isinstance(cwd, str) and cwd):
         return False
     base = Path(cwd)
     if (base / ".omx").is_dir():
         return True
     return any((base / ".hq" / a / b).is_dir() for a, b in _OMX_LAYER_DIRS)
+
+
+def _closure_climb_to_omx_layer(cwd):
+    """Ruling 40 (run-completion-gate round, task 14 fix-round-1): find the
+    NEAREST ancestor of `cwd` (cwd itself checked first) carrying an omx
+    layer, climbing bounded exactly the way `resolve_omx_root`'s own marker
+    stage does (omx_core/root.py) -- stop before `$HOME` (a stray
+    `.omx`/`.hq` layer sitting IN a home directory must never gate every
+    session on the machine) and stop at the filesystem root. Returns the
+    ancestor as a string, or None if none carries a layer within that bound
+    -- closure_guard treats None exactly like the old marker-at-cwd-only
+    check treated False: no omx layer reachable, allow.
+
+    Needs no `omx_core` import -- it is the same zero-dependency
+    `_has_omx_marker` probe this file already uses elsewhere, just walked
+    upward one directory at a time. Ruling 39 removed the #13 ladder from
+    closure_guard's reach entirely (running it in-process needs
+    `omx_core.root`, the exact import Ruling 39 exists to drop), and the
+    marker-at-cwd-ONLY check that replaced it (this task's first cut)
+    regressed the single most ordinary shape there is: a git repo with
+    `.omx`/`.hq` at its toplevel and a session cwd'd one or more
+    directories below it (`analysis/`, `scripts/`, anywhere) -- measured
+    live, `cd proj/analysis && omx loop-disarm ...` silently allowed where
+    the OLD ladder-based code (which climbed via git-toplevel) correctly
+    denied. Climbing the marker directly restores that case without
+    handing root resolution to the `omx` subprocess's OWN ladder (which
+    would reopen the Finding-8 cross-project misfire an `OMX_STATE_DIR`-
+    driven climb could cause) and without any new dependency."""
+    if not (isinstance(cwd, str) and cwd):
+        return None
+    home = Path.home()
+    node = Path(cwd).resolve()
+    while node != node.parent and node != home:
+        if _has_omx_marker(str(node)):
+            return str(node)
+        node = node.parent
+    return None
 
 
 def is_exp_related(prompt, cwd) -> bool:
@@ -488,6 +543,159 @@ def compact_breadcrumb(payload):
         return None  # fail-open (D9)
 
 
+# --- Ruling 39 (run-completion-gate round, task 14): closure_guard and
+# completion_notice get their answer from the `omx` CONSOLE SCRIPT, never
+# from an in-process `omx_core` import. Task 13 measured this live: every
+# hook is wired in plugin.json as bare "python3", resolved via the CALLER's
+# PATH -- on this machine that is Homebrew's 3.14, which has neither
+# omx_core nor yaml, so the in-process import raised ImportError, D9's
+# fail-open swallowed it, and both gates went silently inert with no error
+# anywhere. `omx` itself is immune to this: its console-script shebang is
+# written by the installer at `pip install`/`pip install -e` time and always
+# names the interpreter omx_core was actually installed into (`head -1
+# $(command -v omx)`), regardless of what "python3" resolves to for whoever
+# invoked the hook. Shelling out to it costs ~0.09s per call (measured)
+# against ~0.066s in-process -- and only ever happens after the cheap,
+# stdlib-only checks (tool_name/command shape, `_closure_declares`,
+# `_has_omx_marker`) have already confirmed there is something worth asking.
+_OMX_CLI_TIMEOUT_S = 2.0  # comfortably inside run_hook.py's 3s SIGALRM budget
+
+
+def _run_omx_cli_json(args):
+    """Run an `omx ... --json` subcommand and return a trust-tagged result --
+    never raises. `{"ok": True, "data": <parsed JSON dict>}` on a clean run;
+    otherwise `{"ok": False, "cause": "no-omx" | "parse-error", "detail": str}`.
+
+    The two failure causes are NOT interchangeable (Rulings 30/37, restated
+    for this call site): "no-omx" (the `omx` executable itself could not be
+    started -- missing from PATH, not executable) is the same fact as "no
+    omx installation here", which every consumer of this helper already
+    treats as silent allow. "parse-error" (the process WAS invoked but
+    produced something that cannot be trusted -- a timeout, non-JSON stdout,
+    a JSON value that isn't an object) is a different class: the check did
+    not complete, and "could not tell" must never read the same as "checked
+    and clean". `timeout` is kept well under run_hook.py's own 3s SIGALRM
+    budget so a hang here is turned into a parse-error class result BY THIS
+    FUNCTION -- if the alarm fired instead, run_hook.py's outer `except
+    BaseException: return 0` would swallow it as a silent, indistinguishable
+    allow, exactly the failure this Ruling exists to close."""
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True,
+                               timeout=_OMX_CLI_TIMEOUT_S)
+    except OSError as exc:
+        return {"ok": False, "cause": "no-omx", "detail": str(exc)}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "cause": "parse-error",
+                "detail": f"omx CLI timed out after {_OMX_CLI_TIMEOUT_S}s"}
+    try:
+        data = json.loads(proc.stdout)
+    except ValueError:
+        return {"ok": False, "cause": "parse-error",
+                "detail": f"omx CLI --json output was not parseable (rc={proc.returncode})"}
+    if not isinstance(data, dict):
+        return {"ok": False, "cause": "parse-error",
+                "detail": "omx CLI --json output was not a JSON object"}
+    return {"ok": True, "data": data}
+
+
+# --- completion_notice (Task 6, run-completion-gate round): one-time opt-in
+# nudge for the run_completion contract. Registered SessionStart matcher
+# "startup|resume" (a SECOND SessionStart entry, alongside compact_breadcrumb's
+# "compact" one -- not a replacement of it). closure_guard blocks a closure
+# command once a project HAS opted in and a finished run is ungraded; a
+# project that never opted in is never blocked by any of it, by design, which
+# means "never blocked" and "the feature does not exist" look identical from
+# outside. This handler is the other half: tell such a project the block
+# exists, once per session start.
+#
+# Five routes all return bare None here -- contract already declared, no omx
+# layer at cwd, an unbootstrapped/unreadable/malformed profile, a
+# half-migrated store (fifth, see the ponytail note below), and any other
+# internal error. Deliberately NOT distinguished at runtime (same "silence
+# over noise" contract as compact_breadcrumb above): a SessionStart hook with
+# a per-case runtime signal would be a second, noisier channel for something
+# this file's comments already say plainly. Told apart only by reading this
+# source, never by the hook's own output.
+#
+# Ruling 39: `load_run_completion(cwd)` (an in-process omx_core import) is
+# replaced by `omx close-check --root <cwd> --json` (Rungs above). `--root`
+# is passed EXPLICITLY, never left to close-check's own #13-ladder default --
+# Ruling 27 (see test_uses_cwd_not_the_root_ladder_when_a_workspace_marker_
+# sits_above) requires this handler to read cwd's OWN profile, never a ladder-
+# resolved ancestor's. The three-way distinction this handler depends on
+# (readable-profile-no-key -> inject; no-profile -> silent; unparseable-
+# profile -> silent) collapses in `evaluate_completion` to ONE state,
+# "no-contract", shared by all three causes -- `reason` stays None for all of
+# them. Rather than guess at a fix, this round adds the SMALLEST possible new
+# field to that shared payload: `no_contract_reason` (omx_core/completion.py's
+# `_no_contract()`), set to "no_run_completion_key" at the ONE call site that
+# needs distinguishing (profile parsed fine, key just absent) and left None at
+# the other (profile absent or unparseable -- both already read as
+# "no-contract" upstream and neither needs telling apart from the other for
+# THIS handler's purposes). This is a genuine, if small, addition to a shared
+# verdict schema used by `omx close-check`/`omx_core.completion` at large --
+# called out here, not smuggled in as an incidental refactor detail.
+#
+# ponytail (fix-round-1, task-6-review Finding 1, accepted not fixed):
+# _has_omx_marker ORs across both stores -- .omx/ is-dir, OR any of
+# .hq/{config,work,runtime}/experiments is-dir -- but omx_paths._resolve
+# picks exactly ONE store, gated on has_anchor() alone (a parseable
+# .hq/.anchor). A tree with a real .omx/profile/metrics.yaml, a
+# .hq/config/experiments/ dir, AND a parseable anchor file is
+# marker=True, yet _resolve sends profile_dir to the .hq/ side, where no
+# profile exists -- load_run_completion raises, this handler goes
+# silent. Not a Task-6-only symptom: close-check, evaluate_completion,
+# and every other omx_core consumer read the SAME unreadable profile as
+# no-contract, so a half-migrated store goes invisible to all of omx,
+# not just this notice -- which is why lifting it here would be treating
+# the symptom. The ceiling is the marker/resolver disagreement itself
+# (_has_omx_marker's OR vs _resolve's has_anchor()-only pick), shared by
+# every handler and the CLI; fix it once, at that shared root, when a
+# half-migrated store turns up for real.
+def completion_notice(payload):
+    try:
+        if payload.get("source") not in ("startup", "resume"):
+            return None
+        cwd = payload.get("cwd")
+        if not _has_omx_marker(cwd):
+            return None  # no omx layer here -- nothing to nudge about
+
+        # cwd itself, not the #13 root ladder (Ruling 27): _has_omx_marker just
+        # confirmed the layer sits AT cwd, and it never climbs to a parent --
+        # reading a ladder-resolved root here could silently name a DIFFERENT
+        # project's profile than the one whose marker was just found.
+        result = _run_omx_cli_json(["omx", "close-check", "--root", cwd, "--json"])
+        if not result["ok"]:
+            return None  # omx unavailable, or its output untrustworthy -- this
+                         # handler only ever nudges, never blocks, so BOTH
+                         # causes fail toward silence (D9); there is no "deny"
+                         # for a SessionStart nudge the way there is for closure_guard
+        verdict = result["data"]
+        if verdict.get("state") != "no-contract":
+            return None  # already opted in (checked/incomplete/unreadable) -- silent
+        if verdict.get("no_contract_reason") != "no_run_completion_key":
+            return None  # no profile at all, or one that doesn't parse -- silent
+        # Task-6-review Finding 2: no "see <verb> --help" pointer -- `omx
+        # close-check --help` documents --root/--json/--record and never
+        # mentions run_completion or metrics.yaml, so pointing there sent a
+        # user on a trip that doesn't answer the question this line raised.
+        # Task 10 built the real target (skills/exp-init/SKILL.md's
+        # "Completion contract" section, the four keys + a worked example) and
+        # named it here -- exp-init is the one skill that already writes
+        # metrics.yaml, so it is a real, discoverable next step rather than a
+        # second dead end. +24 chars over the pointer-free line (147 -> 171).
+        body = (
+            "omx: this project has no `run_completion` block in profile/metrics.yaml "
+            "-- finished runs are never grade-checked before closure. "
+            "exp-init's interview can add one (opt-in).")
+        return {"hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": body,
+        }}
+    except Exception:
+        return None  # fail-open (D9): no profile yet / malformed metrics.yaml / any error
+
+
 # --- loop_gate (spec 2.4): thin Stop gate for exp-loop persistent mode -------
 # D-R3-1: a dumb gate. It reads {armed, deadline, iteration, hard_cap,
 # adopted_session}, blocks with a FROZEN continuation prompt, and never makes
@@ -620,10 +828,868 @@ def loop_gate(payload):
         return None  # fail-open (D9): a broken gate must never trap a session
 
 
+# --- closure_guard (task 5): deny a closure declaration on an ungraded run --
+# PreToolUse, tool_name == "Bash" only (design doc §4-6). Denies `hq post
+# --category handoff`, `omx loop-disarm --reason done`, and `omx
+# loop-mark-done --reason done` when this project's finished training runs are
+# missing the evaluation artifacts its OWN profile declared (state
+# "incomplete"), or when the gate could not tell at all (state "unreadable").
+# Every other case allows (None), silently: not a closure declaration, a
+# non-Bash tool, no omx project at this cwd, no run_completion contract,
+# everything checked, an active human defer, a fresh satisfying receipt, or
+# any internal error. A false deny here locks an operator out of closing
+# their own session, and a gate that speaks in every unrelated repo on the
+# machine is the Finding-8-class regression this task exists to avoid --
+# hence the strict root resolver below, which short-circuits BEFORE touching
+# the filesystem rather than trusting evaluate_completion to classify an
+# unrelated tree correctly.
+_CLOSURE_SEPARATORS = ("&&", "||", "&", ";", "|")
+#: `&&` is listed before the bare `&` alternative so the regex engine tries
+#: the two-character operator FIRST at each position (Task-11 cross-model
+#: finding: `&` -- a POSIX list separator, backgrounding the preceding
+#: command -- was simply absent here, so `sleep 1 & hq post ...` and its
+#: glued form `sleep 1&hq post ...` both walked straight through).
+_CLOSURE_SEP_RE = re.compile(r"(\|\||&&|&|;|\|)")
+_CLOSURE_REASON_MAX_CHARS = 1200
+
+
+def _closure_split_glued_separators(tokens):
+    """shlex.split tokenizes on whitespace/quoting, not on shell control
+    operators, so a separator with no surrounding whitespace is glued into the
+    adjacent token (measured: 'cd x&&hq' -> ['cd', 'x&&hq', 'post', ...]).
+    Split any token that CONTAINS '&&' '||' ';' or '|' on that substring
+    before segmenting, so a real closure declaration right after a glued
+    separator is never swallowed into the preceding segment.
+
+    ponytail: this also fires inside a token that merely contains one of these
+    substrings as plain text (e.g. a quoted "a;b"), over-splitting it into an
+    extra segment. That is safe in the deny direction only -- an extra segment
+    can match a closure command only if it reads as one verbatim -- ceiling: a
+    hostile quoted argument shaped exactly like the real closure text could in
+    principle create a spurious segment; not defended against here."""
+    flat = []
+    for tok in tokens:
+        flat.extend(p for p in _CLOSURE_SEP_RE.split(tok) if p != "")
+    return flat
+
+
+def _closure_segments(tokens):
+    """Split a token stream into command segments at &&, ||, ; and |."""
+    segments = [[]]
+    for tok in _closure_split_glued_separators(tokens):
+        if tok in _CLOSURE_SEPARATORS:
+            segments.append([])
+        else:
+            segments[-1].append(tok)
+    return segments
+
+
+def _closure_has_adjacent(tokens, a, b) -> bool:
+    return any(tokens[i] == a and tokens[i + 1] == b for i in range(len(tokens) - 1))
+
+
+def _closure_kv_present(tokens, flag: str, value: str) -> bool:
+    """True when `tokens` carries `flag value` as adjacent tokens, or the
+    single glued token `flag=value` -- both forms this gate must recognize
+    for EVERY flag it matches (Ruling 28/fix-round-1: `--category=handoff`
+    was missed the same way `--reason=done` was originally handled, and a
+    gate with a one-character `=`-form bypass on some flags but not others is
+    the same class of hole as the separator-gluing bypass closed earlier)."""
+    return _closure_has_adjacent(tokens, flag, value) or f"{flag}={value}" in tokens
+
+
+def _closure_segment_declares(seg) -> bool:
+    """§6: `hq post ... --category handoff` (or `--category=handoff`);
+    `omx loop-disarm`/`loop-mark-done ... --reason done` (or `--reason=done`)."""
+    if len(seg) < 2:
+        return False
+    head = (seg[0], seg[1])
+    if head == ("hq", "post"):
+        return _closure_kv_present(seg, "--category", "handoff")
+    if head in (("omx", "loop-disarm"), ("omx", "loop-mark-done")):
+        return _closure_kv_present(seg, "--reason", "done")
+    return False
+
+
+def _closure_read_heredoc_word(command, i, n):
+    """Parse a heredoc delimiter word starting at `i` (already past any
+    whitespace following `<<`/`<<-`). Quoted (`'EOF'`/`"EOF"`) or bare
+    (`EOF`); returns (word_with_quotes_stripped, index_after_word). Not full
+    shell word-parsing (no escape handling inside the word, no mixed
+    quoting) -- sufficient for the ordinary `<<EOF` / `<<'EOF'` / `<<-EOF`
+    shapes this gate needs to not be fooled by (N3, task-5 fix-round-4).
+
+    An UNQUOTED word strips backslashes as it reads (Task-11 cross-model
+    finding): `<<\\EOF` and `<<E\\OF` both quote a single character of the
+    delimiter the same way a backslash does anywhere else in unquoted bash
+    -- the word bash actually compares terminator lines against is `EOF` in
+    both cases, backslash removed. Treating the backslash as literal (the
+    pre-fix behavior) manufactures a delimiter that can never match anything
+    real, so a genuine heredoc whose body happens to read like a closure
+    declaration -- `cat <<\\EOF` / a real "EOF" terminator two lines down --
+    fell through to being scanned as commands instead of swallowed as data.
+    A SINGLE-quoted word does NOT strip backslashes (POSIX: single quotes
+    are fully literal) -- unaffected, handled by the branch above."""
+    if i < n and command[i] in ("'", '"'):
+        q = command[i]
+        j = i + 1
+        start = j
+        while j < n and command[j] != q:
+            j += 1
+        word = command[start:j]
+        return word, (j + 1 if j < n else j)
+    start = i
+    j = i
+    chars = []
+    while j < n and not command[j].isspace() and command[j] not in ("<", ">", "|", "&", ";"):
+        if command[j] == "\\" and j + 1 < n:
+            chars.append(command[j + 1])
+            j += 2
+            continue
+        chars.append(command[j])
+        j += 1
+    return "".join(chars), j
+
+
+def _closure_strip_crlf(line: str) -> str:
+    """Drop a trailing `\\r` from a heredoc body/terminator LINE before
+    comparing it against a delimiter (Task-11 cross-model finding): the scan
+    splits body content on a literal `\\n` only, so a CRLF-terminated
+    command left every candidate line carrying a trailing `\\r` (`"EOF\\r"`
+    never equals `"EOF"`), and a heredoc that should close normally instead
+    looked unterminated to Ruling 30 -- falling through to being scanned as
+    commands instead of swallowed as data. The delimiter word itself never
+    carries a `\\r` (`_closure_read_heredoc_word` already stops at any
+    whitespace, `\\r` included), so only the LINE side needs this."""
+    return line[:-1] if line.endswith("\r") else line
+
+
+def _closure_heredoc_terminator_exists(command, start, delim, strip_tabs) -> bool:
+    """Ruling 30 (task-5 fix-round-5): whether SOME line in `command[start:]`
+    exactly equals `delim` (CRLF's trailing `\\r` stripped first, then
+    leading tabs stripped when `strip_tabs`). The pre-commitment check every
+    candidate heredoc opener must pass BEFORE the scan starts treating
+    anything as body -- see `_closure_mark_line_breaks`."""
+    for line in command[start:].split("\n"):
+        candidate = _closure_strip_crlf(line)
+        if strip_tabs:
+            candidate = candidate.lstrip("\t")
+        if candidate == delim:
+            return True
+    return False
+
+
+#: A `#` only starts a comment when it is the first character of a word
+#: (bash's own rule) -- `echo a#b` and `url#frag` are NOT comments. Checked
+#: against the raw character immediately preceding the `#`.
+_CLOSURE_WORD_START_PRECEDERS = (" ", "\t", "\n", "\r", ";", "|", "&")
+
+
+def _closure_mark_line_breaks(command: str) -> str:
+    """Replace every line break (`\\n`, `\\r`) OUTSIDE quotes, OUTSIDE a
+    `#` comment, and OUTSIDE a validated heredoc body with `;` before
+    tokenizing (F1, fix-round-2), while an unquoted backslash immediately
+    before one is a line CONTINUATION and vanishes instead (N1, fix-round-4):
+    bash joins `verb \\<newline>  flag` into one logical line, so marking
+    that newline as a separator was putting the closure verb and its own
+    flag into two different segments -- exactly the shape this scan exists
+    to keep together, done backwards.
+
+    `shlex.split` treats a literal newline exactly like a space -- it is
+    absorbed into inter-token whitespace and produces no token of its own --
+    so a multi-line Bash `tool_input.command` (an entirely ordinary shape,
+    not an adversarial one) never gets split into segments on its own, and
+    the closure verb silently walks through whenever it isn't literally the
+    first line. By the time you have tokens this information is already
+    destroyed, so every mark below has to happen on the RAW string, before
+    `shlex.split` ever runs. Once marked, the existing `;`-handling in
+    `_closure_split_glued_separators` / `_closure_segments` does the rest for
+    the separator case -- no other change needed there.
+
+    Heredoc bodies (N3, fix-round-4) are DATA, not commands -- `cat > f
+    <<'EOF'` followed by a body line that happens to read like a closure
+    declaration must not deny, the same way a doc or a runbook showing the
+    command on its own line must not deny. Tracks the region from the
+    newline after `<<WORD`/`<<-WORD` (optionally quoted; `<<-` strips
+    leading tabs from candidate terminator lines) through the line that
+    equals WORD, copying every character in between through UNMARKED --
+    option (a) from the dispatch, not the cheaper "stop marking after the
+    first `<<`" option (b), because (b) would silently stop detecting a
+    REAL closure command placed after a closed heredoc in the same
+    command, which is the required negative case here. Multiple heredocs
+    declared on one line are consumed as separate body blocks in order; the
+    newline ending the FINAL terminator line (once no heredoc remains
+    pending) is marked as a real separator, same as any other line break.
+
+    Ruling 30 (fix-round-5): this scan is, at this point, a hand-rolled
+    shell lexer (quotes, continuations, comments, heredocs), and a
+    hand-rolled shell lexer WILL be wrong on some input -- a mis-extracted
+    delimiter (a stray backslash inside it), a `<<` that was never really a
+    heredoc opener at all (inside a `#` comment this scan didn't yet know
+    about, or a here-string `<<<`), or a heredoc that is genuinely never
+    closed. Before fix-round-5, any of those committed the scan into
+    "consuming heredoc body" with NO way back out, so the entire remainder
+    of the command silently became inert data -- the exact failure this
+    round exists to eliminate, reproduced inside the mechanism meant to
+    enforce it. The fix is a pre-commitment CHECK, not a bigger parser: a
+    candidate heredoc is only entered once `_closure_heredoc_terminator_exists`
+    confirms its terminator line actually appears somewhere later in the
+    command; if it doesn't, this was never a heredoc opener this scan
+    understood, and the newline is marked exactly as if no heredoc had been
+    declared -- the scan degrades to treating the rest of the command as
+    ORDINARY TEXT to keep scanning, never to silently ignoring it. That is
+    the property that makes the accumulated complexity here acceptable: not
+    that this lexer is correct, but that being wrong about it never turns
+    into being blind for everything after.
+
+    A `#` starting a word begins a comment running to the end of the line
+    (bash's own rule -- `echo a#b` and `url#frag` are NOT comments, only a
+    `#` immediately after whitespace or a separator is); nothing inside a
+    comment is a heredoc opener, closing the "`<<` inside a `#` comment"
+    false-negative directly rather than relying on the Ruling-30 backstop
+    alone. `<<<` is a here-string (single-line, no body region), not a
+    heredoc -- all three characters are consumed together so the scan never
+    even attempts to parse a delimiter word for it.
+
+    A minimal quote-aware scan otherwise, not full shell grammar -- just
+    enough that a newline genuinely embedded in a quoted ARGUMENT (data,
+    e.g. a multi-line `--summary`) is never mistaken for a command
+    separator either. Single quotes: fully literal, nothing escapes
+    (matches POSIX). Double quotes: a backslash escapes the next character,
+    so an escaped `"` doesn't prematurely end the quoted span. Quote,
+    comment, and continuation handling apply OUTSIDE heredoc bodies only --
+    inside a validated one, everything is copied verbatim until the
+    terminator line."""
+    out = []
+    quote = None  # None | "'" | '"' -- meaningful only outside a heredoc body
+    pending_heredocs = []   # [(delim, strip_tabs)] declared on the CURRENT command line
+    active_heredocs = []    # queue of heredocs currently being consumed as body, in order
+    body_line_buf = []      # chars of the CURRENT heredoc body line, for terminator matching
+    i, n = 0, len(command)
+    while i < n:
+        if active_heredocs:
+            c = command[i]
+            if c == "\n":
+                line = _closure_strip_crlf("".join(body_line_buf))
+                delim, strip_tabs = active_heredocs[0]
+                candidate = line.lstrip("\t") if strip_tabs else line
+                if candidate == delim:
+                    active_heredocs.pop(0)
+                    body_line_buf = []
+                    out.append(c)
+                    if not active_heredocs and not pending_heredocs:
+                        out[-1] = ";"  # heredoc(s) done -- back to normal separator rules
+                    i += 1
+                    continue
+                body_line_buf = []
+                out.append(c)
+                i += 1
+                continue
+            body_line_buf.append(c)
+            out.append(c)
+            i += 1
+            continue
+
+        c = command[i]
+        if quote == "'":
+            out.append(c)
+            i += 1
+            if c == "'":
+                quote = None
+            continue
+        if quote == '"':
+            if c == "\\" and i + 1 < n:
+                out.append(c)
+                out.append(command[i + 1])
+                i += 2
+                continue
+            out.append(c)
+            i += 1
+            if c == '"':
+                quote = None
+            continue
+        # unquoted context
+        if c in ("'", '"'):
+            quote = c
+            out.append(c)
+            i += 1
+            continue
+        if c == "#" and (i == 0 or command[i - 1] in _CLOSURE_WORD_START_PRECEDERS):
+            # Ruling 37 (Task-11 cross-model finding): DROP the comment
+            # text rather than copy it through. A comment can contain
+            # anything -- an unmatched quote character ("# don't fail",
+            # "# Let's finish up") corrupted this scan's own quote-tracking
+            # and, further down, made shlex.split raise on the marked
+            # string, which the caller's fail-open then turned into a
+            # silent allow. Excluding comment text at the source removes
+            # the whole class rather than patching the quoting rules for
+            # one apostrophe shape. Nothing inside a comment is a heredoc
+            # opener either, so this still closes that case too.
+            while i < n and command[i] not in ("\n", "\r"):
+                i += 1
+            continue
+        if c == "\\" and i + 1 < n and command[i + 1] in ("\n", "\r"):
+            # N1: unquoted line continuation -- the backslash AND the
+            # newline (CRLF counted as one) vanish, joining the two lines.
+            j = i + 2
+            if command[i + 1] == "\r" and j < n and command[j] == "\n":
+                j += 1
+            i = j
+            continue
+        if c == "<" and i + 1 < n and command[i + 1] == "<":
+            if i + 2 < n and command[i + 2] == "<":
+                # <<< here-string, not a heredoc -- consume all three chars
+                # together so this never falls into delimiter parsing below.
+                out.append(command[i:i + 3])
+                i += 3
+                continue
+            j = i + 2
+            strip_tabs = False
+            if j < n and command[j] == "-":
+                strip_tabs = True
+                j += 1
+            k = j
+            while k < n and command[k] in (" ", "\t"):
+                k += 1
+            word, k2 = _closure_read_heredoc_word(command, k, n)
+            if word:
+                pending_heredocs.append((word, strip_tabs))
+                out.append(command[i:k2])
+                i = k2
+                continue
+            out.append(c)
+            i += 1
+            continue
+        if c in ("\n", "\r"):
+            if pending_heredocs:
+                # Ruling 30: only commit to heredoc mode once every pending
+                # delimiter's terminator is confirmed to exist later in the
+                # command -- an opener that can never close was not a
+                # heredoc opener this scan should act on.
+                if all(_closure_heredoc_terminator_exists(command, i + 1, d, st)
+                       for d, st in pending_heredocs):
+                    active_heredocs.extend(pending_heredocs)
+                    pending_heredocs = []
+                    out.append(c)  # into the heredoc body -- unmarked
+                else:
+                    pending_heredocs = []
+                    out.append(";")  # not a real heredoc -- normal separator
+            else:
+                out.append(";")
+            i += 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _closure_declares(command: str) -> bool:
+    """Whether `command` contains a closure declaration in any `&&`/`||`/`;`/`|`
+    segment -- a real line break counts too, marked as `;` first (F1, see
+    `_closure_mark_line_breaks`). Raises ValueError on unbalanced quotes
+    (shlex) -- Ruling 37 (Task-11 cross-model finding): the caller treats
+    THAT specific failure as DENY, not allow (a tokenizer failure is a
+    parse failure, the same class Ruling 30 already governs for the
+    heredoc scanner) -- every other internal failure still fails open (D9).
+
+    ponytail: the closure verb must still be the literal head of its
+    segment, so `env FOO=1 hq post ...`, `sudo hq post ...`,
+    `command hq post ...`, and `x=$(hq post ...)` all still bypass this
+    gate. Accepted, not fixed: each requires deliberately dressing up the
+    command to evade an ADVISORY, fail-open gate -- the same class as a
+    shell `alias`, which cannot be resolved without a shell either -- and a
+    determined operator always has the honest escape,
+    `omx close-defer --reason "<why>"`. Widen to "closure verb anywhere as a
+    contiguous subsequence in its segment" if one of these ever turns out to
+    be an ordinary shape (like the newline case was) rather than a
+    deliberate one."""
+    import shlex
+    tokens = shlex.split(_closure_mark_line_breaks(command))
+    return any(_closure_segment_declares(seg) for seg in _closure_segments(tokens))
+
+
+def _closure_fit_reason(header: str, body: str, footer: str) -> str:
+    """Assemble header/body/footer under the 1200-char permissionDecisionReason
+    budget (Ruling 3). The per-state assembly rules (at most 3 run blocks, a
+    shared `how` printed once) already keep this well under budget in
+    practice; this is a safety net for unusually long paths/globs, and it
+    trims the body ONLY -- the header (why) and the footer (the close-defer
+    escape hatch) must always survive intact."""
+    text = f"{header}\n\n{body}\n\n{footer}" if body else f"{header}\n\n{footer}"
+    if len(text) <= _CLOSURE_REASON_MAX_CHARS:
+        return text
+    budget = _CLOSURE_REASON_MAX_CHARS - len(header) - len(footer) - 4  # 2x "\n\n"
+    if budget <= 0:
+        return (header + "\n\n" + footer)[:_CLOSURE_REASON_MAX_CHARS]
+    return f"{header}\n\n{body[:budget].rstrip()}\n\n{footer}"
+
+
+_CLOSURE_INCOMPLETE_HEADER = (
+    "omx run-completion gate: this closure declaration is blocked because a finished\n"
+    "training run has none of the evaluation artifacts this project's profile declares."
+)
+_CLOSURE_INCOMPLETE_FOOTER = (
+    "The contract is yours, in profile/metrics.yaml under `run_completion`; the harness only\n"
+    "checks that a finished run has what you declared. Produce the artifacts, or record why\n"
+    "you are not: `omx close-defer --reason \"<why>\"`."
+)
+
+
+def _closure_incomplete_reason(verdict: dict) -> str:
+    missing = verdict["missing"]
+    shown = missing[:3]
+    extra = len(missing) - len(shown)
+    hows = {m["how"] for m in shown}
+    same_how = len(hows) == 1
+    lines = []
+    for m in shown:
+        lines.append(f"  {m['run']}   missing: {', '.join(m['missing'])}")
+        if not same_how:
+            lines.append(f"               make it: {m['how']}")
+    if extra > 0:
+        lines.append(f"  (+{extra} more — `omx close-check` lists them all)")
+    if same_how:
+        lines.append("")
+        lines.append(f"  make it: {next(iter(hows))}")
+    return _closure_fit_reason(_CLOSURE_INCOMPLETE_HEADER, "\n".join(lines),
+                               _CLOSURE_INCOMPLETE_FOOTER)
+
+
+_CLOSURE_UNREADABLE_HEADER = (
+    "omx run-completion gate: this closure declaration is blocked because the gate could not\n"
+    "determine whether this project's finished runs are graded."
+)
+_CLOSURE_UNREADABLE_FOOTER = (
+    "If the reason names a profile key instead of a path, fix profile/metrics.yaml. To\n"
+    "proceed without either: omx close-defer --reason \"<why>\"."
+)
+
+
+def _closure_unreadable_reason(verdict: dict, root) -> str:
+    # `reason` is printed verbatim -- it already names the failing path or the
+    # offending profile key, and a paraphrase loses that (task-5-deny-text §2).
+    reason_text = verdict.get("reason") or "(no reason recorded)"
+    body = (
+        f"  reason: {reason_text}\n\n"
+        "This is not \"nothing to grade\" — an unread tree and an empty one are different "
+        "answers,\nand only one of them is a pass. If the output tree lives on another "
+        "machine, run the\ncheck where it lives and bring the receipt back:\n\n"
+        f"  ssh <host> 'omx close-check --root {root} --json'  |  omx close-ack --from -"
+    )
+    return _closure_fit_reason(_CLOSURE_UNREADABLE_HEADER, body, _CLOSURE_UNREADABLE_FOOTER)
+
+
+_CLOSURE_UNPARSEABLE_REASON = (
+    "omx run-completion gate: this Bash command's quoting could not be parsed, so the gate "
+    "cannot tell whether it declares session closure. It denies rather than silently "
+    "allowing when it cannot read the command at all -- an ordinary comment with an "
+    "apostrophe (\"# don't fail\") is enough to trigger this. If this is not a closure "
+    "declaration, proceed with: omx close-defer --reason \"<why>\"."
+)
+
+_CLOSURE_OMX_CLI_FAILURE_REASON = (
+    "omx run-completion gate: `omx close-check --json` could not be trusted this time "
+    "({detail}). Rulings 30/37 treat an incomplete check the same as a failed one -- it "
+    "denies rather than silently allowing when it cannot confirm the tree is clean. Run "
+    "`omx close-check` yourself to see the real verdict, or proceed with: "
+    "omx close-defer --reason \"<why>\"."
+)
+
+
+def closure_guard(payload):
+    """PreToolUse Bash gate (task 5, design doc §4-6; subprocess wiring per
+    Ruling 39, task 14; bounded marker climb per Ruling 40, task 14
+    fix-round-1). The cheap, stdlib-only checks run first and exit most
+    calls before anything else happens: tool_name, command shape, the
+    shlex/regex closure-declaration match (`_closure_declares`), then
+    `_closure_climb_to_omx_layer(cwd)` -- a closure declaration is rare by
+    construction (only `hq post --category handoff` / `omx
+    loop-disarm|loop-mark-done --reason done`), and an omx layer anywhere
+    from cwd up to (not including) `$HOME` rarer still outside a real omx
+    project, so `omx close-check` is only ever invoked once BOTH are true.
+    `--root <climbed root>` is passed explicitly (never left to
+    close-check's own #13 ladder): the climb is bounded at `$HOME`
+    specifically so a stray layer there cannot gate every session on the
+    machine, and letting the SUBPROCESS run its own ladder instead (via an
+    `OMX_STATE_DIR` override, say) could still gate an unrelated directory
+    against a completely different project's root -- the exact Finding-8
+    class Ruling 27 closed for this handler already, which a bounded
+    same-process climb cannot reopen."""
+    try:
+        if payload.get("tool_name") != "Bash":
+            return None
+        command = (payload.get("tool_input") or {}).get("command")
+        if not isinstance(command, str) or not command:
+            return None
+        try:
+            declares = _closure_declares(command)
+        except ValueError:
+            # Ruling 37 (Task-11 cross-model finding, withdraws the brief's
+            # original step 1): a shlex tokenizer failure is a PARSE
+            # failure, the same class Ruling 30 already governs for the
+            # heredoc scanner -- it must not fall through to the outer
+            # fail-open below and become a silent allow. Worst finding of
+            # this round: an apostrophe in an ordinary bash comment
+            # ("# don't fail") broke shlex and turned the gate off with no
+            # error anywhere. Deny with a minimal, fixed message instead;
+            # the cost is a command whose quoting genuinely cannot be
+            # parsed gets a deny the operator can escape with
+            # `close-defer`, rather than a pass nobody can see -- the right
+            # direction for this gate.
+            return {"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": _CLOSURE_UNPARSEABLE_REASON,
+            }}
+        if not declares:
+            return None
+
+        root = _closure_climb_to_omx_layer(payload.get("cwd"))
+        if root is None:
+            return None  # no omx layer within the climb bound -- allow (Finding-8 class)
+
+        result = _run_omx_cli_json(["omx", "close-check", "--root", root, "--json"])
+        if not result["ok"] and result["cause"] == "no-omx":
+            return None  # requirement 3: no omx installation here -- allow, silently
+    except Exception:
+        return None  # fail-open (D9): an infra/setup failure BEFORE a verdict exists allows
+
+    if not result["ok"]:
+        # cause == "parse-error": the subprocess ran but produced something that
+        # cannot be trusted (timeout / non-JSON / wrong shape) -- Rulings 30/37,
+        # this must deny, never silently allow, same class as the shlex failure above.
+        return {"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason":
+                _CLOSURE_OMX_CLI_FAILURE_REASON.format(detail=result["detail"]),
+        }}
+
+    verdict = result["data"]
+    state = verdict.get("state")
+    # `satisfied_by` (an active defer, or a fresh receipt -- design §6) is added
+    # to the --json payload by close-check itself only when the RAW verdict was
+    # already incomplete/unreadable; checking for it here replaces the separate
+    # in-process active_defer()/receipt_satisfies() calls this handler used to
+    # make, since close-check's own decision order already covers both.
+    if "satisfied_by" in verdict or state in ("no-contract", "checked"):
+        return None
+    if state not in ("incomplete", "unreadable"):
+        return {"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": _CLOSURE_OMX_CLI_FAILURE_REASON.format(
+                detail=f"unrecognized state {state!r} in --json output"),
+        }}
+
+    # F4 (task-5 fix-round-2): evaluate_completion (now: close-check) has
+    # ALREADY decided this command must be denied -- a bug in the
+    # TEXT-RENDERING code that turns that verdict into the reason string
+    # must not silently downgrade an already-made deny into an allow. D9's
+    # fail-open above is for infrastructure failures upstream of a verdict
+    # (the omx CLI call itself); a formatting bug in code that runs AFTER
+    # the decision is a different failure class and must still deny,
+    # minimally.
+    try:
+        reason = (_closure_incomplete_reason(verdict) if state == "incomplete"
+                  else _closure_unreadable_reason(verdict, verdict.get("root") or root))
+    except Exception:
+        reason = ("omx run-completion gate: this closure declaration is blocked, but the "
+                   "deny-reason renderer itself failed -- run `omx close-check` for the real "
+                   "verdict, or `omx close-defer --reason \"<why>\"` to proceed.")
+    return {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": reason,
+    }}
+
+
+# --- stage_check (task 8, run-completion-gate round): Stop gate on a false
+# STAGE declaration. route_emit (spec 2.1, above) asks the assistant to print
+# `STAGE(exp) → <token> · <reason>` in its own text when a turn is experiment
+# work; this handler reads that back off the transcript at Stop and blocks
+# when the session's CURRENT (most recent) declaration names one of the
+# exp-* stages (exp-init/exp-analyze/exp-design/exp-loop — the ones with a
+# real Skill under skills/, per plugin.json) whose skill was never opened,
+# and none of its own `omx` CLI verbs were run (Ruling 35), anywhere in the
+# session.
+#
+# DISARMED (2026-09-19, run-completion-gate round, task 8 fix-round-3,
+# user decision "ship it disarmed"): what follows is the whole reason a
+# future re-registration attempt has to answer BEFORE touching HANDLERS or
+# plugin.json, not just a status note.
+#
+# What this was for: a Stop gate on a false STAGE declaration -- route_emit
+# (spec 2.1, above) asks the assistant to print `STAGE(exp) -> <token> ·
+# <reason>` when a turn is experiment work, and this handler was meant to
+# read that back off the transcript and block when the session's CURRENT
+# declaration names an exp-* stage whose skill (or, after Ruling 35, its own
+# omx CLI verbs) was never actually used anywhere in the session.
+#
+# It is deliberately NOT in `HANDLERS` below, and NOT in plugin.json's
+# `Stop` array (only `loop_gate` is registered there) -- confirmed by the
+# team lead independently, not just claimed here, and pinned by
+# test_stage_check_is_not_registered.py so a future PR cannot silently
+# re-wire it as a tidy-up.
+#
+# The measurement (fix-round-2, re-verified by the team lead): of the 17
+# real STAGE-declaring transcripts under ~/.claude/projects, 8 blocked at
+# least once -- 100.0%, 88.2%, 80.3%, 59.2%, 32.9%, 23.9%, 13.1%, 4.2% of
+# their turns respectively, the other 9 sessions 0%. The 100% session
+# (31b90898) declared `exp-analyze` NINE times, made 143 Bash calls, and
+# invoked not one `omx` verb -- hours of genuine analysis work, blocked on
+# every turn.
+#
+# The two structural reasons a wider verb list or a smarter regex cannot
+# fix, and any re-registration attempt must answer:
+#   1. A per-turn Stop re-check of "has the evidence appeared yet" cannot
+#      distinguish "not yet" from "never" against a growing transcript
+#      prefix -- the declaration is printed BEFORE the work by design (that
+#      is what a declaration is), so every Stop between declaring and
+#      finishing is a false block.
+#   2. This workspace's real analysis tooling is bespoke (its own eval.py,
+#      ad-hoc scripts, ssh to a remote host) and leaves no omx-CLI-shaped
+#      trace at all for a meaningful share of real work -- "did the work
+#      with local tools" and "declared and did nothing" produce the exact
+#      same observable string, which is this round's signature defect one
+#      last time and not one Ruling 35's widened evidence could close.
+#
+# Kept on purpose: the function, every test below, and _STAGE_CLI_VERBS's
+# drift-detection test (test_stage_cli_verbs_match_source.py) -- so a future
+# redesign has a correct, current verb mapping and a full behavioral spec to
+# build from, rather than starting over. Full corpus table and the two
+# transcripts read in full: task-8-report.md, fix-round-2 and fix-round-3
+# sections.
+#
+# fix-round-1 (task-8-review Finding 1, Rulings 33-34): the extraction regex
+# cannot tell "the session invented/mistyped a stage name" apart from "we
+# failed to parse this line" — both arrive as a string outside
+# _STAGE_SKILL_TOKENS. Measured against REAL transcripts in this workspace,
+# an assistant bolding the STAGE line the same way it already bolds the ROUTE
+# line above it (`**STAGE(exp) →** exp-analyze`, `> **STAGE(exp) →**
+# exp-analyze`) mis-captures the token. Since the two states cannot be told
+# apart and guessing wrong traps the operator, Ruling 33 withdraws the
+# vocabulary-mismatch block entirely: an unparseable or unrecognized token
+# (out-of-vocabulary vocabulary word, mis-extracted markdown noise, a typo)
+# is NEVER a violation by itself -- only a CLEANLY parsed exp-* token whose
+# skill was never opened blocks. `program`/`wiki`/`tree`/`recipe` are
+# routing-vocabulary words but not skills, so no open-check ever applies to
+# them either way.
+#
+# Ruling 34: only the LATEST declaration is checked, not a lifetime union.
+# The prior design collected every STAGE token seen anywhere in the
+# transcript into one set, so a single early mis-parse (garbage token) could
+# never be un-declared by a later, correct declaration -- confirmed: a bad
+# early line followed by a correct one AND the skill actually opened still
+# blocked. A session's current stage is its latest declaration; earlier ones
+# are superseded. This also makes the block message actionable ("you just
+# declared X and never opened it") instead of naming something from anywhere
+# in the session. Accepted cost: a stage declared, abandoned, then
+# superseded by a different declaration is never caught for the abandoned
+# one -- this is a tripwire against momentum, not an audit.
+#
+# Finding 2: only ASSISTANT-authored content is read. The prior scan walked
+# `user` records identically to `assistant` ones, so a user pasting a STAGE
+# line into their own prompt would misread as the assistant having declared
+# it. Skill tool_use blocks only ever occur in assistant records anyway, so
+# restricting the whole scan to type == "assistant" costs nothing on that
+# side and closes this on the declaration side.
+#
+# Ruling 35 (fix-round-2, task-8-review Finding "the check fires on 8-100%
+# of turns"): the corpus says real omx work is done via Bash CLI verbs, not
+# the Skill tool (95 Skill invocations vs 28,727 Bash invocations across 612
+# sessions; 173 exp-analyze declarations and not one Skill invocation of it
+# among them). `opened` now also gains a stage when that stage's DISTINCTIVE
+# `omx` CLI verb (`_STAGE_CLI_VERBS`, derived from build_parser() + the
+# skill bodies, not invented) appears in a Bash command -- see that constant
+# for the corpus numbers and the drift-detection test that keeps it honest.
+#
+# stop_hook_active IS honoured here, unlike loop_gate: this gate has nothing
+# to iterate toward (no analyze->design->eval cycle), so one block is the
+# whole contract — re-blocking a session that already got the message would
+# only trap the operator with no way to end the turn.
+#
+# Scan is a single linear pass over the whole transcript file (never a byte
+# tail — a fixed-window read misses the turn where the declaration lives).
+# isSidechain records are skipped: a subagent's own Skill invocation is not
+# this session opening it (verified by reverting the check — a
+# subagent-opened exp-loop then wrongly passes). A single malformed line, or
+# a `content` that is missing/None (the actual crash risk: `for b in None`
+# raises) must not abort the whole scan and silently drop every record after
+# it — a scan aborted mid-file is caught by stage_check's own try/except and
+# returns None, indistinguishable from "nothing to report", which would
+# silently let a real violation through (verified: reverting the isinstance
+# guard turns a should-block unopened-exp-analyze case into a silent None).
+# So each is handled per-record rather than let either raise out of the loop.
+#
+# Five conditions all return bare None (D9 "silence over noise", Task 6's
+# convention — not distinguished at runtime, only by reading this source):
+# (1) stop_hook_active already true; (2) no transcript_path in the payload;
+# (3) the transcript is unreadable/absent, or the scan raised for any other
+# reason; (4) no STAGE line was ever declared, OR the session's current
+# declaration is not a cleanly-parsed exp-* skill token (includes: a
+# non-skill vocabulary word, an out-of-vocabulary/mistyped token, and any
+# markdown-mangled extraction — Ruling 33: these cannot be told apart, so
+# none of them block); (5) the current declared stage's skill WAS opened, OR
+# that stage's own CLI verbs (Ruling 35) WERE run, somewhere in the session.
+_STAGE_TOKEN_RE = re.compile(r"STAGE\(exp\)\s*(?:→|->)\s*([^\s·]+)")
+_STAGE_SKILL_TOKENS = frozenset({"exp-init", "exp-analyze", "exp-design", "exp-loop"})
+
+# --- Ruling 35 (fix-round-2): "the stage was entered" measured the way the
+# work is actually done. Measured on 612 real transcripts under
+# ~/.claude/projects: 371 STAGE(exp) declarations across 17 sessions (173
+# exp-analyze, 50 exp-loop, 9 exp-design, 0 exp-init), against 95 Skill
+# tool_use invocations total across ALL 612 sessions and 28,727 Bash
+# invocations -- real omx work in this workspace is done by running `omx`
+# verbs in Bash, essentially never by opening a skill through the Skill
+# tool. `_STAGE_CLI_VERBS` is each stage's DISTINCTIVE verb set: a verb from
+# the live `omx_core.cli.build_parser()` that is named in exactly ONE
+# stage's `skills/<stage>/SKILL.md` body (not invented, not reverse-
+# engineered from the corpus). Verbs shared across 2+ stages (doctor, eval,
+# wiki add/query/...) are deliberately excluded -- counting them would make
+# the check pass on ANY omx activity regardless of which stage is actually
+# current, the same "too-permissive detector goes silent on the class it
+# should catch" failure this repo has hit before. `omx-core/tests/
+# test_stage_cli_verbs_match_source.py` recomputes this same mapping fresh
+# from build_parser() + the skill bodies and asserts it still equals this
+# constant, so a verb added to a skill or the parser without updating this
+# dict is NOTICED (a red test) rather than silently stale.
+_STAGE_CLI_VERBS = {
+    "exp-init": frozenset({"init", "tree-codify"}),
+    "exp-analyze": frozenset({"clean", "plot", "promote-plots", "reduce tb-final",
+                               "report-coverage", "report-review", "tree-audit",
+                               "wiki gc-apply", "wiki promote-recipe"}),
+    "exp-design": frozenset({"campaign-plan-add", "probe-novelty", "program-status",
+                              "proposal-lint"}),
+    "exp-loop": frozenset({"campaign-init", "campaign-log", "close-ack", "close-defer",
+                            "loop-arm", "loop-health", "loop-status", "queue-launch",
+                            "revert-config", "run-record", "run-seed", "tree-alias",
+                            "tree-scaffold", "wiki lint"}),
+}
+# Task 10 recompute (2026-09-19): exp-loop's new "Close-out" section names
+# `close-ack`/`close-defer` (newly distinctive -- mentioned nowhere else) and
+# also names `loop-disarm`/`loop-mark-done` in prose alongside `hq post
+# --category handoff`; exp-init's new "Completion contract" section names
+# the same two verbs (and `close-check`) while explaining what triggers the
+# gate. That makes `loop-disarm`/`loop-mark-done`/`close-check` non-
+# distinctive (shared across 2+ stage docs now) -- `loop-disarm` drops out of
+# this dict entirely (it was exp-loop-only before), `loop-mark-done` was
+# never in it (already shared), and `close-check` never enters it either.
+# Recomputed via `omx-core/tests/test_stage_cli_verbs_match_source.py`'s own
+# method, not invented.
+_STAGE_CLI_VERB_RE = {
+    stage: re.compile(r"\bomx (?:" + "|".join(re.escape(v) for v in verbs) + r")\b")
+    for stage, verbs in _STAGE_CLI_VERBS.items()
+}
+
+
+def _stage_opened_skill(skill_name):
+    """A Skill tool_use's `skill` input names an exp-* stage skill when its
+    final ':'-segment matches one of _STAGE_SKILL_TOKENS -- handles both the
+    bare form ('exp-init') and the namespaced form ('oh-my-experiments:exp-init')."""
+    if not isinstance(skill_name, str):
+        return None
+    tail = skill_name.rsplit(":", 1)[-1].strip()
+    return tail if tail in _STAGE_SKILL_TOKENS else None
+
+
+def _stage_opened_verb(command):
+    """Ruling 35: a Bash `command` counts as opening a stage when it invokes
+    one of that stage's DISTINCTIVE `omx` CLI verbs (_STAGE_CLI_VERBS).
+    Returns the set of stages the command opens (usually 0 or 1 -- a single
+    command naming two different stages' verbs is possible but rare)."""
+    if not isinstance(command, str) or not command:
+        return frozenset()
+    return frozenset(stage for stage, rgx in _STAGE_CLI_VERB_RE.items()
+                      if rgx.search(command))
+
+
+def _stage_scan_transcript(transcript_path):
+    """One pass over the transcript: return (latest_declared: str | None,
+    opened: set[str]). `latest_declared` is overwritten on every new
+    STAGE(exp) match, so it ends up holding only the session's CURRENT stage
+    (Ruling 34) — an earlier mis-parsed or superseded declaration cannot
+    poison a later, correct one. `opened` stays a lifetime union across the
+    whole session: a skill (or a stage's CLI verb, Ruling 35) may
+    legitimately run well before the checkpoint line that later names it.
+    Only `type == "assistant"` records are read (Finding 2) — a user pasting
+    a STAGE line into their own prompt must never read as the assistant
+    having declared it; Skill and Bash tool_use never occur in a `user`
+    record anyway, so this costs nothing on that side. Raises on a read
+    failure (missing/unreadable file) -- the caller treats that as no
+    verdict. A parse problem on one line/record never raises; it is simply
+    skipped so every record after it still counts."""
+    latest_declared = None
+    opened = set()
+    with open(transcript_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue  # one corrupt line must not sink the rest of the scan
+            if not isinstance(record, dict):
+                continue
+            if record.get("isSidechain"):
+                continue  # a subagent's turns are not this session's
+            if record.get("type") != "assistant":
+                continue  # Finding 2: only the assistant declares or opens
+            content = (record.get("message") or {}).get("content")
+            blocks = content if isinstance(content, list) else []
+            for b in blocks:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "text":
+                    matches = _STAGE_TOKEN_RE.findall(b.get("text") or "")
+                    if matches:
+                        latest_declared = matches[-1]  # last one WINS (Ruling 34)
+                elif b.get("type") == "tool_use" and b.get("name") == "Skill":
+                    tok = _stage_opened_skill((b.get("input") or {}).get("skill"))
+                    if tok:
+                        opened.add(tok)
+                elif b.get("type") == "tool_use" and b.get("name") == "Bash":
+                    opened.update(_stage_opened_verb((b.get("input") or {}).get("command")))
+    return latest_declared, opened
+
+
+def stage_check(payload):
+    try:
+        if payload.get("stop_hook_active"):
+            return None  # (1) one block per session -- never re-trap the operator
+        transcript_path = payload.get("transcript_path")
+        if not isinstance(transcript_path, str) or not transcript_path:
+            return None  # (2) no transcript named in the payload
+        latest_declared, opened = _stage_scan_transcript(transcript_path)
+    except Exception:
+        return None  # (3) fail-open (D9): unreadable/absent transcript, or any scan error
+
+    if latest_declared not in _STAGE_SKILL_TOKENS:
+        return None  # (4) no STAGE line, or the current one isn't a clean exp-* skill token
+
+    if latest_declared in opened:
+        return None  # (5) the declared stage's skill or CLI verb WAS used in this session
+
+    return {"decision": "block", "reason": (
+        f"omx stage-check: this session's current stage declaration, "
+        f"'{latest_declared}', was never opened as a skill or run via its "
+        "own omx CLI verbs -- do the stage's work before closing, or correct "
+        "the STAGE declaration.")}
+
+
 HANDLERS = {
     "report_guard": report_guard,
     "route_emit": route_emit,
     "capture_flush": capture_flush,
     "compact_breadcrumb": compact_breadcrumb,
+    "completion_notice": completion_notice,
     "loop_gate": loop_gate,
+    "closure_guard": closure_guard,
+    # stage_check (task 8): deliberately NOT registered -- see its own
+    # comment block above and task-8-report.md's fix-round-2 section. Built,
+    # tested, and measurably correct on its own terms; measured to still
+    # over-block on 8/17 real STAGE-declaring sessions (up to 100% of their
+    # turns) even with Ruling 35's widened evidence, so it stays out of both
+    # this dict and plugin.json's Stop array until that is resolved.
 }
