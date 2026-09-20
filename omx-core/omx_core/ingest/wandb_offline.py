@@ -45,8 +45,16 @@ class WandbAdapter(IngestAdapter):
             from wandb.proto import wandb_internal_pb2 as pb
             from wandb.sdk.internal import datastore
         except ImportError as e:
+            # Two different states used to print the same sentence. `wandb_internal_pb2`
+            # and `datastore` are PRIVATE wandb modules, so an installed-but-moved wandb
+            # fails here exactly like an absent one -- and wandb 0.30.0 does move them,
+            # which read as "wandb not installed" on a CI runner that had just downloaded
+            # wandb-0.30.0. Carry the real ImportError so the two stay distinguishable.
             raise OmxError(
-                "wandb not installed; `pip install omx-core[analyze]` to ingest wandb logs"
+                "cannot read wandb offline logs: %s -- "
+                "wandb.proto.wandb_internal_pb2 / wandb.sdk.internal.datastore are "
+                "wandb-private modules. If wandb IS installed, this version moved them; "
+                "`pip install 'omx-core[analyze]'` pins a supported one." % e
             ) from e
         ds = datastore.DataStore()
         ds.open_for_scan(str(wf))

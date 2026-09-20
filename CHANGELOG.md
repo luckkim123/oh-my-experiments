@@ -106,6 +106,14 @@ project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.jso
   catch exactly that had been red for three weeks and nobody read it. Fixed by
   installing the package in that workflow; `v0.16.1` was backfilled onto `f541ad0`
   during this release.
+- **`wandb>=0.18` is now `wandb>=0.18,<0.30`, and "wandb not installed" no longer names
+  the wrong cause.** The offline ingester imports `wandb.proto.wandb_internal_pb2` and
+  `wandb.sdk.internal.datastore` — both wandb-private — so an installed-but-moved wandb
+  raised the same sentence as an absent one. wandb 0.30.0 moved them, and CI failed four
+  tests with "wandb not installed" on a runner whose log says
+  `Downloading wandb-0.30.0`. The message now carries the underlying `ImportError`.
+  Unrelated to this round's work and pre-existing on `main`; found because the release
+  PR's checks were read instead of assumed. Lifting the bound means porting the reader.
 
 ### Not shipped, on purpose
 - **`stage_check` — a `Stop` handler that would block a session declaring an `exp-*`
