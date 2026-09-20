@@ -28,7 +28,6 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-
 from omx_core.clock import now_iso, parse_iso_utc
 from omx_core.completion import write_defer, write_receipt
 from omx_core.omx_paths import OmxPaths

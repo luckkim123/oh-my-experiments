@@ -94,6 +94,18 @@ project adheres to semantic versioning on the plugin (`.claude-plugin/plugin.jso
   two sources — now genuinely compares three: `plugin.json`, `pyproject.toml`, and
   `omx_core.__version__`, deliberately never `importlib.metadata`, which would fail on
   every developer machine using an editable install.
+- **The tag-drift guard itself had been dead since 2026-08-29.** Every Tag Guard run on
+  `main` from `4795444` onward — the round base `71e4289` included — failed with
+  `ModuleNotFoundError: No module named 'omx_core'` ten times over, all of them
+  collection errors, so the file never reached a single assertion.
+  `.github/workflows/tag-guard.yml` installed only `pytest`, while `tests/conftest.py`
+  carries an autouse fixture importing `omx_core.wiki.hq_backend`. It passes on a
+  developer machine either way, because `omx_core` is already on the path there — the
+  same local-green/CI-red split as the deployment defect above, one layer out.
+  **This is why 0.16.1 reached `main` with its tag never pushed:** the guard written to
+  catch exactly that had been red for three weeks and nobody read it. Fixed by
+  installing the package in that workflow; `v0.16.1` was backfilled onto `f541ad0`
+  during this release.
 
 ### Not shipped, on purpose
 - **`stage_check` — a `Stop` handler that would block a session declaring an `exp-*`

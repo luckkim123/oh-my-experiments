@@ -20,5 +20,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install pytest
+      # `omx-core/tests/conftest.py` has an autouse fixture that imports
+      # `omx_core.wiki.hq_backend`, so EVERY test in this file errors at setup
+      # when the package is absent. Installing only pytest left this guard red
+      # from 2026-08-29 to 2026-09-19 — and a dead tag guard is how 0.16.1
+      # reached main with its tag never pushed. It passes on a dev machine
+      # either way, because omx_core is already on the path there.
+      - run: pip install -e ./omx-core pytest
       - run: python3 -m pytest omx-core/tests/test_tag_drift.py -q
